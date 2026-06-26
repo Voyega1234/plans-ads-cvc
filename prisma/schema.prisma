@@ -1,0 +1,386 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  role          String    @default("ADMIN")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  accounts      Account[]
+  sessions      Session[]
+  briefs        Brief[]
+  mediaPlans    MediaPlan[]
+  pushJobs      PushJob[]
+  automationRules AutomationRule[]
+  automationAlerts AutomationAlert[]
+  integrations  Integration[]
+  chatSessions  ChatSession[]
+  aiCostLogs    AiCostLog[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  @@unique([identifier, token])
+}
+
+model Agency {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clients   Client[]
+}
+
+model Client {
+  id                  String   @id @default(cuid())
+  agencyId            String
+  name                String
+  website             String?
+  industry            String?
+  googleAdsCustomerId String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  agency              Agency   @relation(fields: [agencyId], references: [id])
+  briefs              Brief[]
+  memory              ClientMemory?
+  adCopyFeedback      AdCopyFeedback[]
+}
+
+model Integration {
+  id           String    @id @default(cuid())
+  userId       String
+  provider     String
+  accessToken  String?
+  refreshToken String?
+  scope        String?
+  expiresAt    DateTime?
+  connected    Boolean   @default(false)
+  metadata     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation(fields: [userId], references: [id])
+  @@unique([userId, provider])
+}
+
+model Brief {
+  id             String    @id @default(cuid())
+  userId         String?
+  clientId       String?
+  businessName   String
+  websiteUrl     String
+  productService String
+  objective      String
+  monthlyBudget  Float
+  currency       String    @default("THB")
+  targetLocation String
+  language       String    @default("th")
+  targetAudience String
+  conversionGoal String
+  promotion      String?
+  brandTone      String?
+  duration       String?
+  launchDate     String?
+  notes                String?
+  utmSource            String?
+  utmMedium            String?
+  utmCampaign          String?
+  utmContent           String?
+  ga4MeasurementId     String?
+  gtmContainerId       String?
+  adsConversionId      String?
+  adsConversionLabel   String?
+  googleAdsCustomerId  String?
+  isNewAccount         Boolean   @default(false)
+  status               String    @default("draft")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  user           User?     @relation(fields: [userId], references: [id])
+  client         Client?   @relation(fields: [clientId], references: [id])
+  mediaPlans     MediaPlan[]
+}
+
+model MediaPlan {
+  id         String   @id @default(cuid())
+  briefId    String
+  userId     String?
+  title      String
+  objective  String
+  monthlyBudget Float
+  currency   String   @default("THB")
+  planJson   String
+  status     String   @default("draft")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  brief      Brief    @relation(fields: [briefId], references: [id])
+  user       User?    @relation(fields: [userId], references: [id])
+  blueprints CampaignBlueprint[]
+  keywordIdeas KeywordIdea[]
+  audienceSegments AudienceSegment[]
+}
+
+model CampaignBlueprint {
+  id          String   @id @default(cuid())
+  mediaPlanId String
+  userId      String?
+  blueprintJson String
+  status      String   @default("draft")
+  qaScore     Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  mediaPlan   MediaPlan @relation(fields: [mediaPlanId], references: [id])
+  qaChecks    QACheck[]
+  pushJobs    PushJob[]
+  comments    CampaignComment[]
+}
+
+model KeywordIdea {
+  id                String   @id @default(cuid())
+  mediaPlanId       String
+  campaignName      String
+  adGroupName       String
+  keyword           String
+  matchType         String   @default("EXACT")
+  intent            String?
+  avgMonthlySearches Int?
+  competition       String?
+  lowTopOfPageBid   Float?
+  highTopOfPageBid  Float?
+  score             Float?
+  action            String   @default("include")
+  createdAt         DateTime @default(now())
+  mediaPlan         MediaPlan @relation(fields: [mediaPlanId], references: [id])
+}
+
+model AudienceSegment {
+  id          String   @id @default(cuid())
+  mediaPlanId String
+  campaignName String
+  name        String
+  type        String
+  source      String
+  description String?
+  keywords    String?
+  urls        String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  mediaPlan   MediaPlan @relation(fields: [mediaPlanId], references: [id])
+}
+
+model QACheck {
+  id                  String   @id @default(cuid())
+  campaignBlueprintId String
+  checkName           String
+  severity            String
+  status              String
+  message             String
+  recommendation      String?
+  createdAt           DateTime @default(now())
+  blueprint           CampaignBlueprint @relation(fields: [campaignBlueprintId], references: [id])
+}
+
+model PushJob {
+  id                  String    @id @default(cuid())
+  campaignBlueprintId String
+  userId              String?
+  provider            String    @default("google_ads")
+  status              String    @default("pending")
+  mode                String    @default("PAUSED")
+  resultJson          String?
+  errorJson           String?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  blueprint           CampaignBlueprint @relation(fields: [campaignBlueprintId], references: [id])
+  user                User?     @relation(fields: [userId], references: [id])
+}
+
+model PerformanceSnapshot {
+  id                 String   @id @default(cuid())
+  userId             String
+  clientId           String?
+  campaignId         String?
+  date               String
+  campaignName       String
+  cost               Float    @default(0)
+  impressions        Int      @default(0)
+  clicks             Int      @default(0)
+  conversions        Float    @default(0)
+  ctr                Float    @default(0)
+  cpc                Float    @default(0)
+  costPerConversion  Float    @default(0)
+  conversionRate     Float    @default(0)
+  rawJson            String?
+  createdAt          DateTime @default(now())
+}
+
+// ── Client Memory (Level 2) ────────────────────────────────────────────────────
+
+model ClientMemory {
+  id                     String   @id @default(cuid())
+  clientId               String   @unique
+  industry               String?
+  avgCPC                 Float?
+  avgCPA                 Float?
+  avgConversionRate      Float?
+  bestKeywords           String?  // JSON array of top performing keywords
+  negativeKeywords       String?  // JSON array of known bad keywords
+  approvedCopyPatterns   String?  // JSON array of approved headline/desc patterns
+  rejectedCopyPatterns   String?  // JSON array of rejected patterns
+  industryBenchmarkCPC   Float?
+  lastRunObjective       String?
+  totalCampaignsRun      Int      @default(0)
+  notes                  String?  // Free-form agency notes about client
+  updatedAt              DateTime @updatedAt
+  createdAt              DateTime @default(now())
+  client                 Client   @relation(fields: [clientId], references: [id])
+}
+
+model AdCopyFeedback {
+  id          String   @id @default(cuid())
+  clientId    String
+  mediaPlanId String?
+  copyType    String   // "headline" | "description" | "long_headline"
+  copyText    String
+  status      String   // "approved" | "rejected"
+  reason      String?
+  createdAt   DateTime @default(now())
+  client      Client   @relation(fields: [clientId], references: [id])
+}
+
+model AutomationRule {
+  id             String    @id @default(cuid())
+  userId         String
+  name           String
+  type           String
+  conditionJson  String
+  actionJson     String
+  enabled        Boolean   @default(true)
+  lastRunAt      DateTime?
+  lastRunResult  String?   // "triggered" | "no_match" | "error"
+  lastRunMessage String?   // human-readable outcome
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  user           User      @relation(fields: [userId], references: [id])
+}
+
+model AutomationAlert {
+  id           String   @id @default(cuid())
+  userId       String
+  campaignName String
+  severity     String
+  title        String
+  message      String
+  status       String   @default("open")
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+// ── Chat History ───────────────────────────────────────────────────────────────
+
+model ChatSession {
+  id          String        @id @default(cuid())
+  userId      String
+  customerId  String?       // Google Ads account ID (optional)
+  accountName String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages    ChatMessage[]
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  sessionId String
+  role      String      // "user" | "assistant"
+  content   String
+  filesJson String?     // JSON array of { name, mimeType, size } — metadata only, no content
+  model     String?
+  createdAt DateTime    @default(now())
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+// ── Template Draft — saves campaign template pipeline state ───────────────────
+// Allows users to resume template generation after navigating away
+model TemplateDraft {
+  id            String   @id @default(cuid())
+  userId        String?
+  accountId     String   // Google Ads customer ID
+  accountName   String
+  templateType  String   // SEARCH, DISPLAY, PERFORMANCE_MAX, etc.
+  templateName  String
+  stateJson     String   // Full serialized page state (form, keywords, pipeline results)
+  phase         String   @default("build") // build | pipeline | done
+  mediaPlanId   String?  // linked after step 1 completes
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ── Campaign Comment (customer review) ────────────────────────────────────────
+// Allows customers to leave comments on specific campaigns in a blueprint
+// Access via public token (no auth) — link shared by agency
+model CampaignComment {
+  id            String   @id @default(cuid())
+  blueprintId   String
+  campaignName  String   // which campaign this comment is about
+  authorName    String   // customer's name (no login required)
+  authorEmail   String?  // optional email
+  comment       String
+  status        String   @default("open")  // "open" | "resolved"
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  blueprint     CampaignBlueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+}
+
+// ── AI Cost Log ───────────────────────────────────────────────────────────────
+// Tracks AI (Gemini/Anthropic) token usage and estimated cost per API call
+model AiCostLog {
+  id            String   @id @default(cuid())
+  userId        String?
+  route         String   // API route that called AI e.g. /api/media-plans/generate
+  model         String   // e.g. gemini-3.5-flash
+  inputTokens   Int      @default(0)
+  outputTokens  Int      @default(0)
+  totalTokens   Int      @default(0)
+  estimatedUSD  Float    @default(0)
+  mediaPlanId   String?
+  createdAt     DateTime @default(now())
+  user          User?    @relation(fields: [userId], references: [id])
+}

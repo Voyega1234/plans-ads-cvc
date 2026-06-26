@@ -1,0 +1,15 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "prisma generate && next build",
+  "functions": {
+    "src/app/api/automation/run-step/route.ts":    { "maxDuration": 300 },
+    "src/app/api/automation/run-full/route.ts":    { "maxDuration": 300 },
+    "src/app/api/automation/build-from-plan/route.ts": { "maxDuration": 300 },
+    "src/app/api/keyword-research/generate/route.ts":  { "maxDuration": 120 },
+    "src/app/api/campaign-blueprints/generate/route.ts": { "maxDuration": 120 },
+    "src/app/api/media-plans/generate/route.ts":   { "maxDuration": 120 },
+    "src/app/api/keyword-audience/generate/route.ts": { "maxDuration": 120 },
+    "src/app/api/templates/research/route.ts": { "maxDuration": 120 },
+    "src/app/api/adcopy/generate/route.ts": { "maxDuration": 120 }
+  }
+}
