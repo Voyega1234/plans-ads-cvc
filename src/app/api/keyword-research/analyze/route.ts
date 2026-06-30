@@ -1,77 +1,98 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import type { ResearchKeyword as BaseResearchKeyword, KeywordAnalysis } from '@/app/api/keyword-research/generate/route'
+import type {
+  ResearchKeyword as BaseResearchKeyword,
+  KeywordAnalysis,
+} from '@/app/api/keyword-research/generate/route'
 import { EXECUTIVE_GROWTH_SKILL, KEYWORD_ANALYSIS_CONTEXT } from '@/lib/ai/prompts'
-import { logAiCost } from '@/lib/ai/provider'
+import { getProvider, logAiCost } from '@/lib/ai/provider'
+import { generateVertexText } from '@/lib/ai/vertex'
 // Analyze route accepts keywords that may include 'negative' group from standalone planner
-type ResearchKeyword = Omit<BaseResearchKeyword, 'group'> & { group: BaseResearchKeyword['group'] | 'negative' }
+type ResearchKeyword = Omit<BaseResearchKeyword, 'group'> & {
+  group: BaseResearchKeyword['group'] | 'negative'
+}
 
 export interface MarketAnalysis extends KeywordAnalysis {
-  marketOverview:    string          // ภาพรวมตลาดและ demand (paragraph)
-  marketSignals:     MarketSignal[]  // structured signals
-  competitors:       CompetitorInfo[]
-  doList:            string[]        // ควรทำ
-  dontList:          string[]        // ไม่ควรทำ
-  opportunityScore:  number          // 1-10
-  difficultyScore:   number          // 1-10
-  marketTrend:       'growing' | 'stable' | 'declining' | 'seasonal'
-  buyerJourney:      string          // ลักษณะ buyer journey ของอุตสาหกรรมนี้
-  uniqueAngle:       string          // มุมที่ธุรกิจนี้ควรใช้สู้คู่แข่ง
+  marketOverview: string // ภาพรวมตลาดและ demand (paragraph)
+  marketSignals: MarketSignal[] // structured signals
+  competitors: CompetitorInfo[]
+  doList: string[] // ควรทำ
+  dontList: string[] // ไม่ควรทำ
+  opportunityScore: number // 1-10
+  difficultyScore: number // 1-10
+  marketTrend: 'growing' | 'stable' | 'declining' | 'seasonal'
+  buyerJourney: string // ลักษณะ buyer journey ของอุตสาหกรรมนี้
+  uniqueAngle: string // มุมที่ธุรกิจนี้ควรใช้สู้คู่แข่ง
 }
 
 export interface MarketSignal {
-  icon:    string   // emoji
-  label:   string   // ชื่อ signal
-  value:   string   // ค่า/สถานะ
-  detail:  string   // อธิบาย
-  color:   'green' | 'yellow' | 'red' | 'blue' | 'purple'
+  icon: string // emoji
+  label: string // ชื่อ signal
+  value: string // ค่า/สถานะ
+  detail: string // อธิบาย
+  color: 'green' | 'yellow' | 'red' | 'blue' | 'purple'
 }
 
 export interface CompetitorInfo {
-  name:         string
-  type:         'direct' | 'indirect'
-  strength:     string   // จุดแข็ง
-  weakness?:    string
-  bidStrategy?: string   // วิธี bid ที่ประมาณ
+  name: string
+  type: 'direct' | 'indirect'
+  strength: string // จุดแข็ง
+  weakness?: string
+  bidStrategy?: string // วิธี bid ที่ประมาณ
 }
 
 export async function POST(req: NextRequest) {
   await auth()
 
-  const { keywords, businessName, productService, location, objective, competitors } = await req.json() as {
-    keywords:       ResearchKeyword[]
-    businessName:   string
-    productService: string
-    location:       string
-    objective:      string
-    competitors?:   string
-  }
+  const { keywords, businessName, productService, location, objective, competitors } =
+    (await req.json()) as {
+      keywords: ResearchKeyword[]
+      businessName: string
+      productService: string
+      location: string
+      objective: string
+      competitors?: string
+    }
 
   if (!keywords?.length) {
     return NextResponse.json({ error: 'ต้องระบุ keywords' }, { status: 400 })
   }
 
-  if (!process.env.GEMINI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json(buildFallbackAnalysis(keywords, businessName, productService, competitors), { status: 200 })
+  if (getProvider() !== 'vertex') {
+    return NextResponse.json(
+      buildFallbackAnalysis(keywords, businessName, productService, competitors),
+      { status: 200 }
+    )
   }
 
-  const nonNeg   = keywords.filter(k => k.group !== 'negative' && k.selected)
-  const topByVol = [...nonNeg].sort((a, b) => (b.avgMonthlySearches ?? 0) - (a.avgMonthlySearches ?? 0)).slice(0, 15)
-  const avgCPC   = nonNeg.filter(k => k.cpcEst > 0).reduce((s, k) => s + k.cpcEst, 0) / (nonNeg.filter(k => k.cpcEst > 0).length || 1)
+  const nonNeg = keywords.filter((k) => k.group !== 'negative' && k.selected)
+  const topByVol = [...nonNeg]
+    .sort((a, b) => (b.avgMonthlySearches ?? 0) - (a.avgMonthlySearches ?? 0))
+    .slice(0, 15)
+  const avgCPC =
+    nonNeg.filter((k) => k.cpcEst > 0).reduce((s, k) => s + k.cpcEst, 0) /
+    (nonNeg.filter((k) => k.cpcEst > 0).length || 1)
 
-  const kwSummary = topByVol.map(k =>
-    `- [${k.matchType}][${k.group}] "${k.keyword}": ${k.avgMonthlySearches?.toLocaleString() ?? 'N/A'} searches/mo | CPC ฿${k.cpcEst} | competition: ${k.competition}${k.competitionIndex ? ` (${k.competitionIndex})` : ''}`
-  ).join('\n')
+  const kwSummary = topByVol
+    .map(
+      (k) =>
+        `- [${k.matchType}][${k.group}] "${k.keyword}": ${k.avgMonthlySearches?.toLocaleString() ?? 'N/A'} searches/mo | CPC ฿${k.cpcEst} | competition: ${k.competition}${k.competitionIndex ? ` (${k.competitionIndex})` : ''}`
+    )
+    .join('\n')
 
-  const negKws = keywords.filter(k => k.group === 'negative').map(k => k.keyword).slice(0, 20).join(', ')
+  const negKws = keywords
+    .filter((k) => k.group === 'negative')
+    .map((k) => k.keyword)
+    .slice(0, 20)
+    .join(', ')
 
   const competitorCtx = competitors
     ? `คู่แข่งที่ระบุโดย client: ${competitors}`
     : `ยังไม่ได้ระบุคู่แข่ง — ให้วิเคราะห์จากความรู้คุณ`
 
   const totalSearchVol = topByVol.reduce((s, k) => s + (k.avgMonthlySearches ?? 0), 0)
-  const highCompCount  = nonNeg.filter(k => k.competition === 'HIGH').length
-  const lowVolCount    = nonNeg.filter(k => (k.avgMonthlySearches ?? 0) < 100).length
+  const highCompCount = nonNeg.filter((k) => k.competition === 'HIGH').length
+  const lowVolCount = nonNeg.filter((k) => (k.avgMonthlySearches ?? 0) < 100).length
 
   const prompt = `คุณเป็น Senior Digital Marketing Strategist ที่เชี่ยวชาญตลาดออนไลน์ไทย มีประสบการณ์วางกลยุทธ์ Google Ads, SEO, และ online consumer behavior ให้แบรนด์ชั้นนำมากกว่า 10 ปี
 
@@ -85,7 +106,7 @@ export async function POST(req: NextRequest) {
 ## Keyword Data สรุป
 - จำนวน keywords ที่เลือก: ${nonNeg.length} keywords
 - Total search volume/เดือน: ~${totalSearchVol.toLocaleString()} searches
-- High competition keywords: ${highCompCount}/${nonNeg.length} (${Math.round(highCompCount/nonNeg.length*100)}%)
+- High competition keywords: ${highCompCount}/${nonNeg.length} (${Math.round((highCompCount / nonNeg.length) * 100)}%)
 - Low volume keywords (< 100/mo): ${lowVolCount} keywords
 - Avg CPC: ฿${Math.round(avgCPC)}
 
@@ -201,31 +222,34 @@ ${kwSummary}
 }`
 
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
     // Google Search grounding: Gemini looks up real competitor landscape + market demand signals
-    const geminiModel = genAI.getGenerativeModel({
+    const genResult = await generateVertexText({
       model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
-      systemInstruction: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_ANALYSIS_CONTEXT}`,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      tools: [{ googleSearch: {} } as any],
+      system: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_ANALYSIS_CONTEXT}`,
+      prompt,
+      temperature: 0.3,
+      maxOutputTokens: 65536,
+      useGrounding: true,
     })
-    // Grounding cannot coexist with responseMimeType — extract JSON manually
-    const genResult = await geminiModel.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 65536 },
-    })
-    const usage = genResult.response.usageMetadata
-    if (usage) {
-      const inp = usage.promptTokenCount ?? 0
-      const out = usage.candidatesTokenCount ?? 0
-      void logAiCost({ route: '/api/keyword-research/analyze', model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash', inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30 })
+    const inp = genResult.usage.inputTokens ?? 0
+    const out = genResult.usage.outputTokens ?? 0
+    if (inp > 0 || out > 0) {
+      void logAiCost({
+        route: '/api/keyword-research/analyze',
+        model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
+        inputTokens: inp,
+        outputTokens: out,
+        estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.3,
+      })
     }
-    const text  = genResult.response.text()
-    const clean = text.replace(/```(?:json)?/g, '').replace(/```/g, '').trim()
+    const text = genResult.text
+    const clean = text
+      .replace(/```(?:json)?/g, '')
+      .replace(/```/g, '')
+      .trim()
     // Find outermost JSON object
     const start = clean.indexOf('{')
-    const end   = clean.lastIndexOf('}')
+    const end = clean.lastIndexOf('}')
     if (start === -1 || end === -1) throw new Error('no JSON')
     const match = [clean.slice(start, end + 1)]
     if (!match[0]) throw new Error('no JSON')
@@ -234,7 +258,9 @@ ${kwSummary}
     return NextResponse.json(parsed)
   } catch (e) {
     console.error('[kw-analyze] error:', e)
-    return NextResponse.json(buildFallbackAnalysis(keywords, businessName, productService, competitors))
+    return NextResponse.json(
+      buildFallbackAnalysis(keywords, businessName, productService, competitors)
+    )
   }
 }
 
@@ -242,36 +268,91 @@ function buildFallbackAnalysis(
   keywords: ResearchKeyword[],
   businessName: string,
   productService: string,
-  competitors?: string,
+  competitors?: string
 ): MarketAnalysis {
-  const nonNeg = keywords.filter(k => k.group !== 'negative')
-  const avgCPC = nonNeg.filter(k => k.cpcEst > 0).reduce((s, k) => s + k.cpcEst, 0) / (nonNeg.filter(k => k.cpcEst > 0).length || 1)
-  const highComp = nonNeg.filter(k => k.competition === 'HIGH').length
-  const compNames = competitors ? competitors.split(',').map(s => s.trim()).filter(Boolean) : []
+  const nonNeg = keywords.filter((k) => k.group !== 'negative')
+  const avgCPC =
+    nonNeg.filter((k) => k.cpcEst > 0).reduce((s, k) => s + k.cpcEst, 0) /
+    (nonNeg.filter((k) => k.cpcEst > 0).length || 1)
+  const highComp = nonNeg.filter((k) => k.competition === 'HIGH').length
+  const compNames = competitors
+    ? competitors
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : []
 
   const compLevel = highComp > nonNeg.length / 2 ? 'สูง' : 'ปานกลาง'
   return {
-    summary:        `${businessName} ให้บริการ ${productService} มี ${nonNeg.length} keywords ที่วิเคราะห์ avg CPC ฿${Math.round(avgCPC)} — competition ระดับ${compLevel}`,
+    summary: `${businessName} ให้บริการ ${productService} มี ${nonNeg.length} keywords ที่วิเคราะห์ avg CPC ฿${Math.round(avgCPC)} — competition ระดับ${compLevel}`,
     marketOverview: `ตลาด ${productService} ในไทยมี competition ระดับ${compLevel} จาก ${highComp}/${nonNeg.length} keywords ที่อยู่ใน HIGH competition zone ซึ่งบ่งชี้ว่ามีผู้เล่นหลายรายกำลัง bid อยู่ในตลาดนี้อย่างจริงจัง avg CPC ฿${Math.round(avgCPC)} ถือว่าอยู่ในระดับที่ต้องวางแผน budget รอบคอบ ควรเน้น PHRASE match และ high-intent keywords ก่อนขยาย reach`,
-    marketTrend:    'stable' as const,
-    buyerJourney:   `ลูกค้าของ ${productService} มักผ่าน research phase ก่อนตัดสินใจ — ควรมี landing page ที่ตอบ objection หลักและมี social proof ที่ชัดเจน`,
-    uniqueAngle:    `โฟกัสที่ pain point เฉพาะที่คู่แข่งยังไม่พูดถึงใน ad copy — ทดสอบ benefit-led headline แทน feature-led`,
+    marketTrend: 'stable' as const,
+    buyerJourney: `ลูกค้าของ ${productService} มักผ่าน research phase ก่อนตัดสินใจ — ควรมี landing page ที่ตอบ objection หลักและมี social proof ที่ชัดเจน`,
+    uniqueAngle: `โฟกัสที่ pain point เฉพาะที่คู่แข่งยังไม่พูดถึงใน ad copy — ทดสอบ benefit-led headline แทน feature-led`,
     marketSignals: [
-      { icon: '📊', label: 'Search Demand', value: nonNeg.reduce((s, k) => s + (k.avgMonthlySearches ?? 0), 0) > 10000 ? 'สูง' : 'ปานกลาง', detail: `รวม ~${nonNeg.reduce((s, k) => s + (k.avgMonthlySearches ?? 0), 0).toLocaleString()} searches/เดือนจาก ${nonNeg.length} keywords`, color: 'green' as const },
-      { icon: '💰', label: 'CPC Efficiency', value: `฿${Math.round(avgCPC)} avg`, detail: `CPC เฉลี่ย ฿${Math.round(avgCPC)} — ต้องมี conversion rate > ${Math.round(avgCPC / 500 * 100) / 100}% เพื่อให้ ROI คุ้ม`, color: avgCPC > 100 ? 'red' as const : avgCPC > 50 ? 'yellow' as const : 'green' as const },
-      { icon: '🏆', label: 'Competition Level', value: compLevel, detail: `${highComp} จาก ${nonNeg.length} keywords มี HIGH competition — ต้องการ Quality Score ที่ดีเพื่อลด CPC`, color: highComp > nonNeg.length / 2 ? 'red' as const : 'yellow' as const },
-      { icon: '🎯', label: 'Intent Quality', value: 'Mixed', detail: 'มีทั้ง high-intent (เปรียบเทียบ/ซื้อ) และ informational — แยก ad group ตาม intent', color: 'blue' as const },
+      {
+        icon: '📊',
+        label: 'Search Demand',
+        value:
+          nonNeg.reduce((s, k) => s + (k.avgMonthlySearches ?? 0), 0) > 10000 ? 'สูง' : 'ปานกลาง',
+        detail: `รวม ~${nonNeg.reduce((s, k) => s + (k.avgMonthlySearches ?? 0), 0).toLocaleString()} searches/เดือนจาก ${nonNeg.length} keywords`,
+        color: 'green' as const,
+      },
+      {
+        icon: '💰',
+        label: 'CPC Efficiency',
+        value: `฿${Math.round(avgCPC)} avg`,
+        detail: `CPC เฉลี่ย ฿${Math.round(avgCPC)} — ต้องมี conversion rate > ${Math.round((avgCPC / 500) * 100) / 100}% เพื่อให้ ROI คุ้ม`,
+        color:
+          avgCPC > 100 ? ('red' as const) : avgCPC > 50 ? ('yellow' as const) : ('green' as const),
+      },
+      {
+        icon: '🏆',
+        label: 'Competition Level',
+        value: compLevel,
+        detail: `${highComp} จาก ${nonNeg.length} keywords มี HIGH competition — ต้องการ Quality Score ที่ดีเพื่อลด CPC`,
+        color: highComp > nonNeg.length / 2 ? ('red' as const) : ('yellow' as const),
+      },
+      {
+        icon: '🎯',
+        label: 'Intent Quality',
+        value: 'Mixed',
+        detail: 'มีทั้ง high-intent (เปรียบเทียบ/ซื้อ) และ informational — แยก ad group ตาม intent',
+        color: 'blue' as const,
+      },
     ],
-    topKeywords:    nonNeg.sort((a, b) => (b.avgMonthlySearches ?? 0) - (a.avgMonthlySearches ?? 0)).slice(0, 5).map(k => k.keyword),
-    budgetAdvice:   `แนะนำเริ่มต้น ฿${Math.round(avgCPC * 20)}-${Math.round(avgCPC * 40)}/วัน (minimum สำหรับ algorithm เรียนรู้) แบ่ง 60% high-intent PHRASE keywords, 30% brand/product terms, 10% BROAD exploration`,
-    matchTypeAdvice:'ใช้ PHRASE match เป็น default เพื่อควบคุม quality — ขยายเป็น BROAD สำหรับ keyword volume < 100/เดือน เพื่อเพิ่ม reach ห้ามใช้ EXACT match ทุกกรณี',
-    negativeAdvice: 'เพิ่ม negative (PHRASE): ฟรี, DIY, สมัครงาน, ขายส่ง, มือสอง, ราคาส่ง, วิธีทำ, download, template',
-    strategyTips:   ['เริ่มด้วย PHRASE match ที่มี high intent ก่อน วัดผล 14 วันแล้วค่อยขยาย', 'ตั้ง conversion tracking ก่อน launch เพื่อให้ Smart Bidding มีข้อมูล', 'สร้าง landing page แยกตาม ad group ไม่ใช้ homepage', 'ตั้ง ad schedule ตาม peak hour ของ industry นี้', 'ใช้ Responsive Search Ads ทดสอบ headline อย่างน้อย 8-10 variations'],
-    doList:         ['ตั้ง conversion tracking และ Google Analytics 4 ก่อน launch', 'สร้าง negative keyword list (PHRASE) จาก search term report หลัง 7 วัน', 'แบ่ง ad group ตาม search intent อย่างน้อย 3 groups: brand, product, generic', 'ทดสอบ 2-3 ad copy variations ต่อ ad group เพื่อหา winner', 'ตั้ง automated rule แจ้งเตือนถ้า CPA เกิน target'],
-    dontList:       ['ห้ามใช้ EXACT match — ใช้ PHRASE หรือ BROAD เท่านั้น', 'อย่า pause campaign ก่อนได้ข้อมูลอย่างน้อย 2 สัปดาห์และ 50+ clicks', 'อย่า bid สูงทุก keyword เท่ากัน — priority ตาม intent', 'อย่าใช้ broad match กับ campaign ที่ budget จำกัด'],
-    opportunityScore: Math.max(4, 8 - Math.round(highComp / nonNeg.length * 4)),
-    difficultyScore:  Math.min(9, 3 + Math.round(highComp / nonNeg.length * 6)),
-    competitors: compNames.map(name => ({
+    topKeywords: nonNeg
+      .sort((a, b) => (b.avgMonthlySearches ?? 0) - (a.avgMonthlySearches ?? 0))
+      .slice(0, 5)
+      .map((k) => k.keyword),
+    budgetAdvice: `แนะนำเริ่มต้น ฿${Math.round(avgCPC * 20)}-${Math.round(avgCPC * 40)}/วัน (minimum สำหรับ algorithm เรียนรู้) แบ่ง 60% high-intent PHRASE keywords, 30% brand/product terms, 10% BROAD exploration`,
+    matchTypeAdvice:
+      'ใช้ PHRASE match เป็น default เพื่อควบคุม quality — ขยายเป็น BROAD สำหรับ keyword volume < 100/เดือน เพื่อเพิ่ม reach ห้ามใช้ EXACT match ทุกกรณี',
+    negativeAdvice:
+      'เพิ่ม negative (PHRASE): ฟรี, DIY, สมัครงาน, ขายส่ง, มือสอง, ราคาส่ง, วิธีทำ, download, template',
+    strategyTips: [
+      'เริ่มด้วย PHRASE match ที่มี high intent ก่อน วัดผล 14 วันแล้วค่อยขยาย',
+      'ตั้ง conversion tracking ก่อน launch เพื่อให้ Smart Bidding มีข้อมูล',
+      'สร้าง landing page แยกตาม ad group ไม่ใช้ homepage',
+      'ตั้ง ad schedule ตาม peak hour ของ industry นี้',
+      'ใช้ Responsive Search Ads ทดสอบ headline อย่างน้อย 8-10 variations',
+    ],
+    doList: [
+      'ตั้ง conversion tracking และ Google Analytics 4 ก่อน launch',
+      'สร้าง negative keyword list (PHRASE) จาก search term report หลัง 7 วัน',
+      'แบ่ง ad group ตาม search intent อย่างน้อย 3 groups: brand, product, generic',
+      'ทดสอบ 2-3 ad copy variations ต่อ ad group เพื่อหา winner',
+      'ตั้ง automated rule แจ้งเตือนถ้า CPA เกิน target',
+    ],
+    dontList: [
+      'ห้ามใช้ EXACT match — ใช้ PHRASE หรือ BROAD เท่านั้น',
+      'อย่า pause campaign ก่อนได้ข้อมูลอย่างน้อย 2 สัปดาห์และ 50+ clicks',
+      'อย่า bid สูงทุก keyword เท่ากัน — priority ตาม intent',
+      'อย่าใช้ broad match กับ campaign ที่ budget จำกัด',
+    ],
+    opportunityScore: Math.max(4, 8 - Math.round((highComp / nonNeg.length) * 4)),
+    difficultyScore: Math.min(9, 3 + Math.round((highComp / nonNeg.length) * 6)),
+    competitors: compNames.map((name) => ({
       name,
       type: 'direct' as const,
       strength: 'ยังไม่ได้วิเคราะห์ — กด Analyze อีกครั้งเพื่อให้ AI วิเคราะห์คู่แข่ง',

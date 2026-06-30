@@ -16,12 +16,12 @@ interface IntegrationStatus {
 }
 
 interface IntegrationStatuses {
-  google_ads:    IntegrationStatus
-  anthropic:     IntegrationStatus
-  ga4:           IntegrationStatus
-  gtm:           IntegrationStatus
+  google_ads: IntegrationStatus
+  anthropic: IntegrationStatus
+  ga4: IntegrationStatus
+  gtm: IntegrationStatus
   google_sheets: IntegrationStatus
-  google_drive:  IntegrationStatus
+  google_drive: IntegrationStatus
 }
 
 type Provider = keyof IntegrationStatuses
@@ -44,11 +44,12 @@ const integrationMeta: Array<{
   },
   {
     provider: 'anthropic',
-    name: 'AI — Gemini 3.5 Flash',
+    name: 'AI — Vertex Gemini',
     logo: 'AI',
     logoColor: 'bg-violet-500',
-    description: 'สร้าง Media Plan, Keyword Strategy, Blueprint, Morning Brief และ AI Media Buyer recommendations',
-    setupNote: 'ตั้งค่า GEMINI_API_KEY ใน .env.local · ปิด MOCK_AI=true',
+    description:
+      'สร้าง Media Plan, Keyword Strategy, Blueprint, Morning Brief และ AI Media Buyer recommendations',
+    setupNote: 'ตั้งค่า GCP Workload Identity/OIDC env · ปิด MOCK_AI=true',
   },
   {
     provider: 'ga4',
@@ -56,7 +57,8 @@ const integrationMeta: Array<{
     logo: 'G4',
     logoColor: 'bg-orange-500',
     description: 'Conversion Events, Audience, Landing Page Performance สำหรับ Remarketing',
-    setupNote: 'ตั้งค่า GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_EMAIL + GA4_SERVICE_ACCOUNT_PRIVATE_KEY',
+    setupNote:
+      'ตั้งค่า GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_EMAIL + GA4_SERVICE_ACCOUNT_PRIVATE_KEY',
   },
   {
     provider: 'gtm',
@@ -87,23 +89,26 @@ const integrationMeta: Array<{
 export default function IntegrationsPage() {
   const { data: session, status: sessionStatus } = useSession()
   const router = useRouter()
-  const [statuses,  setStatuses]  = useState<IntegrationStatuses | null>(null)
-  const [loading,   setLoading]   = useState(true)
-  const [testing,   setTesting]   = useState<Partial<Record<Provider, boolean>>>({})
+  const [statuses, setStatuses] = useState<IntegrationStatuses | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [testing, setTesting] = useState<Partial<Record<Provider, boolean>>>({})
   const [testResult, setTestResult] = useState<Partial<Record<Provider, 'ok' | 'fail'>>>({})
 
   const isAdmin = ADMIN_EMAILS.includes(session?.user?.email ?? '')
 
   useEffect(() => {
     if (sessionStatus === 'loading') return
-    if (!isAdmin) { router.replace('/dashboard'); return }
+    if (!isAdmin) {
+      router.replace('/dashboard')
+      return
+    }
   }, [sessionStatus, isAdmin, router])
 
   const fetchStatuses = async () => {
     setLoading(true)
     try {
-      const res  = await fetch('/api/integrations/status')
-      const data = await res.json() as IntegrationStatuses
+      const res = await fetch('/api/integrations/status')
+      const data = (await res.json()) as IntegrationStatuses
       setStatuses(data)
     } finally {
       setLoading(false)
@@ -111,18 +116,18 @@ export default function IntegrationsPage() {
   }
 
   async function testConnection(provider: Provider) {
-    setTesting(t => ({ ...t, [provider]: true }))
-    setTestResult(r => ({ ...r, [provider]: undefined }))
+    setTesting((t) => ({ ...t, [provider]: true }))
+    setTestResult((r) => ({ ...r, [provider]: undefined }))
     try {
-      const res  = await fetch('/api/integrations/status')
-      const data = await res.json() as IntegrationStatuses
+      const res = await fetch('/api/integrations/status')
+      const data = (await res.json()) as IntegrationStatuses
       setStatuses(data)
-      setTestResult(r => ({ ...r, [provider]: data[provider]?.live ? 'ok' : 'fail' }))
+      setTestResult((r) => ({ ...r, [provider]: data[provider]?.live ? 'ok' : 'fail' }))
     } catch {
-      setTestResult(r => ({ ...r, [provider]: 'fail' }))
+      setTestResult((r) => ({ ...r, [provider]: 'fail' }))
     } finally {
-      setTesting(t => ({ ...t, [provider]: false }))
-      setTimeout(() => setTestResult(r => ({ ...r, [provider]: undefined })), 3000)
+      setTesting((t) => ({ ...t, [provider]: false }))
+      setTimeout(() => setTestResult((r) => ({ ...r, [provider]: undefined })), 3000)
     }
   }
 
@@ -130,8 +135,8 @@ export default function IntegrationsPage() {
     if (isAdmin) fetchStatuses()
   }, [isAdmin]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const connected    = integrationMeta.filter((m) => statuses?.[m.provider]?.live).length
-  const total        = integrationMeta.length
+  const connected = integrationMeta.filter((m) => statuses?.[m.provider]?.live).length
+  const total = integrationMeta.length
 
   if (sessionStatus === 'loading' || (sessionStatus === 'authenticated' && !isAdmin)) {
     return (
@@ -148,13 +153,14 @@ export default function IntegrationsPage() {
   return (
     <AppShell>
       <div className="space-y-5">
-
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold text-gray-900">Automation Integrations Settings</h1>
-              <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">ADMIN ONLY</span>
+              <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
+                ADMIN ONLY
+              </span>
             </div>
             <p className="text-sm text-gray-400 mt-0.5">
               เชื่อมต่อ API ทั้งหมด {loading ? '...' : `${connected}/${total} connected`}
@@ -181,12 +187,17 @@ export default function IntegrationsPage() {
               {integrationMeta.map((m) => {
                 const s = statuses[m.provider]
                 return (
-                  <span key={m.provider} className={cn(
-                    'text-[10px] font-medium px-2 py-0.5 rounded-full',
-                    s.live ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                    s.mock ? 'bg-amber-50 text-amber-700 border border-amber-100' :
-                             'bg-gray-50 text-gray-400 border border-gray-100'
-                  )}>
+                  <span
+                    key={m.provider}
+                    className={cn(
+                      'text-[10px] font-medium px-2 py-0.5 rounded-full',
+                      s.live
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                        : s.mock
+                          ? 'bg-amber-50 text-amber-700 border border-amber-100'
+                          : 'bg-gray-50 text-gray-400 border border-gray-100'
+                    )}
+                  >
                     {m.name.split(' ')[0]}
                   </span>
                 )
@@ -204,13 +215,21 @@ export default function IntegrationsPage() {
             const isConfigured = s?.configured ?? false
 
             return (
-              <div key={meta.provider} className={cn(
-                'bg-white rounded-xl border p-4 transition-colors',
-                isLive ? 'border-emerald-200' : isMock ? 'border-amber-200' : 'border-gray-200'
-              )}>
+              <div
+                key={meta.provider}
+                className={cn(
+                  'bg-white rounded-xl border p-4 transition-colors',
+                  isLive ? 'border-emerald-200' : isMock ? 'border-amber-200' : 'border-gray-200'
+                )}
+              >
                 <div className="flex items-center gap-4">
                   {/* Logo */}
-                  <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center text-white text-xs font-bold flex-shrink-0', meta.logoColor)}>
+                  <div
+                    className={cn(
+                      'w-10 h-10 rounded-xl flex items-center justify-center text-white text-xs font-bold flex-shrink-0',
+                      meta.logoColor
+                    )}
+                  >
                     {meta.logo}
                   </div>
 
@@ -218,29 +237,29 @@ export default function IntegrationsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap justify-between">
                       <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-gray-900 text-sm">{meta.name}</span>
+                        <span className="font-semibold text-gray-900 text-sm">{meta.name}</span>
 
-                      {loading ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-gray-300 bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5">
-                          <Loader2 className="w-2.5 h-2.5 animate-spin" /> Checking...
-                        </span>
-                      ) : isLive ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-0.5">
-                          <CheckCircle className="w-3 h-3" /> Connected
-                        </span>
-                      ) : isMock ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 bg-amber-50 border border-amber-100 rounded-full px-2 py-0.5">
-                          Mock Mode
-                        </span>
-                      ) : isConfigured ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
-                          Configured
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-gray-400 bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5">
-                          <XCircle className="w-3 h-3" /> Not configured
-                        </span>
-                      )}
+                        {loading ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-gray-300 bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5">
+                            <Loader2 className="w-2.5 h-2.5 animate-spin" /> Checking...
+                          </span>
+                        ) : isLive ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2.5 py-0.5">
+                            <CheckCircle className="w-3 h-3" /> Connected
+                          </span>
+                        ) : isMock ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 bg-amber-50 border border-amber-100 rounded-full px-2 py-0.5">
+                            Mock Mode
+                          </span>
+                        ) : isConfigured ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
+                            Configured
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-gray-400 bg-gray-50 border border-gray-100 rounded-full px-2 py-0.5">
+                            <XCircle className="w-3 h-3" /> Not configured
+                          </span>
+                        )}
                       </div>
 
                       {/* Test Connection button */}
@@ -250,23 +269,29 @@ export default function IntegrationsPage() {
                           disabled={!!testing[meta.provider]}
                           className={cn(
                             'flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-60',
-                            testResult[meta.provider] === 'ok'   ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                            testResult[meta.provider] === 'fail'  ? 'bg-red-50 text-red-600 border-red-200' :
-                                                                    'bg-white text-gray-500 border-gray-200 hover:border-blue-300 hover:text-blue-600'
+                            testResult[meta.provider] === 'ok'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : testResult[meta.provider] === 'fail'
+                                ? 'bg-red-50 text-red-600 border-red-200'
+                                : 'bg-white text-gray-500 border-gray-200 hover:border-blue-300 hover:text-blue-600'
                           )}
                         >
+                          {testing[meta.provider] ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : testResult[meta.provider] === 'ok' ? (
+                            <CheckCircle className="w-3 h-3" />
+                          ) : testResult[meta.provider] === 'fail' ? (
+                            <XCircle className="w-3 h-3" />
+                          ) : (
+                            <Wifi className="w-3 h-3" />
+                          )}
                           {testing[meta.provider]
-                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            ? 'Testing...'
                             : testResult[meta.provider] === 'ok'
-                              ? <CheckCircle className="w-3 h-3" />
+                              ? 'Connected!'
                               : testResult[meta.provider] === 'fail'
-                                ? <XCircle className="w-3 h-3" />
-                                : <Wifi className="w-3 h-3" />
-                          }
-                          {testing[meta.provider] ? 'Testing...' :
-                           testResult[meta.provider] === 'ok' ? 'Connected!' :
-                           testResult[meta.provider] === 'fail' ? 'Failed' :
-                           'Test Connection'}
+                                ? 'Failed'
+                                : 'Test Connection'}
                         </button>
                       )}
                     </div>
@@ -284,9 +309,13 @@ export default function IntegrationsPage() {
         {/* How to apply */}
         <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-800">
           <p className="font-semibold mb-1">How to apply credentials</p>
-          <p>Edit <code className="bg-blue-100 px-1.5 py-0.5 rounded font-mono text-xs">.env.local</code> at the project root. All env vars are pre-defined with empty values — just fill them in and restart the dev server.</p>
+          <p>
+            Edit{' '}
+            <code className="bg-blue-100 px-1.5 py-0.5 rounded font-mono text-xs">.env.local</code>{' '}
+            at the project root. All env vars are pre-defined with empty values — just fill them in
+            and restart the dev server.
+          </p>
         </div>
-
       </div>
     </AppShell>
   )

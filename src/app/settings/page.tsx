@@ -77,12 +77,21 @@ const SERVICES: ServiceDef[] = [
   },
   {
     key: 'anthropic',
-    name: 'AI — Gemini 3.5 Flash',
+    name: 'AI — Vertex Gemini',
     icon: '🤖',
-    envVars: ['GEMINI_API_KEY', 'AI_MODEL_QUALITY', 'AI_MODEL_STANDARD', 'MOCK_AI'],
+    envVars: [
+      'GCP_PROJECT_ID',
+      'GCP_PROJECT_NUMBER',
+      'GCP_SERVICE_ACCOUNT_EMAIL',
+      'GCP_WORKLOAD_IDENTITY_POOL_ID',
+      'GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID',
+      'AI_MODEL_QUALITY',
+      'AI_MODEL_STANDARD',
+      'MOCK_AI',
+    ],
     setupSteps: [
-      'ขอ API key ฟรีได้ที่ https://aistudio.google.com/apikey',
-      'Paste the key into GEMINI_API_KEY',
+      'Create a Google Cloud Workload Identity Pool provider that trusts Vercel OIDC',
+      'Grant the provider permission to impersonate the Vertex service account',
       'AI_MODEL_QUALITY และ AI_MODEL_STANDARD ตั้งเป็น gemini-3.5-flash',
       'Set MOCK_AI=false to use real AI',
     ],
@@ -120,11 +129,7 @@ const SERVICES: ServiceDef[] = [
     key: 'google_sheets',
     name: 'Google Sheets',
     icon: '📄',
-    envVars: [
-      'GOOGLE_SHEETS_ENABLED',
-      'GOOGLE_SHEETS_CLIENT_EMAIL',
-      'GOOGLE_SHEETS_PRIVATE_KEY',
-    ],
+    envVars: ['GOOGLE_SHEETS_ENABLED', 'GOOGLE_SHEETS_CLIENT_EMAIL', 'GOOGLE_SHEETS_PRIVATE_KEY'],
     setupSteps: [
       'In Google Cloud Console, create a Service Account and enable the Google Sheets API',
       'Download the JSON key and copy client_email → GOOGLE_SHEETS_CLIENT_EMAIL',
@@ -302,23 +307,32 @@ export default function SettingsPage() {
     <AppShell>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Settings &amp; Production Readiness</h1>
-        <p className="text-gray-500 mt-1">Configure your API integrations and verify production setup</p>
+        <p className="text-gray-500 mt-1">
+          Configure your API integrations and verify production setup
+        </p>
       </div>
 
       <div className="max-w-3xl space-y-6">
-
         {/* Production Push Lock */}
-        <div className={`rounded-xl border p-5 ${productionLocked ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'}`}>
+        <div
+          className={`rounded-xl border p-5 ${productionLocked ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200'}`}
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {productionLocked
-                ? <Lock className="w-6 h-6 text-red-600" />
-                : <Unlock className="w-6 h-6 text-emerald-600" />}
+              {productionLocked ? (
+                <Lock className="w-6 h-6 text-red-600" />
+              ) : (
+                <Unlock className="w-6 h-6 text-emerald-600" />
+              )}
               <div>
-                <h2 className={`font-semibold ${productionLocked ? 'text-red-900' : 'text-emerald-900'}`}>
+                <h2
+                  className={`font-semibold ${productionLocked ? 'text-red-900' : 'text-emerald-900'}`}
+                >
                   Production Push: {productionLocked ? 'LOCKED 🔒' : 'ENABLED ✅'}
                 </h2>
-                <p className={`text-xs mt-0.5 ${productionLocked ? 'text-red-700' : 'text-emerald-700'}`}>
+                <p
+                  className={`text-xs mt-0.5 ${productionLocked ? 'text-red-700' : 'text-emerald-700'}`}
+                >
                   {productionLocked
                     ? 'Push campaign จริงถูก lock อยู่ — เปิดใช้เมื่อพร้อม push จริงเท่านั้น'
                     : 'Push campaign จริงถูก enable — ระวัง ระบบจะ push ขึ้น Google Ads จริงได้'}
@@ -341,8 +355,8 @@ export default function SettingsPage() {
             <div className="mt-3 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <p className="text-xs text-amber-800">
-                Production mode เปิดอยู่ — Campaign Builder และ Tracking Setup สามารถ push ขึ้น Google Ads จริงได้
-                ตรวจสอบ tracking, conversion actions, และ budget ก่อนทุกครั้ง
+                Production mode เปิดอยู่ — Campaign Builder และ Tracking Setup สามารถ push ขึ้น
+                Google Ads จริงได้ ตรวจสอบ tracking, conversion actions, และ budget ก่อนทุกครั้ง
               </p>
             </div>
           )}
@@ -407,8 +421,9 @@ export default function SettingsPage() {
           <p>
             Edit <code className="bg-blue-100 px-1 rounded font-mono">.env.local</code> at the
             project root. All env vars are pre-defined with empty values — just fill them in and
-            restart the dev server. Mock mode stays active as long as the corresponding env vars
-            are empty or the MOCK_ flags are set to <code className="bg-blue-100 px-1 rounded font-mono">true</code>.
+            restart the dev server. Mock mode stays active as long as the corresponding env vars are
+            empty or the MOCK_ flags are set to{' '}
+            <code className="bg-blue-100 px-1 rounded font-mono">true</code>.
           </p>
         </div>
       </div>

@@ -1,23 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getProvider, logAiCost } from '@/lib/ai/provider'
+import { generateVertexText } from '@/lib/ai/vertex'
 import { EXECUTIVE_GROWTH_SKILL, ACCOUNT_TYPE_REPORTING_SKILL } from '@/lib/ai/prompts'
 import { pullCampaignPerformance, loadRecentSnapshots } from '@/lib/google-ads/performance-reader'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 import { auth } from '@/lib/auth'
 import { getUserId } from '@/lib/session'
+import type { ModelMessage } from 'ai'
 
 interface AttachedFile {
-  name:     string
+  name: string
   mimeType: string
-  size:     number
-  content:  string  // text or base64 data URL
+  size: number
+  content: string // text or base64 data URL
 }
 
 interface ChatMessage {
-  role:    'user' | 'assistant'
+  role: 'user' | 'assistant'
   content: string
-  files?:  AttachedFile[]
+  files?: AttachedFile[]
 }
 
 // ── Derive nickname from email (part before @) ────────────────────────────────
@@ -177,7 +179,12 @@ CPC ถูก ROAS สูง ถ้าไม่ run คู่แข่งมา�
 ถ้าเป็น **brand awareness** → YouTube + Display เป็นหลัก Search เป็น retargeting layer ตามต่อ${context ? `\n\nจาก context ของ account:\n${context}\n\nผมวางแผนให้ตามข้อมูลนี้ได้เลยครับ` : '\n\nบอกประเภทธุรกิจและ objective มา ผมวางให้ได้เลยครับ'}`
   }
 
-  if (msg.includes('cpa') || msg.includes('roas') || msg.includes('conversion') || msg.includes('cost')) {
+  if (
+    msg.includes('cpa') ||
+    msg.includes('roas') ||
+    msg.includes('conversion') ||
+    msg.includes('cost')
+  ) {
     return `พี่${nickname} เรื่อง CPA ต้องเริ่มจาก LTV ของลูกค้าก่อนเสมอ ไม่ใช่เริ่มจาก CPA ที่รู้สึกว่าถูกหรือแพง
 
 สูตรที่ใช้: **Max CPA = LTV × margin × payback period**
@@ -202,29 +209,34 @@ type AnthropicContent =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
 
-function buildAnthropicMessages(messages: ChatMessage[]): Array<{ role: 'user' | 'assistant'; content: string | AnthropicContent[] }> {
+function buildAnthropicMessages(
+  messages: ChatMessage[]
+): Array<{ role: 'user' | 'assistant'; content: string | AnthropicContent[] }> {
   return messages.map((m) => {
     if (!m.files?.length) return { role: m.role, content: m.content }
 
     const parts: AnthropicContent[] = []
 
     // Inject text files as readable context
-    const textFiles = m.files.filter(f => !f.mimeType.startsWith('image/'))
+    const textFiles = m.files.filter((f) => !f.mimeType.startsWith('image/'))
     if (textFiles.length > 0) {
-      const fileBlocks = textFiles.map(f => {
-        const MAX_CHARS = 30_000
-        const body = f.content.length > MAX_CHARS
-          ? f.content.slice(0, MAX_CHARS) + '\n... [ถูกตัดให้สั้นลง]'
-          : f.content
-        return `\n## ไฟล์: ${f.name}\n\`\`\`\n${body}\n\`\`\``
-      }).join('\n')
+      const fileBlocks = textFiles
+        .map((f) => {
+          const MAX_CHARS = 30_000
+          const body =
+            f.content.length > MAX_CHARS
+              ? f.content.slice(0, MAX_CHARS) + '\n... [ถูกตัดให้สั้นลง]'
+              : f.content
+          return `\n## ไฟล์: ${f.name}\n\`\`\`\n${body}\n\`\`\``
+        })
+        .join('\n')
       parts.push({ type: 'text', text: `${m.content}\n\n---\nไฟล์ที่แนบมา:${fileBlocks}` })
     } else if (m.content) {
       parts.push({ type: 'text', text: m.content })
     }
 
     // Images — convert data URL to base64
-    for (const f of m.files.filter(f => f.mimeType.startsWith('image/'))) {
+    for (const f of m.files.filter((f) => f.mimeType.startsWith('image/'))) {
       const base64 = f.content.includes(',') ? f.content.split(',')[1] : f.content
       if (base64) {
         parts.push({
@@ -235,10 +247,10 @@ function buildAnthropicMessages(messages: ChatMessage[]): Array<{ role: 'user' |
     }
 
     // If only images and no text from above, add message text
-    if (!parts.some(p => p.type === 'text') && m.content) {
+    if (!parts.some((p) => p.type === 'text') && m.content) {
       parts.unshift({ type: 'text', text: m.content })
     }
-    if (!parts.some(p => p.type === 'text')) {
+    if (!parts.some((p) => p.type === 'text')) {
       parts.push({ type: 'text', text: 'วิเคราะห์ไฟล์ที่แนบมาให้หน่อยครับ' })
     }
 
@@ -248,7 +260,11 @@ function buildAnthropicMessages(messages: ChatMessage[]): Array<{ role: 'user' |
 
 // ── Build account performance context ────────────────────────────────────────
 
-async function buildAccountContext(customerId?: string, accountName?: string, userId = 'demo-user-1'): Promise<string> {
+async function buildAccountContext(
+  customerId?: string,
+  accountName?: string,
+  userId = 'demo-user-1'
+): Promise<string> {
   if (!customerId) return ''
 
   const parts: string[] = []
@@ -256,7 +272,11 @@ async function buildAccountContext(customerId?: string, accountName?: string, us
 
   // Use MCC token — same as /api/performance/account, session token cannot query sub-accounts
   let adsToken: string | undefined
-  try { adsToken = await getGoogleAdsAccessToken() } catch { /* fallback to env token inside lib */ }
+  try {
+    adsToken = await getGoogleAdsAccessToken()
+  } catch {
+    /* fallback to env token inside lib */
+  }
 
   try {
     const [liveSnaps, storedSnaps] = await Promise.all([
@@ -267,40 +287,44 @@ async function buildAccountContext(customerId?: string, accountName?: string, us
     const snaps = liveSnaps.length > 0 ? liveSnaps : storedSnaps
 
     if (snaps.length > 0) {
-      const byName: Record<string, typeof snaps[0]> = {}
+      const byName: Record<string, (typeof snaps)[0]> = {}
       for (const s of snaps) {
         if (!byName[s.campaignName]) {
           byName[s.campaignName] = { ...s }
         } else {
           const e = byName[s.campaignName]
-          e.cost        += s.cost
+          e.cost += s.cost
           e.impressions += s.impressions
-          e.clicks      += s.clicks
+          e.clicks += s.clicks
           e.conversions += s.conversions
         }
       }
 
       const campaigns = Object.values(byName).map((s) => ({
-        name:        s.campaignName,
-        cost:        s.cost,
+        name: s.campaignName,
+        cost: s.cost,
         impressions: s.impressions,
-        clicks:      s.clicks,
+        clicks: s.clicks,
         conversions: s.conversions,
-        ctr:         s.impressions > 0 ? (s.clicks / s.impressions * 100).toFixed(2) : '0',
-        cpc:         s.clicks > 0 ? (s.cost / s.clicks).toFixed(2) : '0',
-        cpa:         s.conversions > 0 ? (s.cost / s.conversions).toFixed(2) : 'N/A',
+        ctr: s.impressions > 0 ? ((s.clicks / s.impressions) * 100).toFixed(2) : '0',
+        cpc: s.clicks > 0 ? (s.cost / s.clicks).toFixed(2) : '0',
+        cpa: s.conversions > 0 ? (s.cost / s.conversions).toFixed(2) : 'N/A',
       }))
 
-      const totalCost   = campaigns.reduce((a, c) => a + c.cost, 0)
-      const totalConv   = campaigns.reduce((a, c) => a + c.conversions, 0)
+      const totalCost = campaigns.reduce((a, c) => a + c.cost, 0)
+      const totalConv = campaigns.reduce((a, c) => a + c.conversions, 0)
       const totalClicks = campaigns.reduce((a, c) => a + c.clicks, 0)
-      const blendedCPA  = totalConv > 0 ? (totalCost / totalConv).toFixed(0) : 'N/A'
+      const blendedCPA = totalConv > 0 ? (totalCost / totalConv).toFixed(0) : 'N/A'
 
       parts.push(`\n## Performance (30 วันล่าสุด)`)
-      parts.push(`รวม: ฿${totalCost.toLocaleString()} | conv ${totalConv.toFixed(2)} | ${totalClicks.toLocaleString()} clicks | CPA ฿${blendedCPA}`)
+      parts.push(
+        `รวม: ฿${totalCost.toLocaleString()} | conv ${totalConv.toFixed(2)} | ${totalClicks.toLocaleString()} clicks | CPA ฿${blendedCPA}`
+      )
       parts.push(`\n## Campaign breakdown`)
       for (const c of campaigns.slice(0, 10)) {
-        parts.push(`- ${c.name}: ฿${c.cost.toLocaleString()} | conv ${c.conversions.toFixed(2)} | CPA ฿${c.cpa} | CTR ${c.ctr}% | CPC ฿${c.cpc}`)
+        parts.push(
+          `- ${c.name}: ฿${c.cost.toLocaleString()} | conv ${c.conversions.toFixed(2)} | CPA ฿${c.cpa} | CTR ${c.ctr}% | CPC ฿${c.cpc}`
+        )
       }
     }
   } catch {
@@ -309,15 +333,15 @@ async function buildAccountContext(customerId?: string, accountName?: string, us
 
   try {
     const recentBriefs = await prisma.brief.findMany({
-      where:   { clientId: customerId },
+      where: { clientId: customerId },
       include: {
         mediaPlans: {
-          take:    1,
+          take: 1,
           orderBy: { createdAt: 'desc' },
           include: { blueprints: { take: 1, orderBy: { createdAt: 'desc' } } },
         },
       },
-      take:    3,
+      take: 3,
       orderBy: { createdAt: 'desc' },
     })
 
@@ -325,8 +349,10 @@ async function buildAccountContext(customerId?: string, accountName?: string, us
       parts.push(`\n## Media Plans ล่าสุด`)
       for (const brief of recentBriefs) {
         const plan = brief.mediaPlans[0]
-        const bp   = plan?.blueprints?.[0]
-        parts.push(`- ${brief.businessName}: ฿${plan?.monthlyBudget?.toLocaleString() ?? '?'}/month | QA: ${bp?.qaScore ?? 'N/A'} | Status: ${bp?.status ?? 'draft'}`)
+        const bp = plan?.blueprints?.[0]
+        parts.push(
+          `- ${brief.businessName}: ฿${plan?.monthlyBudget?.toLocaleString() ?? '?'}/month | QA: ${bp?.qaScore ?? 'N/A'} | Status: ${bp?.status ?? 'draft'}`
+        )
       }
     }
   } catch {
@@ -340,17 +366,17 @@ async function buildAccountContext(customerId?: string, accountName?: string, us
 
 export async function POST(req: NextRequest) {
   try {
-    const session  = await auth()
-    const userId   = getUserId(session)
-    const email    = session?.user?.email ?? null
+    const session = await auth()
+    const userId = getUserId(session)
+    const email = session?.user?.email ?? null
     const nickname = getNickname(email)
 
     const body = await req.json()
-    const messages: ChatMessage[]  = body.messages ?? []
-    const customerId: string       = body.customerId
-    const accountName: string      = body.accountName
-    const contextPlanId: string    = body.mediaPlanId
-    const reportContext: string    = body.reportContext ?? ''  // pre-built report context from reports page
+    const messages: ChatMessage[] = body.messages ?? []
+    const customerId: string = body.customerId
+    const accountName: string = body.accountName
+    const contextPlanId: string = body.mediaPlanId
+    const reportContext: string = body.reportContext ?? '' // pre-built report context from reports page
 
     const accountContext = reportContext
       ? `## Report Context (ข้อมูลจาก AI Performance Report)\n${reportContext}`
@@ -360,101 +386,137 @@ export async function POST(req: NextRequest) {
     if (contextPlanId) {
       try {
         const mediaPlan = await prisma.mediaPlan.findFirst({
-          where:   { id: contextPlanId },
+          where: { id: contextPlanId },
           include: {
-            brief:      true,
+            brief: true,
             blueprints: { include: { qaChecks: true }, orderBy: { createdAt: 'desc' }, take: 1 },
           },
         })
         if (mediaPlan) {
           const brief = mediaPlan.brief
-          const bp    = mediaPlan.blueprints[0]
-          const plan  = mediaPlan.planJson ? JSON.parse(mediaPlan.planJson as string) : null
+          const bp = mediaPlan.blueprints[0]
+          const plan = mediaPlan.planJson ? JSON.parse(mediaPlan.planJson as string) : null
           legacyContext = [
             `Business: ${brief?.businessName}`,
             `Objective: ${brief?.objective}`,
             `Budget: ฿${mediaPlan.monthlyBudget?.toLocaleString()}/month`,
             `Campaigns: ${plan?.campaignMix?.length ?? 0}`,
             `QA Score: ${bp?.qaScore ?? 'N/A'}`,
-            `QA Fails: ${bp?.qaChecks?.filter((q: { status: string; checkName: string }) => q.status === 'fail').map((q: { status: string; checkName: string }) => q.checkName).join(', ') || 'none'}`,
+            `QA Fails: ${
+              bp?.qaChecks
+                ?.filter((q: { status: string; checkName: string }) => q.status === 'fail')
+                .map((q: { status: string; checkName: string }) => q.checkName)
+                .join(', ') || 'none'
+            }`,
           ].join(' | ')
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     const fullContext = [accountContext, legacyContext].filter(Boolean).join('\n\n')
-    const hasAccount  = Boolean(customerId && accountContext)
+    const hasAccount = Boolean(customerId && accountContext)
     const userMessage = messages[messages.length - 1]?.content ?? ''
-    const provider    = getProvider()
+    const provider = getProvider()
 
     if (provider !== 'mock') {
-      const systemPrompt  = buildSystemPrompt(nickname, hasAccount)
+      const systemPrompt = buildSystemPrompt(nickname, hasAccount)
       const systemWithCtx = fullContext
         ? `${systemPrompt}\n\n---\n## Account Context\n${fullContext}`
         : systemPrompt
 
-      const hasFiles = messages.some(m => m.files && m.files.length > 0)
+      const hasFiles = messages.some((m) => m.files && m.files.length > 0)
 
-      if (provider === 'gemini') {
-        const { GoogleGenerativeAI } = await import('@google/generative-ai')
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-        const model = genAI.getGenerativeModel({
-          model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
-          systemInstruction: systemWithCtx,
-          // Google Search grounding — Mercy can look up real-time market data, competitor info, industry news
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tools: [{ googleSearch: {} } as any],
-        })
-
-        // Build Gemini contents — inject file text inline, images as inlineData
-        const geminiContents = messages.map((m) => {
-          if (!m.files?.length) return { role: m.role as 'user' | 'model', parts: [{ text: m.content }] }
-          const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = []
-          const textFiles = m.files.filter(f => !f.mimeType.startsWith('image/'))
-          const imgFiles  = m.files.filter(f => f.mimeType.startsWith('image/'))
+      if (provider === 'vertex') {
+        // Inject text file content inline, images as AI SDK file parts.
+        const vertexMessages: ModelMessage[] = messages.map((m) => {
+          if (!m.files?.length) return { role: m.role, content: m.content }
+          const content: Array<
+            | { type: 'text'; text: string }
+            | {
+                type: 'file'
+                mediaType: string
+                data: { type: 'data'; data: string }
+                filename?: string
+              }
+          > = []
+          const textFiles = m.files.filter((f) => !f.mimeType.startsWith('image/'))
+          const imgFiles = m.files.filter((f) => f.mimeType.startsWith('image/'))
           let textContent = m.content
           if (textFiles.length > 0) {
-            textContent += '\n\n' + textFiles.map(f => `## ไฟล์: ${f.name}\n${f.content.slice(0, 20000)}`).join('\n\n')
+            textContent +=
+              '\n\n' +
+              textFiles.map((f) => `## ไฟล์: ${f.name}\n${f.content.slice(0, 20000)}`).join('\n\n')
           }
-          parts.push({ text: textContent })
+          content.push({ type: 'text', text: textContent })
           for (const f of imgFiles) {
             const base64 = f.content.replace(/^data:[^;]+;base64,/, '')
-            parts.push({ inlineData: { mimeType: f.mimeType, data: base64 } })
+            content.push({
+              type: 'file',
+              mediaType: f.mimeType,
+              data: { type: 'data', data: base64 },
+              filename: f.name,
+            })
           }
-          return { role: m.role === 'assistant' ? 'model' : 'user', parts }
+          return { role: m.role, content }
         })
 
-        // eslint-disable-next-line
-        const result = await model.generateContent({ contents: geminiContents as any, generationConfig: { temperature: 0.75, maxOutputTokens: 65536 } })
-        const chatUsage = result.response.usageMetadata
-        if (chatUsage) {
-          const inp = chatUsage.promptTokenCount ?? 0
-          const out = chatUsage.candidatesTokenCount ?? 0
-          void logAiCost({ route: '/api/chat', model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash', inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30 })
+        const result = await generateVertexText({
+          model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
+          system: systemWithCtx,
+          messages: vertexMessages,
+          temperature: 0.75,
+          maxOutputTokens: 65536,
+          // Google Search grounding — Mercy can look up real-time market data, competitor info, industry news
+          useGrounding: true,
+        })
+        const inp = result.usage.inputTokens ?? 0
+        const out = result.usage.outputTokens ?? 0
+        if (inp > 0 || out > 0) {
+          void logAiCost({
+            route: '/api/chat',
+            model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
+            inputTokens: inp,
+            outputTokens: out,
+            estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.3,
+          })
         }
-        const text = result.response.text()
-        return NextResponse.json({ content: text, model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash' })
+        return NextResponse.json({
+          content: result.text,
+          model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
+        })
       }
 
       if (provider === 'anthropic') {
         const Anthropic = (await import('@anthropic-ai/sdk')).default
-        const client    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
         const anthropicMessages = buildAnthropicMessages(messages)
 
         const response = await client.messages.create({
-          model:       process.env.AI_MODEL_QUALITY ?? 'claude-sonnet-4-6',
-          max_tokens:  2400,
-          system:      systemWithCtx,
+          model: process.env.AI_MODEL_QUALITY ?? 'claude-sonnet-4-6',
+          max_tokens: 2400,
+          system: systemWithCtx,
           // eslint-disable-next-line
-          messages:    anthropicMessages as any,
+          messages: anthropicMessages as any,
           temperature: 0.75,
         })
 
-        void logAiCost({ route: '/api/chat', model: process.env.AI_MODEL_QUALITY ?? 'claude-sonnet-4-6', inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens, estimatedUSD: (response.usage.input_tokens / 1e6) * 3.0 + (response.usage.output_tokens / 1e6) * 15.0 })
+        void logAiCost({
+          route: '/api/chat',
+          model: process.env.AI_MODEL_QUALITY ?? 'claude-sonnet-4-6',
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          estimatedUSD:
+            (response.usage.input_tokens / 1e6) * 3.0 + (response.usage.output_tokens / 1e6) * 15.0,
+        })
         const block = response.content[0]
-        const text  = block.type === 'text' ? block.text : 'ขอโทษนะครับ ตอบไม่ได้ในขณะนี้'
-        return NextResponse.json({ content: text, model: process.env.AI_MODEL_QUALITY ?? 'claude-sonnet-4-6' })
+        const text = block.type === 'text' ? block.text : 'ขอโทษนะครับ ตอบไม่ได้ในขณะนี้'
+        return NextResponse.json({
+          content: text,
+          model: process.env.AI_MODEL_QUALITY ?? 'claude-sonnet-4-6',
+        })
       }
 
       if (provider === 'openai') {
@@ -464,12 +526,14 @@ export async function POST(req: NextRequest) {
         // For OpenAI: inject text file content inline, images as image_url
         const oaiMessages = messages.map((m) => {
           if (!m.files?.length) return { role: m.role as 'user' | 'assistant', content: m.content }
-          const textFiles = m.files.filter(f => !f.mimeType.startsWith('image/'))
-          const imgFiles  = m.files.filter(f => f.mimeType.startsWith('image/'))
+          const textFiles = m.files.filter((f) => !f.mimeType.startsWith('image/'))
+          const imgFiles = m.files.filter((f) => f.mimeType.startsWith('image/'))
           const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
           let textContent = m.content
           if (textFiles.length > 0) {
-            textContent += '\n\n' + textFiles.map(f => `## ไฟล์: ${f.name}\n${f.content.slice(0, 20000)}`).join('\n\n')
+            textContent +=
+              '\n\n' +
+              textFiles.map((f) => `## ไฟล์: ${f.name}\n${f.content.slice(0, 20000)}`).join('\n\n')
           }
           parts.push({ type: 'text', text: textContent })
           for (const f of imgFiles) {
@@ -479,17 +543,25 @@ export async function POST(req: NextRequest) {
         })
 
         const response = await client.chat.completions.create({
-          model:       'gpt-4o',
+          model: 'gpt-4o',
           // eslint-disable-next-line
-          messages:    [{ role: 'system', content: systemWithCtx }, ...oaiMessages as any],
+          messages: [{ role: 'system', content: systemWithCtx }, ...(oaiMessages as any)],
           temperature: 0.75,
-          max_tokens:  2400,
+          max_tokens: 2400,
         })
 
-        void logAiCost({ route: '/api/chat', model: 'gpt-4o', inputTokens: response.usage?.prompt_tokens ?? 0, outputTokens: response.usage?.completion_tokens ?? 0, estimatedUSD: ((response.usage?.prompt_tokens ?? 0) / 1e6) * 5.0 + ((response.usage?.completion_tokens ?? 0) / 1e6) * 15.0 })
+        void logAiCost({
+          route: '/api/chat',
+          model: 'gpt-4o',
+          inputTokens: response.usage?.prompt_tokens ?? 0,
+          outputTokens: response.usage?.completion_tokens ?? 0,
+          estimatedUSD:
+            ((response.usage?.prompt_tokens ?? 0) / 1e6) * 5.0 +
+            ((response.usage?.completion_tokens ?? 0) / 1e6) * 15.0,
+        })
         return NextResponse.json({
           content: response.choices[0]?.message?.content ?? 'ขอโทษนะครับ ตอบไม่ได้ในขณะนี้',
-          model:   'gpt-4o',
+          model: 'gpt-4o',
         })
       }
     }
@@ -497,7 +569,7 @@ export async function POST(req: NextRequest) {
     await new Promise((r) => setTimeout(r, 800))
     return NextResponse.json({
       content: generateMockResponse(userMessage, fullContext, nickname),
-      model:   'mock',
+      model: 'mock',
     })
   } catch (err) {
     return NextResponse.json(

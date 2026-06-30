@@ -14,9 +14,9 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@ai-sdk/google-vertex": "^5.0.4",
     "@anthropic-ai/sdk": "^0.102.0",
     "@auth/prisma-adapter": "^2.7.4",
-    "@google/generative-ai": "^0.24.1",
     "@hookform/resolvers": "^3.9.1",
     "@prisma/client": "^5.22.0",
     "@radix-ui/react-accordion": "^1.2.0",
@@ -32,9 +32,12 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.0",
     "@radix-ui/react-tooltip": "^1.1.0",
+    "@vercel/oidc": "^3.7.1",
+    "ai": "^7.0.8",
     "cheerio": "^1.2.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "google-auth-library": "^10.9.0",
     "lucide-react": "^0.454.0",
     "next": "14.2.20",
     "next-auth": "^5.0.0-beta.25",

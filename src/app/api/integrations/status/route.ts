@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
+import { hasVertexOidcConfig } from '@/lib/ai/vertex'
+
+export const dynamic = 'force-dynamic'
 
 // Server-side only — never exposes key values, only boolean status
 export async function GET() {
@@ -23,11 +26,13 @@ export async function GET() {
         }
       )
       adsLive = res.ok
-    } catch { adsLive = false }
+    } catch {
+      adsLive = false
+    }
   }
 
   // ── GA4: property configured in env (OAuth-based, not service account)
-  const ga4Configured = !!(process.env.GA4_PROPERTY_ID)
+  const ga4Configured = !!process.env.GA4_PROPERTY_ID
   const ga4Live = ga4Configured
 
   // ── GTM: both credentials AND GTM API reachable
@@ -43,23 +48,31 @@ export async function GET() {
         )
         gtmLive = gtmRes.ok
       }
-    } catch { gtmLive = false }
+    } catch {
+      gtmLive = false
+    }
   }
 
-  // ── AI (Gemini primary, Anthropic fallback) ───────────────────────────────
-  const anthropicKey = !!(process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY)
-  const anthropicMock = process.env.MOCK_AI === 'true'
+  // ── AI (Vertex Gemini primary, Anthropic fallback) ────────────────────────
+  const aiConfigured = hasVertexOidcConfig() || !!process.env.ANTHROPIC_API_KEY
+  const aiMock = process.env.MOCK_AI === 'true'
 
   // ── Sheets / Drive ────────────────────────────────────────────────────────
-  const sheetsLive = !!(process.env.GOOGLE_SHEETS_CLIENT_EMAIL && process.env.GOOGLE_SHEETS_PRIVATE_KEY)
-  const driveLive  = !!(process.env.GOOGLE_SHEETS_CLIENT_EMAIL && process.env.GOOGLE_DRIVE_ENABLED === 'true' && process.env.GOOGLE_DRIVE_FOLDER_ID)
+  const sheetsLive = !!(
+    process.env.GOOGLE_SHEETS_CLIENT_EMAIL && process.env.GOOGLE_SHEETS_PRIVATE_KEY
+  )
+  const driveLive = !!(
+    process.env.GOOGLE_SHEETS_CLIENT_EMAIL &&
+    process.env.GOOGLE_DRIVE_ENABLED === 'true' &&
+    process.env.GOOGLE_DRIVE_FOLDER_ID
+  )
 
   return NextResponse.json({
     google_ads: { configured: adsMock || adsLive, mock: adsMock, live: adsLive },
-    anthropic:  { configured: anthropicKey, mock: anthropicMock, live: anthropicKey && !anthropicMock },
-    ga4:        { configured: ga4Configured, mock: false, live: ga4Live },
-    gtm:        { configured: gtmConfigured, mock: false, live: gtmLive },
+    anthropic: { configured: aiConfigured, mock: aiMock, live: aiConfigured && !aiMock },
+    ga4: { configured: ga4Configured, mock: false, live: ga4Live },
+    gtm: { configured: gtmConfigured, mock: false, live: gtmLive },
     google_sheets: { configured: sheetsLive, mock: false, live: sheetsLive },
-    google_drive:  { configured: driveLive,  mock: false, live: driveLive  },
+    google_drive: { configured: driveLive, mock: false, live: driveLive },
   })
 }
