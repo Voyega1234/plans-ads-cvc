@@ -25,6 +25,7 @@ interface LogEntry {
   changes: { field: string; before: string; after: string }[]
   impact: 'LOW' | 'MEDIUM' | 'HIGH'
   detail: string
+  count?: number
 }
 interface GadsAccount { id: string; name: string }
 
@@ -314,7 +315,10 @@ export default function OptimizationLogPage() {
                               {e.adGroup && <p className="text-[11px] text-gray-400 truncate">{e.adGroup}</p>}
                             </td>
                             <td className="px-4 py-3 max-w-[320px]">
-                              <p className="text-[11px] text-gray-400">{e.resourceType} · {e.operation}</p>
+                              <p className="text-[11px] text-gray-400">
+                                {e.resourceType} · {e.operation}
+                                {(e.count ?? 1) > 1 && <span className="ml-1.5 px-1.5 py-px text-[10px] font-bold bg-blue-50 text-blue-600 rounded-full">×{(e.count ?? 1).toLocaleString()}</span>}
+                              </p>
                               <p className="text-xs text-gray-700 truncate">{e.detail}</p>
                             </td>
                             <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{e.changedBy}</td>

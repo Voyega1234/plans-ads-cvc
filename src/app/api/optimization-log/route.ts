@@ -27,6 +27,7 @@ export interface OptimizationLogEntry {
   changes: { field: string; before: string; after: string }[]
   impact: 'LOW' | 'MEDIUM' | 'HIGH'
   detail: string            // สรุปสั้น 1 บรรทัด (rule-based)
+  count: number             // รายการซ้ำถูก group (เช่น bulk create asset ×640)
 }
 
 // ── date range → [start, end] (YYYY-MM-DD HH:mm:ss) ──
@@ -56,7 +57,7 @@ function impactOf(resourceType: string, fields: string[]): OptimizationLogEntry[
   const f = fields.join(',')
   if (resourceType === 'CAMPAIGN_BUDGET' || resourceType === 'BIDDING_STRATEGY') return 'HIGH'
   if (resourceType === 'CAMPAIGN' && /status|bidding|target_cpa|target_roas|budget/.test(f)) return 'HIGH'
-  if (['CAMPAIGN', 'AD_GROUP', 'AD_GROUP_AD', 'AD_GROUP_CRITERION', 'CAMPAIGN_CRITERION', 'AD_GROUP_BID_MODIFIER', 'ASSET'].includes(resourceType)) return 'MEDIUM'
+  if (['CAMPAIGN', 'AD_GROUP', 'AD_GROUP_AD', 'AD_GROUP_CRITERION', 'CAMPAIGN_CRITERION', 'AD_GROUP_BID_MODIFIER'].includes(resourceType)) return 'MEDIUM'
   return 'LOW'
 }
 
@@ -81,7 +82,7 @@ const MOCK: OptimizationLogEntry[] = [{
   id: 'mock-1', dateTime: '2026-07-05 10:00:00', campaign: 'CVC - Demo Campaign', adGroup: null,
   resourceType: 'CAMPAIGN_BUDGET', operation: 'UPDATE', changedBy: 'demo@convertcake.com', clientType: 'GOOGLE_ADS_WEB_CLIENT',
   changedFields: ['amount_micros'], changes: [{ field: 'amount_micros', before: '฿300', after: '฿500' }],
-  impact: 'HIGH', detail: 'ปรับงบรายวัน ฿300 → ฿500',
+  impact: 'HIGH', detail: 'ปรับงบรายวัน ฿300 → ฿500', count: 1,
 }]
 
 export async function GET(req: NextRequest) {
@@ -151,10 +152,21 @@ export async function GET(req: NextRequest) {
         changes,
         impact: impactOf(rt, fields),
         detail,
+        count: 1,
       }
     })
 
-    return NextResponse.json({ entries, rangeLabel: label, clamped, total: entries.length })
+    // Group รายการซ้ำ (bulk เช่นสร้าง asset 600 ตัวในนาทีเดียว) → แถวเดียว ×N กัน spam กลบของสำคัญ
+    const grouped: OptimizationLogEntry[] = []
+    const idx = new Map<string, number>()
+    for (const e of entries) {
+      const key = [e.dateTime.slice(0, 16), e.campaign, e.adGroup, e.resourceType, e.operation, e.detail, e.changedBy].join('|')
+      const at = idx.get(key)
+      if (at !== undefined) grouped[at].count++
+      else { idx.set(key, grouped.length); grouped.push({ ...e }) }
+    }
+
+    return NextResponse.json({ entries: grouped, rangeLabel: label, clamped, total: entries.length, groupedTotal: grouped.length })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Failed' }, { status: 500 })
   }
