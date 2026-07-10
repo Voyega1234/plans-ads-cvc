@@ -24,7 +24,17 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
-    // Vercel: return base64 data URL (works for previews, not persisted)
+    // Vercel Blob (ตั้ง BLOB_READ_WRITE_TOKEN) — เก็บถาวร ได้ https URL ที่ push ใช้ได้ตรงๆ
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      const { put } = await import('@vercel/blob')
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
+      const blob = await put(`uploads/${randomUUID()}.${ext}`, buffer, {
+        access: 'public', contentType: file.type,
+      })
+      return NextResponse.json({ url: blob.url })
+    }
+
+    // Vercel ไม่มี Blob token: return base64 data URL (works for previews, not persisted)
     if (IS_VERCEL) {
       const base64 = buffer.toString('base64')
       const url = `data:${file.type};base64,${base64}`

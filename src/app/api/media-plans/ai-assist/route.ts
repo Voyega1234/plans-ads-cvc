@@ -98,7 +98,7 @@ Respond with JSON only:
           ],
         },
       }),
-      { tier: 'quality', maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${MEDIA_ASSIST_CONTEXT}` }
+      { tier: 'quality', maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${MEDIA_ASSIST_CONTEXT}`, _route: '/api/media-plans/ai-assist', _feature: 'media_plans', _subfeature: 'ai_assist' }
     )
 
     return NextResponse.json(result)

@@ -38,10 +38,10 @@ export interface MediaPlanStrategy {
     strategicRole: string
   }[]
   campaignStructure: {
-    search: { name: string; theme: string; adGroups: string[]; keywordThemes: string[] }[]
-    pmax: { name: string; assetGroups: string[]; audienceSignals: string[] }[]
-    remarketing: { name: string; audience: string; lookbackWindow: number; messageAngle: string }[]
-    demandGen: { name: string; audience: string; creativeAngle: string; funnelStage: string }[]
+    search: { name: string; theme: string; adGroups: string[]; keywordThemes: string[]; monthlyBudget: number; budgetPct: number }[]
+    pmax: { name: string; assetGroups: string[]; audienceSignals: string[]; monthlyBudget: number; budgetPct: number }[]
+    remarketing: { name: string; audience: string; lookbackWindow: number; messageAngle: string; monthlyBudget: number; budgetPct: number }[]
+    demandGen: { name: string; audience: string; creativeAngle: string; funnelStage: string; monthlyBudget: number; budgetPct: number }[]
     other: unknown[]
   }
   funnelMapping: {
@@ -146,22 +146,33 @@ function buildFallbackStrategy(
       { campaignType: 'Display Remarketing', funnelStage: 'Retention', budgetPct: remarketingPct, monthlyBudget: Math.round(budget * remarketingPct / 100), dailyBudget: Math.round(budget * remarketingPct / 100 / 30), mainKpi: 'CVR', strategicRole: 'ดึงคนที่เคยเข้าเว็บกลับมา Convert' },
       { campaignType: 'Demand Gen', funnelStage: 'Awareness', budgetPct: demandGenPct, monthlyBudget: Math.round(budget * demandGenPct / 100), dailyBudget: Math.round(budget * demandGenPct / 100 / 30), mainKpi: 'Reach / CTR', strategicRole: 'Social-style Discovery บน YouTube/Gmail/Discover' },
     ],
-    campaignStructure: {
-      search: [
-        { name: `CVC - SEM | Generic | ${slugBiz} | ${objLabel}`, theme: 'Generic', adGroups: ['Generic Intent', 'Problem-Aware', 'Action-Ready'], keywordThemes: ['high-intent generic', 'problem solution', 'comparison'] },
-        { name: `CVC - SEM | Brand | ${slugBiz} | ${objLabel}`, theme: 'Brand', adGroups: ['Brand Protection'], keywordThemes: ['brand name', 'brand + service'] },
-      ],
-      pmax: [
-        { name: `CVC - PMax | ${slugBiz} | ${objLabel}`, assetGroups: ['Primary Asset Group', 'Remarketing Asset Group'], audienceSignals: ['Website Visitors', 'Similar Audiences', 'In-Market Segments'] },
-      ],
-      remarketing: [
-        { name: `CVC - GDN | Remarketing | ${slugBiz} | ${objLabel}`, audience: 'All Website Visitors (30 days)', lookbackWindow: 30, messageAngle: 'กลับมาดูสิ่งที่คุณสนใจ — ติดต่อเราได้เลย' },
-      ],
-      demandGen: [
-        { name: `CVC - DemandGen | ${slugBiz} | ${objLabel}`, audience: 'Similar to Converters + In-Market', creativeAngle: 'Visual Discovery + USP', funnelStage: 'Awareness → Consideration' },
-      ],
-      other: [],
-    },
+    campaignStructure: (() => {
+      // Search budget split by keyword intent/volume:
+      // Generic = 70% (high search volume, broader intent)
+      // Brand = 30% (lower volume, defensive, cheap CPC)
+      const searchBudget = Math.round(budget * searchPct / 100)
+      const genericBudget = Math.round(searchBudget * 0.7)
+      const brandBudget = searchBudget - genericBudget
+      const pmaxBudget = Math.round(budget * pmaxPct / 100)
+      const remBudget = Math.round(budget * remarketingPct / 100)
+      const dgBudget = Math.round(budget * demandGenPct / 100)
+      return {
+        search: [
+          { name: `CVC - SEM | Generic | ${slugBiz} | ${objLabel}`, theme: 'Generic', adGroups: ['Generic Intent', 'Problem-Aware', 'Action-Ready'], keywordThemes: ['high-intent generic', 'problem solution', 'comparison'], monthlyBudget: genericBudget, budgetPct: Math.round(genericBudget / budget * 100) },
+          { name: `CVC - SEM | Brand | ${slugBiz} | ${objLabel}`, theme: 'Brand', adGroups: ['Brand Protection'], keywordThemes: ['brand name', 'brand + service'], monthlyBudget: brandBudget, budgetPct: Math.round(brandBudget / budget * 100) },
+        ],
+        pmax: [
+          { name: `CVC - PMax | ${slugBiz} | ${objLabel}`, assetGroups: ['Primary Asset Group', 'Remarketing Asset Group'], audienceSignals: ['Website Visitors', 'Similar Audiences', 'In-Market Segments'], monthlyBudget: pmaxBudget, budgetPct: pmaxPct },
+        ],
+        remarketing: [
+          { name: `CVC - GDN | Remarketing | ${slugBiz} | ${objLabel}`, audience: 'All Website Visitors (30 days)', lookbackWindow: 30, messageAngle: 'กลับมาดูสิ่งที่คุณสนใจ — ติดต่อเราได้เลย', monthlyBudget: remBudget, budgetPct: remarketingPct },
+        ],
+        demandGen: [
+          { name: `CVC - DemandGen | ${slugBiz} | ${objLabel}`, audience: 'Similar to Converters + In-Market', creativeAngle: 'Visual Discovery + USP', funnelStage: 'Awareness → Consideration', monthlyBudget: dgBudget, budgetPct: demandGenPct },
+        ],
+        other: [],
+      }
+    })(),
     funnelMapping: [
       { funnelStage: 'Awareness', audience: 'New Audience', campaignType: 'Demand Gen / YouTube', messageAngle: 'สร้าง brand awareness และ interest', conversionGoal: 'Video View / Click' },
       { funnelStage: 'Consideration', audience: 'In-Market Searchers', campaignType: 'Search Generic', messageAngle: 'ตอบ pain point + แสดง USP', conversionGoal: 'CTR / Engagement' },
@@ -220,7 +231,7 @@ export async function POST(req: NextRequest) {
           return parsed as MediaPlanStrategy
         },
         () => buildFallbackStrategy(brief, intakeAnswers, businessType),
-        { temperature: 0.3, tier: 'quality' }
+        { temperature: 0.3, tier: 'quality', _route: '/api/intake/generate-plan', _feature: 'intake', _subfeature: 'generate_plan' }
       )
       return NextResponse.json(result)
     }

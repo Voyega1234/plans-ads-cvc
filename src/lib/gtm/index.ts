@@ -273,35 +273,19 @@ export async function publishGtmVersion(
 
   if (!createRes.ok) {
     const errBody = await createRes.text()
-    // "Workspace is already submitted" — workspace 1 is stuck in review state.
-    // Solution: create a fresh workspace, push tags there, create_version + publish from it.
+    // "Workspace is already submitted" = workspace นี้ถูกใช้สร้าง version ไปแล้ว
+    // (create_version สำเร็จรอบก่อน แต่ publish ไม่จบ) → version มีอยู่แล้วใน container
+    // ทางแก้ที่ถูก: ดึง version ล่าสุดมา publish ต่อ ไม่ใช่พยายาม create ซ้ำ
     if (createRes.status === 400 && errBody.includes('already submitted')) {
-      // Workspace is locked in "submitted for review" state — rebase it to unlock, then retry
-      const rebaseUrl = `${GTM_BASE}/accounts/${aId}/containers/${cId}/workspaces/${wId}:resolve_conflict`
-      await fetch(rebaseUrl, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      }).catch(() => {}) // ignore — may not be needed
-
-      // rebase: sync workspace with latest live version to unlock it
-      const syncUrl = `${GTM_BASE}/accounts/${aId}/containers/${cId}/workspaces/${wId}/built_in_variables`
-      await fetch(syncUrl, { headers: { Authorization: `Bearer ${token}` } }).catch(() => {})
-
-      // Retry create_version after rebase
-      const retryRes = await fetch(createUrl, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `Mercy ${new Date().toISOString().slice(0, 10)}` }),
+      const latestRes = await fetch(`${GTM_BASE}/accounts/${aId}/containers/${cId}/versions:latest`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
-      if (!retryRes.ok) {
-        const retryErr = await retryRes.text()
-        throw new Error(`create_version failed after rebase: ${retryErr.slice(0, 400)}`)
+      if (!latestRes.ok) {
+        throw new Error(`workspace ถูก submit ไปแล้ว และดึง version ล่าสุดไม่ได้ (${latestRes.status}) — เปิด GTM UI แล้ว publish version ค้างเอง`)
       }
-      const retryData = await retryRes.json() as { containerVersion?: { containerVersionId: string }; compilerError?: Array<{ message: string }> }
-      if (retryData.compilerError?.length) throw new Error(`Compiler errors: ${retryData.compilerError.map(e => e.message).join(', ')}`)
-      versionId = retryData.containerVersion?.containerVersionId ?? ''
-      if (!versionId) throw new Error('create_version returned no versionId after rebase')
+      const latest = await latestRes.json() as { containerVersionId?: string; containerVersion?: { containerVersionId?: string } }
+      versionId = latest.containerVersionId ?? latest.containerVersion?.containerVersionId ?? ''
+      if (!versionId) throw new Error('workspace ถูก submit ไปแล้ว แต่หา version ล่าสุดไม่เจอ — เปิด GTM UI แล้ว publish เอง')
     } else {
       throw new Error(`create_version ${createRes.status}: ${errBody.slice(0, 500)}`)
     }
@@ -326,12 +310,13 @@ export async function publishGtmVersion(
 
   if (!publishRes.ok) {
     const body = await publishRes.text()
-    try {
-      const err = JSON.parse(body) as { error?: { message?: string } }
-      throw new Error(`publish failed: ${err.error?.message ?? body.slice(0, 300)}`)
-    } catch {
-      throw new Error(`publish ${publishRes.status}: ${body.slice(0, 300)}`)
+    // version นี้ live อยู่แล้ว (เคย publish สำเร็จ) → นับเป็นสำเร็จ ไม่ใช่ error
+    if (/already published|is published|live version/i.test(body)) {
+      return { containerVersion: { containerVersionId: versionId, name: 'already-live' } }
     }
+    let msg = body.slice(0, 300)
+    try { msg = (JSON.parse(body) as { error?: { message?: string } }).error?.message ?? msg } catch { /* raw */ }
+    throw new Error(`publish failed: ${msg}`)
   }
 
   return { containerVersion: { containerVersionId: versionId, name: `Mercy ${new Date().toISOString().slice(0, 10)}` } }

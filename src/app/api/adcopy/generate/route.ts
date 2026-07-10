@@ -89,10 +89,39 @@ export async function POST(req: NextRequest) {
 
     const blueprintJson = await generateCampaignBlueprint(mediaPlan, kwPlan, brief, '')
 
-    // Return the matching campaign blueprint item
-    const campaign = blueprintJson.campaigns?.[0]
+    // Return the campaign matching the requested type — the AI sometimes invents an
+    // extra SEARCH campaign alongside the requested one, so [0] is not reliable
+    const wantType = input.campaignType.toUpperCase()
+    const campaign = blueprintJson.campaigns?.find(c => (c.campaignType ?? '').toUpperCase() === wantType)
+      ?? blueprintJson.campaigns?.[0]
     if (!campaign) {
       return NextResponse.json({ error: 'No campaign generated' }, { status: 500 })
+    }
+
+    // กฎ audience (ให้ UI ตรงกับที่ push จริง):
+    // 1. แคมเปญชื่อ remarketing = remarketing list เท่านั้น — "ลบ ad group" ที่ AI แถมมา
+    //    นอกแผนทิ้ง (เช่น In-Market prospecting) ไม่ใช่แค่ทับ audience
+    // 2. Display/DemandGen ที่มี audience จากแผน → ใช้ของแผน แทนชื่อที่ AI แต่งเอง
+    if (wantType === 'DISPLAY' || wantType === 'DEMAND_GEN') {
+      const isRemarketingCamp = /remarket|rtg|retention/i.test(input.campaignName)
+      const planAuds = (input.audiences ?? [])
+        .filter(a => !isRemarketingCamp || a.type === 'RLSA')
+        .map(a => a.name)
+      let ags = campaign.adGroups ?? []
+      if (isRemarketingCamp && ags.length > 0) {
+        const looksRemarketing = (n: string) => /remarket|visitor|retention|rtg|converter|customer|cart/i.test(n)
+        const kept = ags.filter(ag => looksRemarketing(ag.adGroupName))
+        ags = (kept.length > 0 ? kept : [ags[0]]).map((ag, i) => ({
+          ...ag,
+          adGroupName: looksRemarketing(ag.adGroupName) ? ag.adGroupName : (i === 0 ? 'Remarketing - Website Visitors' : `Remarketing - ${i + 1}`),
+        }))
+      }
+      campaign.adGroups = ags.map(ag => ({
+        ...ag,
+        audiences: planAuds.length > 0
+          ? planAuds
+          : isRemarketingCamp ? (ag.audiences ?? []).filter(n => /visitor|remarket|list|converter|cart/i.test(n)) : ag.audiences,
+      }))
     }
 
     return NextResponse.json({ blueprint: campaign })

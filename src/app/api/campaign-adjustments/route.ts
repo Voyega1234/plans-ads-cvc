@@ -32,7 +32,7 @@ async function mutate(customerId: string, ops: unknown[], token: string) {
 // ── Schema ─────────────────────────────────────────────────────────────────────
 const baseSchema = z.object({
   customerId: z.string().min(1),
-  action: z.enum(['add_pmax_asset_group', 'edit_text_ads', 'gdn_adgroup', 'gdn_image']),
+  action: z.enum(['add_pmax_asset_group', 'edit_text_ads', 'gdn_adgroup', 'gdn_image', 'edit_campaign_status', 'edit_campaign_budget']),
 })
 
 const addPMaxSchema = baseSchema.extend({
@@ -83,6 +83,18 @@ const gdnImageSchema = baseSchema.extend({
   imageAssetType: z.enum(['MARKETING_IMAGE', 'SQUARE_MARKETING_IMAGE', 'PORTRAIT_MARKETING_IMAGE']),
 })
 
+const editCampaignStatusSchema = baseSchema.extend({
+  action: z.literal('edit_campaign_status'),
+  campaignResourceName: z.string(),
+  status: z.enum(['ENABLED', 'PAUSED']),
+})
+
+const editCampaignBudgetSchema = baseSchema.extend({
+  action: z.literal('edit_campaign_budget'),
+  budgetResourceName: z.string(),
+  dailyBudgetMicros: z.number().int().positive(),
+})
+
 // ── Mock responses ─────────────────────────────────────────────────────────────
 function mockResponse(action: string) {
   return NextResponse.json({
@@ -90,6 +102,36 @@ function mockResponse(action: string) {
     message: `[Mock] ${action} สำเร็จ — จะ push จริงเมื่อ MOCK_GOOGLE_ADS=false`,
     resourceName: `customers/mock/assetGroups/${Date.now()}`,
   })
+}
+
+// ── Campaign status / budget handlers ─────────────────────────────────────────
+
+async function handleEditCampaignStatus(body: z.infer<typeof editCampaignStatusSchema>, token: string) {
+  const ops = [{
+    campaignOperation: {
+      updateMask: 'status',
+      update: {
+        resourceName: body.campaignResourceName,
+        status: body.status,
+      },
+    },
+  }]
+  const result = await mutate(body.customerId, ops, token)
+  return NextResponse.json({ success: true, action: 'edit_campaign_status', result })
+}
+
+async function handleEditCampaignBudget(body: z.infer<typeof editCampaignBudgetSchema>, token: string) {
+  const ops = [{
+    campaignBudgetOperation: {
+      updateMask: 'amount_micros',
+      update: {
+        resourceName: body.budgetResourceName,
+        amountMicros: body.dailyBudgetMicros,
+      },
+    },
+  }]
+  const result = await mutate(body.customerId, ops, token)
+  return NextResponse.json({ success: true, action: 'edit_campaign_budget', result })
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
@@ -317,6 +359,10 @@ export async function POST(req: NextRequest) {
         return handleGdnAdGroup(gdnAdGroupSchema.parse(body), token)
       case 'gdn_image':
         return handleGdnImage(gdnImageSchema.parse(body), token)
+      case 'edit_campaign_status':
+        return handleEditCampaignStatus(editCampaignStatusSchema.parse(body), token)
+      case 'edit_campaign_budget':
+        return handleEditCampaignBudget(editCampaignBudgetSchema.parse(body), token)
       default:
         return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
     }

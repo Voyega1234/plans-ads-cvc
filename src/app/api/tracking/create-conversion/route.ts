@@ -86,7 +86,36 @@ export async function POST(req: NextRequest) {
     // Extract conversion ID from resource name: customers/123/conversionActions/456
     const conversionId = resourceName.split('/').pop() ?? ''
 
-    return NextResponse.json({ success: true, conversionId, resourceName })
+    // Pull the tag snippet to get the REAL send_to value ("AW-123456789/AbCdEf...")
+    // — without this the GTM conversion tags stay on placeholders and never fire.
+    let awId = '', label = '', sendTo = ''
+    try {
+      const q = await fetch(`${ADS_API_BASE}/customers/${cid}/googleAds:search`, {
+        method: 'POST',
+        headers: {
+          Authorization:       `Bearer ${accessToken}`,
+          'developer-token':   DEV_TOKEN,
+          'login-customer-id': LOGIN_CID,
+          'Content-Type':      'application/json',
+        },
+        body: JSON.stringify({
+          query: `SELECT conversion_action.tag_snippets FROM conversion_action WHERE conversion_action.resource_name = '${resourceName}'`,
+        }),
+      })
+      const qd = await q.json() as { results?: Array<{ conversionAction?: { tagSnippets?: Array<{ pageFormat?: string; eventSnippet?: string; globalSiteTag?: string }> } }> }
+      const snippets = qd.results?.[0]?.conversionAction?.tagSnippets ?? []
+      const snip = snippets.find(sn => sn.pageFormat === 'HTML') ?? snippets[0]
+      const m = `${snip?.eventSnippet ?? ''}\n${snip?.globalSiteTag ?? ''}`.match(/AW-[A-Za-z0-9]+\/[A-Za-z0-9_-]+/)
+      if (m) {
+        sendTo = m[0]
+        ;[awId, label] = sendTo.split('/')
+      } else {
+        const g = String(snip?.globalSiteTag ?? '').match(/AW-[A-Za-z0-9]+/)
+        if (g) awId = g[0]
+      }
+    } catch { /* snippet lookup is best-effort — conversion action itself is created */ }
+
+    return NextResponse.json({ success: true, conversionId, resourceName, awId, label, sendTo })
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed' }, { status: 500 })
   }

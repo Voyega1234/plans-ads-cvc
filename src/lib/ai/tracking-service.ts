@@ -20,15 +20,27 @@ export async function generateTrackingPlan(input: {
   const richScan = scan as UrlScanResult & {
     lineUrls?: string[];
     telUrls?: string[];
+    emailUrls?: string[];
     clickElements?: Array<{ selector: string; text?: string; href?: string }>;
     formElements?: Array<{ selector: string; fields: string[]; action?: string }>;
     hasWordPress?: boolean;
     hasFacebook?: boolean;
     hasTiktok?: boolean;
+    chatWidgets?: string[];
+    socialLinks?: { platform: string; url: string }[];
+    videoElements?: string[];
+    externalLinks?: string[];
+    hasShopify?: boolean;
+    hasWooCommerce?: boolean;
+    hasLeadForm?: boolean;
+    ecommerceLayer?: string[];
+    fbPixelId?: string;
+    ttPixelId?: string;
   };
 
   const lineList   = (richScan.lineUrls ?? []).slice(0, 5).map(u => `  - ${u}`).join("\n") || "  - ไม่พบ";
   const telList    = (richScan.telUrls ?? []).slice(0, 5).map(u => `  - ${u}`).join("\n") || "  - ไม่พบ";
+  const emailList  = (richScan.emailUrls ?? []).slice(0, 5).map(u => `  - ${u}`).join("\n") || "  - ไม่พบ";
   const formList   = (richScan.formElements ?? scan.forms ?? []).slice(0, 5)
     .map(f => `  - selector: ${f.selector}, fields: ${f.fields?.slice(0,4).join(", ")}`)
     .join("\n") || "  - ไม่พบ";
@@ -36,14 +48,23 @@ export async function generateTrackingPlan(input: {
     .filter(e => e.href || e.text)
     .map(e => `  - ${e.selector} | text: "${e.text?.slice(0,40) ?? ""}" | href: "${e.href?.slice(0,60) ?? ""}"`)
     .join("\n") || "  - ไม่พบ";
+  const chatList   = (richScan.chatWidgets ?? []).join(", ") || "ไม่พบ";
+  const socialList = (richScan.socialLinks ?? []).slice(0, 5).map(s => `  - ${s.platform}: ${s.url.slice(0,60)}`).join("\n") || "  - ไม่พบ";
+  const videoList  = (richScan.videoElements ?? []).slice(0, 5).map(v => `  - ${v.slice(0,80)}`).join("\n") || "  - ไม่พบ";
+  const ecLayerSnippet = (richScan.ecommerceLayer ?? []).length > 0
+    ? `พบ ecommerce dataLayer: ${(richScan.ecommerceLayer ?? []).join(", ").slice(0, 200)}`
+    : "ไม่พบ";
 
   const scanSummary = `
 URL: ${scan.url}
 GTM: ${scan.hasGtm ? scan.gtmId : "ไม่มี GTM"}
 GA4: ${scan.hasGa4 ? scan.ga4MeasurementId : "ไม่มี GA4"}
 WordPress: ${richScan.hasWordPress ? "ใช่" : "ไม่ใช่"}
-Meta Pixel: ${richScan.hasFacebook ? "พบ" : "ไม่พบ"}
-TikTok Pixel: ${richScan.hasTiktok ? "พบ" : "ไม่พบ"}
+Meta Pixel: ${richScan.hasFacebook ? `พบ (ID: ${richScan.fbPixelId ?? "?"})` : "ไม่พบ"}
+TikTok Pixel: ${richScan.hasTiktok ? `พบ (ID: ${richScan.ttPixelId ?? "?"})` : "ไม่พบ"}
+Shopify: ${richScan.hasShopify ? "ใช่" : "ไม่ใช่"}
+WooCommerce: ${richScan.hasWooCommerce ? "ใช่" : "ไม่ใช่"}
+Lead Form Extension: ${richScan.hasLeadForm ? "ใช่" : "ไม่ใช่"}
 
 Forms (${scan.forms.length}):
 ${formList}
@@ -54,6 +75,17 @@ ${lineList}
 Phone links (${scan.phoneLinks}):
 ${telList}
 
+Email links:
+${emailList}
+
+Chat Widgets: ${chatList}
+
+Social Links:
+${socialList}
+
+Video Elements:
+${videoList}
+
 Thank-you pages: ${scan.thankYouPages.join(", ") || "ไม่พบ"}
 
 Clickable elements:
@@ -61,6 +93,7 @@ ${clickList}
 
 Ecommerce DataLayer: ${scan.hasEcommerceDataLayer ? "ใช่" : "ไม่ใช่"}
 Purchase event: ${scan.hasPurchaseEvent ? "ใช่" : "ไม่ใช่"}
+Ecommerce snippets: ${ecLayerSnippet}
 `.trim();
 
   const prompt = `คุณเป็น Senior GTM/GA4 Tracking Engineer ระดับ Expert
@@ -73,19 +106,25 @@ Client: "${input.clientName}" (${input.trackingType})
 ${scanSummary}
 
 กฎสำคัญ:
-1. ติด ทุก interaction ที่มีบนเว็บ — form submit, LINE click, phone click, get direction, map click, email click, video play, scroll depth, chat widget, social links, external links
+1. ติดทุก interaction บนเว็บ — form submit, LINE click, phone click, email click, video play, scroll depth, chat widget open, social link click, external link click
 2. ถ้ามี thank-you page → ติด thank_you_page event (conversion หลัก)
-3. ถ้ามี LINE URL → ติด line_click event ทุก URL ที่พบ (KEY EVENT)
+3. ถ้ามี LINE URL → ติด line_click event ทุก URL (KEY EVENT)
 4. ถ้ามี tel: link → ติด phone_click event (KEY EVENT)
-5. ถ้ามี form → ติด form_submit + form_start + form_error
-6. ถ้ามี e-commerce → ติด view_item, add_to_cart, begin_checkout, purchase
-7. เพิ่ม remarketing audiences สำหรับ Google Ads:
-   - All Visitors (30d) → page_view
-   - Engaged Users → scroll 50% + time on site > 30s
-   - Lead Intent → form_start หรือ LINE/phone click
-   - Converters → form_submit หรือ thank_you_page
-8. GA4 parameters ต้องถูกต้องตาม Google standard: event_category, event_label, link_url, form_id, etc.
-9. destination: KEY EVENTs ต้อง "BOTH" (GA4 + Google Ads), secondary events ใช้ "GA4"
+5. ถ้ามี email link → ติด email_click event (SECONDARY)
+6. ถ้ามี form → ติด form_submit (KEY) + form_start + form_error
+7. ถ้ามี Shopify หรือ WooCommerce หรือ ecommerce dataLayer → ติดครบ: view_item, add_to_cart, begin_checkout, purchase (KEY EVENT สำหรับ purchase)
+   - purchase ต้องส่ง ecommerce object: { currency, value, items: [{ item_id, item_name, price, quantity }] }
+8. ถ้ามี chat widget (Tidio/Intercom/Crisp/Zendesk/Tawk/Freshchat/LiveChat/Drift) → ติด chat_widget_open event
+9. ถ้ามี social links → ติด social_click event (event_label = platform name)
+10. ถ้ามี video elements (YouTube/Vimeo) → ติด video_play + video_complete events
+11. เพิ่ม remarketing audiences:
+    - All Visitors (30d) → page_view
+    - Engaged Users → scroll 50%
+    - Lead Intent → form_start หรือ LINE/phone click
+    - Converters → form_submit หรือ thank_you_page หรือ purchase
+12. GA4 parameters ต้องถูกต้องตาม Google standard: event_category, event_label, link_url, form_id, currency, value, items, etc.
+13. destination: KEY EVENTs ต้อง "BOTH" (GA4 + Google Ads), secondary events ใช้ "GA4"
+14. ห้ามสร้าง event ซ้ำ — event ชื่อเดียวกันใช้ได้ครั้งเดียว
 
 ตอบ JSON array เท่านั้น ห้ามมี markdown:
 [{
@@ -102,102 +141,162 @@ ${scanSummary}
 
   function mockFn(): TrackingPlan {
     const now = new Date().toISOString();
+    const ts = Date.now();
     const events: TrackingEvent[] = [];
+    let idx = 0;
+    const push = (ev: Omit<TrackingEvent, "id" | "clientId" | "status" | "riskLevel" | "createdAt">) => {
+      events.push({ ...ev, id: `evt_${ts}_${idx++}`, clientId, status: "AI_READY", riskLevel: "LOW", createdAt: now });
+    };
 
-    // Build mock events based on actual scan data
-    if (scan.forms.length > 0 || scan.lineButtons > 0 || scan.phoneLinks > 0) {
-      events.push({
-        id: `evt_${Date.now()}_pageview`, clientId, eventName: "page_view",
-        triggerType: "page_view", triggerRule: "All pages",
-        destination: "GA4", priority: "SECONDARY",
-        ga4Parameters: { page_title: "{{Page Title}}", page_location: "{{Page URL}}" },
-        isKeyEvent: false, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: "selector: body | element: All pages | why: remarketing audience base | test: เปิดทุกหน้าแล้วเช็ค GA4",
-      });
-    }
-
-    if (scan.forms.length > 0) {
-      events.push({
-        id: `evt_${Date.now()}_form_start`, clientId, eventName: "form_start",
-        triggerType: "click", triggerRule: "Click on any form field",
-        destination: "GA4", priority: "SECONDARY",
-        ga4Parameters: { form_id: "{{Form ID}}", form_name: "{{Form Name}}" },
-        isKeyEvent: false, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: `selector: ${scan.forms[0]?.selector ?? "form"} input:first-child | element: Form first field | why: ติดตาม form engagement | test: คลิก field แรกของฟอร์ม`,
-      });
-      events.push({
-        id: `evt_${Date.now()}_form_submit`, clientId, eventName: "form_submit",
-        triggerType: "form_submit", triggerRule: "Form submission on any form",
-        destination: "BOTH", priority: "PRIMARY",
-        ga4Parameters: { form_id: "{{Form ID}}", form_name: "{{Form Name}}", event_category: "lead", event_label: "contact_form" },
-        isKeyEvent: true, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: `selector: ${scan.forms[0]?.selector ?? "form"} | element: Contact form | why: form submit = lead conversion หลัก | test: กรอกและส่งฟอร์ม แล้วเช็ค GA4 DebugView`,
-      });
-    }
-
-    if (scan.lineButtons > 0) {
-      events.push({
-        id: `evt_${Date.now()}_line`, clientId, eventName: "line_click",
-        triggerType: "click", triggerRule: "Click URL contains line.me OR lin.ee",
-        destination: "BOTH", priority: "PRIMARY",
-        ga4Parameters: { event_category: "engagement", event_label: "line_oa", link_url: "{{Click URL}}" },
-        isKeyEvent: true, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: "selector: a[href*='line.me'], a[href*='lin.ee'] | element: LINE Add Friend / Chat button | why: LINE click = high intent lead | test: คลิกปุ่ม LINE แล้วเช็ค GA4",
-      });
-    }
-
-    if (scan.phoneLinks > 0) {
-      events.push({
-        id: `evt_${Date.now()}_tel`, clientId, eventName: "phone_click",
-        triggerType: "click", triggerRule: "Click URL starts with tel:",
-        destination: "BOTH", priority: "PRIMARY",
-        ga4Parameters: { event_category: "engagement", event_label: "phone_call", link_url: "{{Click URL}}" },
-        isKeyEvent: true, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: "selector: a[href^='tel:'] | element: Phone number link | why: phone click = intent สูงมาก | test: คลิก tel: link",
-      });
-    }
-
-    if (scan.thankYouPages.length > 0) {
-      events.push({
-        id: `evt_${Date.now()}_thankyou`, clientId, eventName: "thank_you_page",
-        triggerType: "page_view", triggerRule: `Page URL contains ${scan.thankYouPages[0]}`,
-        destination: "BOTH", priority: "PRIMARY",
-        ga4Parameters: { event_category: "conversion", event_label: "thank_you" },
-        isKeyEvent: true, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: `selector: body | element: Thank you page | why: page view = confirmed conversion | test: ส่งฟอร์มแล้ว verify URL เป็น ${scan.thankYouPages[0]}`,
-      });
-    }
-
-    if (scan.emailLinks > 0) {
-      events.push({
-        id: `evt_${Date.now()}_email`, clientId, eventName: "email_click",
-        triggerType: "click", triggerRule: "Click URL starts with mailto:",
-        destination: "GA4", priority: "SECONDARY",
-        ga4Parameters: { event_category: "engagement", event_label: "email_contact", link_url: "{{Click URL}}" },
-        isKeyEvent: false, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: "selector: a[href^='mailto:'] | element: Email link | why: email contact intent | test: คลิก email link",
-      });
-    }
-
-    // Scroll depth for engagement
-    events.push({
-      id: `evt_${Date.now()}_scroll`, clientId, eventName: "scroll_depth",
-      triggerType: "timer", triggerRule: "Scroll depth 50% on any page",
+    // Always: page_view base
+    push({
+      eventName: "page_view", triggerType: "page_view", triggerRule: "All pages",
       destination: "GA4", priority: "SECONDARY",
-      ga4Parameters: { event_category: "engagement", event_label: "scroll_50", value: "50" },
-      isKeyEvent: false, status: "AI_READY", riskLevel: "LOW",
-      createdAt: now, notes: "selector: window | element: Page scroll | why: engaged visitor → remarketing audience | test: scroll ลงไปครึ่งหน้า",
+      ga4Parameters: { page_title: "{{Page Title}}", page_location: "{{Page URL}}" },
+      isKeyEvent: false, notes: "selector: body | element: All pages | why: remarketing audience base | test: เปิดทุกหน้าแล้วเช็ค GA4",
     });
 
-    // Default page_view if no events yet
+    // Always: scroll depth
+    push({
+      eventName: "scroll_depth", triggerType: "timer", triggerRule: "Scroll depth 50% on any page",
+      destination: "GA4", priority: "SECONDARY",
+      ga4Parameters: { event_category: "engagement", event_label: "scroll_50", value: "50" },
+      isKeyEvent: false, notes: "selector: window | element: Page scroll | why: engaged visitor → remarketing | test: scroll ลงครึ่งหน้า",
+    });
+
+    // Forms
+    if (scan.forms.length > 0) {
+      const sel = scan.forms[0]?.selector ?? "form";
+      push({
+        eventName: "form_start", triggerType: "click", triggerRule: "Click on any form field",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { form_id: "{{Form ID}}", form_name: "{{Form Name}}" },
+        isKeyEvent: false, notes: `selector: ${sel} input:first-child | element: Form first field | why: form engagement | test: คลิก field แรก`,
+      });
+      push({
+        eventName: "form_submit", triggerType: "form_submit", triggerRule: "Form submission",
+        destination: "BOTH", priority: "PRIMARY",
+        ga4Parameters: { form_id: "{{Form ID}}", form_name: "{{Form Name}}", event_category: "lead", event_label: "contact_form" },
+        isKeyEvent: true, notes: `selector: ${sel} | element: Contact form | why: form submit = lead | test: กรอกและส่งฟอร์ม แล้วเช็ค GA4 DebugView`,
+      });
+    }
+
+    // LINE
+    if (scan.lineButtons > 0) {
+      push({
+        eventName: "line_click", triggerType: "click", triggerRule: "Click URL contains line.me OR lin.ee",
+        destination: "BOTH", priority: "PRIMARY",
+        ga4Parameters: { event_category: "engagement", event_label: "line_oa", link_url: "{{Click URL}}" },
+        isKeyEvent: true, notes: "selector: a[href*='line.me'], a[href*='lin.ee'] | element: LINE Add Friend | why: LINE click = high intent lead | test: คลิกปุ่ม LINE",
+      });
+    }
+
+    // Phone
+    if (scan.phoneLinks > 0) {
+      push({
+        eventName: "phone_click", triggerType: "click", triggerRule: "Click URL starts with tel:",
+        destination: "BOTH", priority: "PRIMARY",
+        ga4Parameters: { event_category: "engagement", event_label: "phone_call", link_url: "{{Click URL}}" },
+        isKeyEvent: true, notes: "selector: a[href^='tel:'] | element: Phone link | why: phone = very high intent | test: คลิก tel: link",
+      });
+    }
+
+    // Email
+    if (scan.emailLinks > 0) {
+      push({
+        eventName: "email_click", triggerType: "click", triggerRule: "Click URL starts with mailto:",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "engagement", event_label: "email_contact", link_url: "{{Click URL}}" },
+        isKeyEvent: false, notes: "selector: a[href^='mailto:'] | element: Email link | why: email contact intent | test: คลิก email link",
+      });
+    }
+
+    // Thank-you page
+    if (scan.thankYouPages.length > 0) {
+      push({
+        eventName: "thank_you_page", triggerType: "page_view", triggerRule: `Page URL contains ${scan.thankYouPages[0]}`,
+        destination: "BOTH", priority: "PRIMARY",
+        ga4Parameters: { event_category: "conversion", event_label: "thank_you" },
+        isKeyEvent: true, notes: `selector: body | element: Thank you page | why: confirmed conversion | test: ส่งฟอร์มแล้ว verify URL = ${scan.thankYouPages[0]}`,
+      });
+    }
+
+    // Chat widgets
+    if (richScan.chatWidgets && richScan.chatWidgets.length > 0) {
+      const widgetName = richScan.chatWidgets[0];
+      push({
+        eventName: "chat_widget_open", triggerType: "custom_event", triggerRule: `${widgetName} widget opened`,
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "engagement", event_label: widgetName.toLowerCase().replace(/\s/g, "_"), link_url: "{{Page URL}}" },
+        isKeyEvent: false, notes: `selector: .${widgetName.toLowerCase()}-widget | element: ${widgetName} Chat Widget | why: chat open = high engagement intent | test: คลิกปุ่ม chat แล้วเช็ค dataLayer`,
+      });
+    }
+
+    // Social links
+    if (richScan.socialLinks && richScan.socialLinks.length > 0) {
+      push({
+        eventName: "social_click", triggerType: "click", triggerRule: "Click social media links (fb/ig/yt/tiktok/twitter/linkedin)",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "engagement", event_label: "{{social_platform}}", link_url: "{{Click URL}}" },
+        isKeyEvent: false, notes: "selector: a[href*='facebook.com'], a[href*='instagram.com'], a[href*='tiktok.com'], a[href*='youtube.com'] | element: Social media links | why: track social brand engagement | test: คลิก social icon",
+      });
+    }
+
+    // Video
+    if (richScan.videoElements && richScan.videoElements.length > 0) {
+      push({
+        eventName: "video_play", triggerType: "custom_event", triggerRule: "YouTube/Vimeo video started",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "engagement", event_label: "video_start", video_url: "{{video_url}}", video_title: "{{video_title}}", video_percent: "0" },
+        isKeyEvent: false, notes: "selector: iframe[src*='youtube.com'], iframe[src*='vimeo.com'] | element: Embedded video | why: video engagement = content interest | test: กด play บน video ที่ embed",
+      });
+      push({
+        eventName: "video_complete", triggerType: "custom_event", triggerRule: "YouTube/Vimeo video 90% watched",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "engagement", event_label: "video_90pct", video_url: "{{video_url}}", video_percent: "90" },
+        isKeyEvent: false, notes: "selector: iframe[src*='youtube.com'] | element: Video 90% | why: high intent viewer | test: ดู video ถึง 90%",
+      });
+    }
+
+    // Ecommerce (Shopify/WooCommerce or existing dataLayer)
+    if (richScan.hasShopify || richScan.hasWooCommerce || (richScan.ecommerceLayer && richScan.ecommerceLayer.length > 0) || scan.hasEcommerceDataLayer) {
+      push({
+        eventName: "view_item", triggerType: "custom_event", triggerRule: "DataLayer event: view_item",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "ecommerce", currency: "THB", value: "{{ecommerce.value}}", items: "{{ecommerce.items}}" },
+        isKeyEvent: false, notes: "selector: custom_event | element: Product page view | why: ecommerce funnel start | test: เปิดหน้า product แล้วเช็ค dataLayer.push",
+      });
+      push({
+        eventName: "add_to_cart", triggerType: "custom_event", triggerRule: "DataLayer event: add_to_cart",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "ecommerce", currency: "THB", value: "{{ecommerce.value}}", items: "{{ecommerce.items}}" },
+        isKeyEvent: false, notes: "selector: custom_event | element: Add to cart button | why: purchase intent signal | test: กด Add to Cart แล้วเช็ค dataLayer",
+      });
+      push({
+        eventName: "begin_checkout", triggerType: "custom_event", triggerRule: "DataLayer event: begin_checkout",
+        destination: "GA4", priority: "SECONDARY",
+        ga4Parameters: { event_category: "ecommerce", currency: "THB", value: "{{ecommerce.value}}", items: "{{ecommerce.items}}" },
+        isKeyEvent: false, notes: "selector: custom_event | element: Checkout start | why: high purchase intent | test: กดดำเนินการสั่งซื้อ",
+      });
+      push({
+        eventName: "purchase", triggerType: "custom_event", triggerRule: "DataLayer event: purchase",
+        destination: "BOTH", priority: "PRIMARY",
+        ga4Parameters: {
+          event_category: "ecommerce", transaction_id: "{{ecommerce.transaction_id}}",
+          currency: "THB", value: "{{ecommerce.value}}", tax: "{{ecommerce.tax}}",
+          shipping: "{{ecommerce.shipping}}", items: "{{ecommerce.items}}"
+        },
+        isKeyEvent: true, notes: "selector: custom_event | element: Purchase confirmation | why: main conversion = revenue | test: ทำการสั่งซื้อจริง แล้วเช็ค GA4 + Google Ads",
+      });
+    }
+
+    // Ensure at least page_view if nothing else
     if (events.length === 0) {
-      events.push({
-        id: `evt_${Date.now()}_default`, clientId, eventName: "page_view",
-        triggerType: "page_view", triggerRule: "All pages",
+      push({
+        eventName: "page_view", triggerType: "page_view", triggerRule: "All pages",
         destination: "GA4", priority: "SECONDARY",
         ga4Parameters: { page_title: "{{Page Title}}", page_location: "{{Page URL}}" },
-        isKeyEvent: false, status: "AI_READY", riskLevel: "LOW",
-        createdAt: now, notes: "selector: body | element: All pages | why: base tracking | test: เปิดหน้าเว็บ",
+        isKeyEvent: false, notes: "selector: body | element: All pages | why: base tracking | test: เปิดหน้าเว็บ",
       });
     }
 
@@ -271,6 +370,9 @@ ${scanSummary}
   return safeCallAI(prompt, validator, mockFn, {
     systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${TRACKING_CONTEXT}\n\nตอบเป็น JSON array เท่านั้น ห้ามมี markdown หรือ text อื่น`,
     maxTokens: 65536,
+    _route: '/api/tracking/generate-tracking-plan',
+    _feature: 'tracking',
+    _subfeature: 'generate_tracking_plan',
   });
 }
 

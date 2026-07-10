@@ -115,7 +115,7 @@ Descriptions: ${currentDescriptions.join(' | ')}
     prompt,
     validate,
     () => getMockSuggestions(body),
-    { temperature: 0.7, maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AD_COPY_CONTEXT}` }
+    { temperature: 0.7, maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AD_COPY_CONTEXT}`, _route: '/api/campaign-edit/ai-suggest', _feature: 'campaign_edit', _subfeature: 'ai_suggest' }
   )
 
   // Enforce char limits — trim any that exceed to avoid saving invalid copy

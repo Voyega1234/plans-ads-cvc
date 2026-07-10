@@ -1,11 +1,27 @@
 /**
  * Google Ads API Client
- * Uses mock data when MOCK_GOOGLE_ADS=true or when credentials are not configured.
+ *
+ * Separation of concerns:
+ *  - isMockMode()           → true only when MOCK_GOOGLE_ADS=true (explicit opt-in)
+ *  - isCredentialsMissing() → true when required env vars are absent (regardless of mock flag)
+ *
+ * API routes should check isCredentialsMissing() independently and throw a
+ * descriptive error rather than silently falling back to mock data. This
+ * prevents confusing "mock responses" when credentials are simply misconfigured.
  */
 
+/** Returns true only when MOCK_GOOGLE_ADS is explicitly set to "true". */
 export function isMockMode(): boolean {
+  return process.env.MOCK_GOOGLE_ADS === 'true'
+}
+
+/**
+ * Returns true when one or more required Google Ads credential env vars are
+ * absent. Use this to detect misconfiguration and surface a clear error
+ * instead of silently returning mock data.
+ */
+export function isCredentialsMissing(): boolean {
   return (
-    process.env.MOCK_GOOGLE_ADS === 'true' ||
     !process.env.GOOGLE_ADS_DEVELOPER_TOKEN ||
     !process.env.GOOGLE_ADS_CLIENT_ID ||
     !process.env.GOOGLE_ADS_REFRESH_TOKEN

@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
       buildPrompt(body),
       validateCopy,
       () => mockRewrite(body),
-      { temperature: 0.7, maxTokens: 65536, tier: 'quality', systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AD_COPY_CONTEXT}` }
+      { temperature: 0.7, maxTokens: 65536, tier: 'quality', systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AD_COPY_CONTEXT}`, _route: '/api/creatives/ai-rewrite', _feature: 'creatives', _subfeature: 'ai_rewrite' }
     )
 
     return NextResponse.json({ copy })

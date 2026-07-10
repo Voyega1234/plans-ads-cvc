@@ -11,9 +11,14 @@ import {
   Edit2, X, Plus, Trash,
 } from 'lucide-react'
 import dynamic from 'next/dynamic'
-const { TrendChart, CampaignBarChart } = {
-  TrendChart:      dynamic(() => import('@/components/reports/ReportCharts').then(m => m.TrendChart),      { ssr: false }),
+import { Noto_Sans_Thai } from 'next/font/google'
+import MarketShareSection from '@/components/reports/MarketShareSection'
+const notoThai = Noto_Sans_Thai({ subsets: ['thai', 'latin'], weight: ['400', '500', '600', '700'] })
+const { TrendChart, CampaignBarChart, DonutChart, FunnelBars } = {
+  TrendChart:       dynamic(() => import('@/components/reports/ReportCharts').then(m => m.TrendChart),       { ssr: false }),
   CampaignBarChart: dynamic(() => import('@/components/reports/ReportCharts').then(m => m.CampaignBarChart), { ssr: false }),
+  DonutChart:       dynamic(() => import('@/components/reports/ReportCharts').then(m => m.DonutChart),       { ssr: false }),
+  FunnelBars:       dynamic(() => import('@/components/reports/ReportCharts').then(m => m.FunnelBars),       { ssr: false }),
 }
 import { formatCurrency, formatNumber, formatConversions, pctChangeColor, metricValueColor } from '@/lib/utils'
 import { cn } from '@/lib/utils'
@@ -82,7 +87,15 @@ const DATE_RANGES = [
   { value: 'LAST_90_DAYS', label: '90 วัน' },
   { value: 'THIS_MONTH', label: 'เดือนนี้' },
   { value: 'LAST_MONTH', label: 'เดือนที่แล้ว' },
+  { value: 'CUSTOM', label: 'กำหนดเอง...' },
 ]
+
+// Label สำหรับทั้ง preset และช่วง CUSTOM_start_end
+function rangeLabel(dateRange: string): string {
+  const m = dateRange.match(/^CUSTOM_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/)
+  if (m) return `${m[1]} – ${m[2]}`
+  return DATE_RANGES.find(r => r.value === dateRange)?.label ?? dateRange
+}
 
 const PRIORITY_COLOR = {
   critical: 'bg-red-50 border-red-200 text-red-700',
@@ -118,7 +131,7 @@ function ChangeBadge({ metricKey, value }: { metricKey: string; value: number | 
   const good = colorCls.includes('emerald')
   const sign = value > 0 ? '+' : ''
   return (
-    <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-semibold whitespace-nowrap', colorCls)}>
+    <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-semibold whitespace-nowrap px-1.5 py-px rounded-full', colorCls, good ? 'bg-emerald-50' : 'bg-red-50')}>
       {good ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />}
       {sign}{typeof value === 'number' ? value.toFixed(2) : value}%
     </span>
@@ -126,10 +139,10 @@ function ChangeBadge({ metricKey, value }: { metricKey: string; value: number | 
 }
 
 function Th({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <th className={cn('px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide', className)}>{children}</th>
+  return <th className={cn('px-4 py-3 text-left text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.08em]', className)}>{children}</th>
 }
 function Td({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <td className={cn('px-4 py-3 text-sm text-gray-700', className)}>{children}</td>
+  return <td className={cn('px-4 py-3 text-[13px] text-[#3D4852] tabular-nums', className)}>{children}</td>
 }
 
 type SortDir = 'asc' | 'desc'
@@ -171,8 +184,8 @@ function sortRows<T extends Record<string, unknown>>(data: T[], key: string, dir
 function TabBtn({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: React.ComponentType<{ className?: string }>; label: string }) {
   return (
     <button onClick={onClick} className={cn(
-      'flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg whitespace-nowrap transition-colors',
-      active ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+      'flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-full whitespace-nowrap transition-all',
+      active ? 'bg-[#3E5F58] text-white shadow-sm' : 'text-[#6B7680] hover:bg-[#EEF2F0] hover:text-[#3D4852]'
     )}>
       <Icon className="w-3.5 h-3.5" />
       {label}
@@ -180,18 +193,19 @@ function TabBtn({ active, onClick, icon: Icon, label }: { active: boolean; onCli
   )
 }
 
-function EmptyDim() {
+function EmptyDim({ note }: { note?: string } = {}) {
   return (
     <div className="text-center py-12 text-gray-400">
       <BarChart2 className="w-10 h-10 mx-auto mb-2 text-gray-200" />
       <p className="text-sm">ไม่มีข้อมูล — กด Sync & Refresh</p>
+      {note && <p className="text-xs text-gray-300 mt-2 max-w-md mx-auto leading-relaxed">{note}</p>}
     </div>
   )
 }
 
 function MetricBar({ value, max }: { value: number; max: number }) {
   const pct = max > 0 ? Math.round((value / max) * 100) : 0
-  return <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-blue-400 rounded-full" style={{ width: `${pct}%` }} /></div>
+  return <div className="w-16 h-1.5 bg-[#EEF2F0] rounded-full overflow-hidden"><div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'linear-gradient(90deg,#5B9E92,#A9CCC4)' }} /></div>
 }
 
 // ── Funnel step ───────────────────────────────────────────────────────────────
@@ -285,6 +299,10 @@ export default function ReportsPage() {
   const [selectedId, setSelectedId]           = useState('')
   const [dateRange, setDateRange]             = useState('LAST_30_DAYS')
   const [targetCPA, setTargetCPA]             = useState('500')
+  const [kpiType, setKpiType]                 = useState<'CPA' | 'ROAS'>('CPA')   // แต่ละเว็บ KPI ไม่เหมือนกัน — เลือกได้
+  const [targetROAS, setTargetROAS]           = useState('4')
+  const [customStart, setCustomStart]         = useState('')
+  const [customEnd, setCustomEnd]             = useState('')
 
   // Refs so async callbacks always see latest values without stale closures
   const selectedIdRef  = useRef(selectedId)
@@ -293,6 +311,19 @@ export default function ReportsPage() {
   useEffect(() => { selectedIdRef.current = selectedId },  [selectedId])
   useEffect(() => { dateRangeRef.current  = dateRange },   [dateRange])
   useEffect(() => { targetCPARef.current  = targetCPA },   [targetCPA])
+
+  // Target CPA ต่อบัญชี — แต่ละเว็บ KPI ไม่เท่ากัน จำค่าล่าสุดของแต่ละ account ไว้
+  useEffect(() => {
+    if (!selectedId) return
+    try {
+      const saved = localStorage.getItem(`reports-tcpa:${selectedId}`)
+      if (saved) setTargetCPA(saved)
+      const savedKpi = localStorage.getItem(`reports-kpi:${selectedId}`)
+      if (savedKpi === 'CPA' || savedKpi === 'ROAS') setKpiType(savedKpi)
+      const savedRoas = localStorage.getItem(`reports-troas:${selectedId}`)
+      if (savedRoas) setTargetROAS(savedRoas)
+    } catch { /* private mode */ }
+  }, [selectedId])
   const [report, setReport]                   = useState<WeeklyReport | null>(null)
   const [loading, setLoading]                 = useState(false)
   const [error, setError]                     = useState<string | null>(null)
@@ -379,6 +410,34 @@ export default function ReportsPage() {
   const [emailDraft, setEmailDraft]     = useState('')
   const [emailLoading, setEmailLoading] = useState(false)
   const [emailOpen, setEmailOpen]       = useState(false)
+
+  // ── เลือกข้อมูลที่จะใส่ในรายงาน (มีผลทั้ง Export HTML และเมล) ──
+  const EXPORT_SECTIONS: { key: string; label: string }[] = [
+    { key: 'kpi',         label: 'KPI Summary' },
+    { key: 'charts',      label: 'กราฟ Spend / Device' },
+    { key: 'funnel',      label: 'Marketing Funnel' },
+    { key: 'marketShare', label: 'Market Share (Visibility)' },
+    { key: 'campaigns',   label: 'Campaigns' },
+    { key: 'keywords',    label: 'Keywords' },
+    { key: 'searchTerms', label: 'Search Terms' },
+    { key: 'audiences',   label: 'Audiences' },
+    { key: 'locations',   label: 'Locations' },
+    { key: 'devices',     label: 'Devices' },
+    { key: 'conversions', label: 'Conversion Actions' },
+    { key: 'textAds',     label: 'Text Ads' },
+    { key: 'narrative',   label: 'บทวิเคราะห์ + คำแนะนำ' },
+  ]
+  const [exportSections, setExportSections] = useState<Record<string, boolean>>({})
+  const [sectionPickerOpen, setSectionPickerOpen] = useState(false)
+  const sec = (k: string) => exportSections[k] !== false
+  useEffect(() => {
+    try { const saved = localStorage.getItem('reports-export-sections'); if (saved) setExportSections(JSON.parse(saved)) } catch { /* noop */ }
+  }, [])
+  function saveSections(next: Record<string, boolean>) {
+    setExportSections(next)
+    try { localStorage.setItem('reports-export-sections', JSON.stringify(next)) } catch { /* noop */ }
+  }
+  const hiddenCount = EXPORT_SECTIONS.filter(x => exportSections[x.key] === false).length
   const [emailCopied, setEmailCopied]   = useState(false)
 
   // ── Sort state for each table ─────────────────────────────────────────────────
@@ -585,11 +644,24 @@ export default function ReportsPage() {
       parts.push(`## Account Performance (${s.period})`)
       parts.push(`Spend: ฿${s.totalCost.toLocaleString()} | Conv: ${s.totalConversions} | CPA: ฿${s.blendedCPA.toFixed(0)} | CTR: ${s.blendedCTR.toFixed(2)}% | Target CPA: ฿${s.targetCPA}`)
       if (s.cpaVsTarget !== null) parts.push(`CPA vs Target: ${s.cpaVsTarget > 0 ? '+' : ''}${s.cpaVsTarget}%`)
+      // KPI หลักของบัญชี + ข้อมูลยอดขายฝั่ง ecommerce — ให้ AI เล่าเรื่องด้วย metric ที่ผู้บริหารสนใจจริง
+      const ctxConvValue = (conversions?.actions ?? []).reduce((a, c) => a + c.value, 0)
+      if (kpiType === 'ROAS') {
+        const liveRoas = ctxConvValue > 0 && s.totalCost > 0 ? (ctxConvValue / s.totalCost).toFixed(2) : 'N/A'
+        parts.push(`PRIMARY KPI: ROAS (target ${targetROAS}x) | Conv. Value: ฿${Math.round(ctxConvValue).toLocaleString()} | Actual ROAS: ${liveRoas}x | AOV: ฿${s.totalConversions > 0 ? Math.round(ctxConvValue / s.totalConversions).toLocaleString() : 'N/A'}`)
+      } else {
+        parts.push(`PRIMARY KPI: CPA (target ฿${s.targetCPA}) — จำนวน conversions และต้นทุนต่อ conversion คือตัวชี้วัดหลัก`)
+      }
+      const fn = ecommerce?.ecommerceFunnel
+      if (fn && fn.purchase > 0) {
+        parts.push(`Ecommerce Funnel: View ${fn.view_item.toLocaleString()} → Add to Cart ${fn.add_to_cart.toLocaleString()} → Checkout ${fn.begin_checkout.toLocaleString()} → Purchase ${fn.purchase.toLocaleString()} | Revenue ฿${Math.round(fn.revenue).toLocaleString()} | Cart Abandon ${fn.cartAbandonRate.toFixed(1)}%`)
+      }
       if (s.changes) {
         parts.push(`Changes vs prior: Cost ${s.changes.totalCost ?? 'N/A'}% | Conv ${s.changes.totalConversions ?? 'N/A'}% | CPA ${s.changes.blendedCPA ?? 'N/A'}% | CTR ${s.changes.blendedCTR ?? 'N/A'}%`)
       }
     }
-    if (report.campaigns?.length) {
+    // เคารพตัวเลือก "เลือกข้อมูล" — section ที่ปิดไว้จะไม่ถูกส่งให้ AI เขียนเมล
+    if (sec('campaigns') && report.campaigns?.length) {
       parts.push(`\n## Campaigns`)
       for (const c of report.campaigns) {
         const cpaChange = c.changes?.cpa != null ? ` | CPA change: ${c.changes.cpa > 0 ? '+' : ''}${c.changes.cpa}%` : ''
@@ -597,7 +669,7 @@ export default function ReportsPage() {
       }
     }
     // Performance narrative — winners/concerns/wasted only (no strategic planner)
-    if (narrative) {
+    if (sec('narrative') && narrative) {
       if (narrative.headline)      parts.push(`\n## Performance Headline\n${narrative.headline}`)
       if (narrative.clientSummary) parts.push(`\n## Summary\n${narrative.clientSummary}`)
       if (narrative.winners)       parts.push(`\n## Winners\n${narrative.winners}`)
@@ -606,27 +678,27 @@ export default function ReportsPage() {
       if (narrative.deviceAnalysis)   parts.push(`\n## Device Analysis\n${narrative.deviceAnalysis}`)
       if (narrative.locationInsights) parts.push(`\n## Location Insights\n${narrative.locationInsights}`)
     }
-    if (keywords?.length) {
+    if (sec('keywords') && keywords?.length) {
       parts.push(`\n## Keywords (top by spend)`)
       for (const k of keywords.slice(0, 10)) {
         parts.push(`- "${k.keyword}" [${k.matchType}]: ฿${k.cost.toFixed(0)} | ${k.conversions} conv | QS ${k.qualityScore ?? 'N/A'} | CPA ฿${k.cpa.toFixed(0)}`)
       }
     }
-    if (searchTerms?.length) {
+    if (sec('searchTerms') && searchTerms?.length) {
       parts.push(`\n## Search Terms (top by spend)`)
       for (const s of searchTerms.slice(0, 10)) {
         parts.push(`- "${s.searchTerm}": ฿${s.cost.toFixed(0)} | ${s.conversions} conv | CTR ${s.ctr.toFixed(2)}%`)
       }
     }
-    if (devices?.length) {
+    if (sec('devices') && devices?.length) {
       parts.push(`\n## Devices`)
       for (const d of devices) parts.push(`- ${d.device}: ฿${d.cost.toFixed(0)} | ${d.conversions} conv | CPA ฿${d.cpa.toFixed(0)}`)
     }
-    if (locations?.length) {
+    if (sec('locations') && locations?.length) {
       parts.push(`\n## Locations (top 5)`)
       for (const l of locations.slice(0, 5)) parts.push(`- ${l.location}: ฿${l.cost.toFixed(0)} | ${l.conversions} conv | CPA ฿${l.cpa.toFixed(0)}`)
     }
-    if (report.recommendations?.length) {
+    if (sec('narrative') && report.recommendations?.length) {
       parts.push(`\n## Recommendations`)
       for (const r of report.recommendations.slice(0, 6)) {
         parts.push(`- [${r.priority.toUpperCase()}] ${r.title}: ${r.action}`)
@@ -684,180 +756,134 @@ export default function ReportsPage() {
     setEmailOpen(true)
     setEmailDraft('')
     const lang = emailLang === 'th' ? 'Thai' : 'English'
-    const ctx  = buildClientContext()
+    let ctx  = buildClientContext()
+    // Market Share เข้าเมลเมื่อถูกเลือกใน "เลือกข้อมูล"
+    if (sec('marketShare') && selectedId) {
+      try {
+        const r = await fetch(`/api/reports/market-share?customerId=${selectedId}&dateRange=${dateRange}`)
+        if (r.ok) {
+          const ms = await r.json() as { overview?: { search?: { impressionShare: number; lostBudget: number; lostRank: number; topShare: number | null } | null; display?: { impressionShare: number } | null } }
+          const sv = ms.overview?.search
+          const p = (v: number | null | undefined) => v == null ? 'N/A' : `${(v * 100).toFixed(1)}%`
+          if (sv) ctx += `\n\n## Visibility Share (Impression Share)\nSearch IS: ${p(sv.impressionShare)} | Lost by Budget: ${p(sv.lostBudget)} | Lost by Rank: ${p(sv.lostRank)} | Top: ${p(sv.topShare)}${ms.overview?.display ? ` | Display IS: ${p(ms.overview.display.impressionShare)}` : ''}`
+        }
+      } catch { /* เมลต่อได้โดยไม่มี MS */ }
+    }
     const acctName = selectedAccount?.descriptiveName ?? 'Client'
-    const period   = DATE_RANGES.find((r) => r.value === dateRange)?.label ?? dateRange
+    const period   = rangeLabel(dateRange)
+    const kpiHint = kpiType === 'ROAS'
+      ? `KPI หลักของบัญชีนี้คือ ROAS (เป้า ${targetROAS}x) — เล่าเรื่องด้วยยอดขาย (Conv. Value), ROAS เทียบเป้า และ AOV เป็นหลัก · CPA/CTR เป็นตัวรองในตารางเท่านั้น`
+      : `KPI หลักของบัญชีนี้คือ CPA — เล่าเรื่องด้วยจำนวน Conversions และต้นทุนต่อ conversion เทียบเป้าเป็นหลัก`
     const prompt = emailLang === 'th'
-      ? `คุณคือนักเขียนรายงานธุรกิจมืออาชีพ เชี่ยวชาญ Google Ads ระดับผู้บริหาร
+      ? `คุณคือ Head of Performance ของ agency ชั้นนำ เขียนอีเมลรายงานผลถึง "คณะผู้บริหาร" ของลูกค้า
+ผู้อ่านคือ CEO/CMO ที่มีเวลา 2 นาที ไม่ใช่คนทำ ads — เขาสนใจ 3 อย่าง: ได้ผลลัพธ์อะไร คุ้มเงินไหม ต้องตัดสินใจอะไร
+
+${kpiHint}
 
 กฎเขียน (ห้ามละเมิด):
-- ห้ามใช้ ** ## -- * > backtick และ Emoji ทุกชนิดเด็ดขาด
-- หัวข้อเขียนเป็นข้อความธรรมดา ใส่หมายเลข เช่น "1. ผลการดำเนินงาน"
-- ตารางใช้ | และ - เท่านั้น ห้ามใช้ ** ครอบข้อความในตาราง
-- ทุก claim ต้องมีตัวเลขกำกับ ห้ามพูดลอยๆ
-- ไม่พูดวนซ้ำ แต่ละ section บอกข้อมูลใหม่เสมอ
+- ห้ามใช้ ** ## -- * > backtick และ Emoji ทุกชนิด · หัวข้อเป็นข้อความธรรมดาใส่หมายเลข · ตารางใช้ | และ - เท่านั้น
+- ภาษาธุรกิจ ไม่ใช้ศัพท์เทคนิค ads ในเนื้อความ (Impressions/CTR/CPC/Quality Score อยู่ได้เฉพาะในตาราง) — แปลงทุกอย่างเป็น เงิน ยอดขาย จำนวนลูกค้า และ % เทียบเป้า
+- ทุก claim มีตัวเลขจริงกำกับ ห้ามประดิษฐ์ตัวเลข ห้ามคำฟุ่มเฟือย ("เป็นที่น่ายินดี", "อย่างมีนัยสำคัญ" — ตัดทิ้ง)
+- เนื้อความรวมไม่เกิน 350 คำ (ไม่นับตาราง) — สั้นแต่ชัดคือหัวใจ
+- ความมั่นใจต้องตรงกับข้อมูล: ถ้าข้อมูลมีปัญหา (เช่น tracking เพี้ยน) บอกตรงๆ พร้อมผลกระทบ
 
-เขียนอีเมลทางการภาษาไทย ส่งให้ทีมผู้บริหาร "${acctName}" สรุปผล Google Ads ช่วง ${period}
+โครงสร้าง (ตามนี้เป๊ะ):
 
-โครงสร้าง (เขียนตามลำดับนี้เป๊ะ):
+Subject: ${acctName} — ผล Google Ads ${period}: [ผลลัพธ์ธุรกิจที่เด่นที่สุด 1 จุด สั้นๆ เช่น "ROAS 21.9x เกินเป้า 4 เท่า"]
 
-Subject: ${acctName} — สรุปผล Google Ads ${period} | [ผลลัพธ์ที่โดดเด่นที่สุด 1 จุด]
+เรียน คณะผู้บริหาร ${acctName}
 
-เรียน ทีม ${acctName}
+สรุปสำหรับผู้บริหาร
+- [3-5 bullets ตัวเลขธุรกิจล้วน: ใช้งบเท่าไร ได้อะไรกลับมา เทียบเป้าเป็น % · ปิดด้วย 1 bullet "สิ่งที่ขอให้พิจารณาในเมลนี้: ..."]
 
-[บทสรุปเปิด 2-3 ประโยค: ระบุ Spend รวม, Conversions รวม, CPA จริง vs เป้า พร้อมบอกว่าต่ำกว่าหรือสูงกว่าเป้ากี่ % — ตรงไปตรงมา ไม่ต้องขยายความ]
+1. ผลลัพธ์เทียบเป้าหมาย
 
-[ถ้าผลดีมาก ให้เพิ่ม 1-2 ประโยค บอกจุดที่ต้อง review ก่อน scale เช่น campaign ที่ CPA สูง หรือ keyword QS ต่ำ]
+[ตาราง KPI 4-6 แถว — เลือกเฉพาะ metric ที่ผู้บริหารต้องเห็นตาม KPI หลักของบัญชี ไม่ต้องใส่ทุกตัว]:
 
----
+ตัวชี้วัด | ผลจริง | เป้า | เทียบเป้า
+----------|--------|------|----------
 
-1. ผลการดำเนินงาน ${period}
+[1-2 ประโยคใต้ตาราง: บรรทัดเดียวที่ผู้บริหารต้องจำจากช่วงนี้]
 
-[ตารางสรุป metric หลัก — ใส่ตัวเลขจริงทั้งหมด ถ้าไม่มีข้อมูลช่วงก่อนหน้าให้ใส่ N/A]:
+2. อะไรขับเคลื่อนผลลัพธ์
 
-ตัวชี้วัด           | ผล
---------------------|----------
-งบที่ใช้             | ฿[ตัวเลข]
-Impressions         | [ตัวเลข]
-Clicks              | [ตัวเลข]
-CTR                 | [%]
-Avg. CPC            | ฿[ตัวเลข]
-Conversions         | [ตัวเลข]
-Cost/Conversion     | ฿[ตัวเลข]
-Target CPA          | ฿[ตัวเลข]
-CPA vs Target       | [X% ต่ำกว่า/สูงกว่าเป้า]
+[2-3 ประโยค: แคมเปญ/สินค้ากลุ่มไหนทำเงินมากสุด พร้อมตัวเลข · แล้ว 1 ประโยค: ตัวไหนถ่วงผลงานและกำลังทำอะไรกับมัน]
 
-[หลังตาราง: 1 ย่อหน้า วิเคราะห์ว่า metric ไหนน่าสนใจ เพราะอะไร — อ้างอิงตัวเลขจากตาราง]
+3. ความเสี่ยงที่ต้องทราบ
 
----
+[สูงสุด 3 ข้อ ข้อละ 1-2 ประโยค พร้อมผลกระทบเป็นตัวเลข — ถ้าข้อมูล tracking มีปัญหาให้เป็นข้อแรกเสมอ · ไม่มีความเสี่ยงจริงก็เขียน "ไม่พบความเสี่ยงที่กระทบเป้าหมายในช่วงนี้"]
 
-2. สถานะ Campaign ช่วงนี้
+4. ข้อเสนอเพื่อพิจารณา
 
-[ตาราง campaign ทุกตัว — ใส่ตัวเลขจริง]:
+[2-3 ข้อ แต่ละข้อ: ทำอะไร → คาดผลอะไรเป็นตัวเลข → ต้องการอะไรจากผู้บริหาร (อนุมัติงบ/รับทราบ/ตัดสินใจ) — เรียงตาม impact]
 
-Campaign                | Spend    | Conversions | CPA      | สถานะ
-------------------------|----------|-------------|----------|------------------
-[ชื่อ campaign จริง 1]  | ฿[จริง]  | [จริง]      | ฿[จริง]  | [Top Performer / Strong Performance / Being Optimised / Needs Review / Inactive]
-[ชื่อ campaign จริง 2]  | ฿[จริง]  | [จริง]      | ฿[จริง]  | [สถานะ]
+5. แผน 30 วันข้างหน้า
 
-[หลังตาราง: 2-3 ประโยค ระบุว่า campaign ไหนน่าจับตาที่สุด เพราะอะไร อ้างตัวเลข CPA จริง]
+[4-5 bullets สั้นๆ ทีมทำเองไม่ต้องรออนุมัติ]
 
----
-
-3. จุดที่ต้องติดตาม
-
-[เขียนเป็น section แยกสำหรับแต่ละประเด็น เช่น Quality Score, Wasted Spend, Campaign ที่ปิดอยู่ — แต่ละประเด็นมีตัวเลขกำกับ ถ้ามีรายการ keyword หรือ search term ที่เสียเงินเปล่า ให้ทำตารางแสดงด้วย]
-
----
-
-4. แผนงาน 30 วันข้างหน้า
-
-1. [action ที่ 1 — ระบุชัดว่าทำอะไร และคาดว่าผลจะเป็นอย่างไร]
-2. [action ที่ 2]
-3. [action ที่ 3]
-4. [action ที่ 4 ถ้ามี]
-5. [action ที่ 5 ถ้ามี]
-
----
-
-5. สรุป
-
-[1 ย่อหน้า สรุปภาพรวม priority สูงสุด 3 จุดที่ต้องทำ]
-
-หากมีข้อสงสัยหรือต้องการข้อมูลเพิ่มเติม ทีมพร้อมให้บริการครับ/ค่ะ
+ทีมยินดีนำเสนอรายละเอียดเพิ่มเติมในประชุมครั้งถัดไป หรือตอบทุกคำถามทางอีเมลครับ/ค่ะ
 
 ขอแสดงความนับถือ
 ทีม Account Management
 
 ---
 
-ใช้เฉพาะตัวเลขจากข้อมูลด้านล่างเท่านั้น ห้ามประดิษฐ์ตัวเลข:
+ใช้เฉพาะตัวเลขจากข้อมูลด้านล่างเท่านั้น:
 
 ${ctx}`
-      : `You are a professional Google Ads performance report writer. Your writing is clear, direct, and every claim is backed by a number. No repetition between sections.
+      : `You are the Head of Performance at a leading agency writing to the CLIENT'S EXECUTIVE TEAM (CEO/CMO). They have 2 minutes and do not run ads — they care about three things: what results, was it worth the money, what decisions are needed.
 
-Strict formatting rules:
-- No Markdown symbols: no ** ## -- * > backticks or emoji of any kind
-- Section headings use plain numbered text only, e.g. "1. Performance Summary"
-- Tables use | and - only. No ** inside table cells
-- Every claim must reference a real number from the data
-- If prior-period data is unavailable, write "N/A" and add a brief note
+${kpiHint}
 
-Write a formal client email in English for "${acctName}" covering Google Ads performance for ${period}.
+Strict rules:
+- No ** ## -- * > backticks or emoji · plain numbered headings · tables use | and - only
+- Business language in prose — no ads jargon (Impressions/CTR/CPC/Quality Score allowed inside tables only). Translate everything into money, sales, customers, and % vs target
+- Every claim carries a real number. Never invent figures. Cut filler words entirely
+- Prose under 300 words total (tables excluded) — short and sharp
+- Match confidence to the data: if tracking is unreliable, say so first with the impact
 
-Follow this structure exactly:
+Structure (exactly):
 
-Subject: ${acctName} — Google Ads Performance Summary ${period} | [single most important result in plain words]
+Subject: ${acctName} — Google Ads ${period}: [single most important business result, e.g. "ROAS 21.9x, 4x above target"]
 
-Dear ${acctName} Team,
+Dear ${acctName} Executive Team,
 
-[Opening paragraph, 2-3 sentences: state total Spend, total Conversions, actual CPA vs target CPA, and whether this is above or below target by what percentage. Direct, no filler.]
+Executive Summary
+- [3-5 bullets, business numbers only: spend, what it returned, % vs target · final bullet: "Decision requested in this email: ..."]
 
-[If overall performance is strong, add 1-2 sentences naming the specific areas that should be reviewed before any budget increase — e.g. a campaign with CPA above target, or keywords with low Quality Score.]
+1. Results vs Target
 
----
+[KPI table, 4-6 rows — only metrics executives need given the account's primary KPI]:
 
-1. Performance Summary — ${period}
+Metric | Actual | Target | vs Target
+-------|--------|--------|----------
 
-[Summary metrics table — fill in real numbers. Use N/A if prior-period data is unavailable]:
+[1-2 sentences: the one line the executive should remember]
 
-Metric              | Result
---------------------|----------
-Budget Spent        | ฿[real]
-Impressions         | [real]
-Clicks              | [real]
-CTR                 | [real]%
-Avg. CPC            | ฿[real]
-Conversions         | [real]
-Cost / Conversion   | ฿[real]
-Target CPA          | ฿[real]
-CPA vs Target       | [X% below / above target]
+2. What Drove the Results
 
-[After table: 1 paragraph. Highlight the most notable metric — what it means and why it matters. Reference numbers from the table.]
+[2-3 sentences: top revenue/conversion drivers with numbers · 1 sentence: the drag on performance and what is being done]
 
----
+3. Risks You Should Know
 
-2. Campaign Performance
+[Max 3 items, 1-2 sentences each with quantified impact — tracking issues always come first · if none: "No risks affecting targets this period"]
 
-[Campaign table — every campaign, real numbers]:
+4. For Your Decision
 
-Campaign                 | Spend    | Conversions | CPA      | Status
--------------------------|----------|-------------|----------|------------------
-[Real campaign name 1]   | ฿[real]  | [real]      | ฿[real]  | [Top Performer / Strong Performance / Being Optimised / Needs Review / Inactive]
-[Real campaign name 2]   | ฿[real]  | [real]      | ฿[real]  | [status]
+[2-3 proposals. Each: action → expected quantified outcome → what we need from you (budget approval / acknowledge / decide). Ordered by impact]
 
-[After table: 2-3 sentences. Name the campaign that needs the most attention, state its actual CPA, and explain why it matters.]
+5. Next 30 Days
 
----
+[4-5 short bullets the team will execute without approval]
 
-3. Key Areas to Watch
-
-[Write a separate sub-section for each issue found in the data. Each sub-section has a plain heading and real numbers. If there are wasted spend search terms or low Quality Score keywords, show them in a small table.]
-
----
-
-4. Recommended Actions for the Next 30 Days
-
-1. [Action — state what will be done and what outcome is expected]
-2. [Action]
-3. [Action]
-4. [Action if applicable]
-5. [Action if applicable]
-
----
-
-5. Summary
-
-[1 paragraph. State the top 3 priorities in plain language. No new information — just reinforce what matters most.]
-
-Please do not hesitate to reach out with any questions or if you would like us to proceed with any of the recommended actions.
+We would be glad to walk through the details in our next call, or answer any questions by email.
 
 Yours sincerely,
 Account Management Team
 
 ---
 
-Use only the numbers from the data below. Do not invent any figures.
+Use only the numbers from the data below:
 
 ${ctx}`
     try {
@@ -998,10 +1024,34 @@ ${ctx}`
     window.print()
   }
 
-  function exportHTML() {
-    if (!report) return
+  interface MSExportData {
+    overview: { search: { impressionShare: number; lostBudget: number; lostRank: number; topShare: number | null; absTopShare: number | null } | null; display: { impressionShare: number } | null } | null
+    campaigns: { name: string; channel: string; impressions: number; impressionShare: number | null; lostBudget: number | null; lostRank: number | null }[]
+    aiSummary: string
+  }
+
+  async function exportHTML() {
+    try {
+      // Market Share ดึงสดเฉพาะตอนถูกเลือก (component ในหน้า fetch แยกของมันเอง)
+      let msData: MSExportData | null = null
+      if (sec('marketShare') && selectedId) {
+        try {
+          const r = await fetch(`/api/reports/market-share?customerId=${selectedId}&dateRange=${dateRange}`)
+          if (r.ok) msData = await r.json() as MSExportData
+        } catch { /* export ต่อโดยไม่มี MS */ }
+      }
+      exportHTMLInner(msData)
+    } catch (e) {
+      console.error('[exportHTML]', e)
+      const stack = e instanceof Error ? (e.stack ?? '').split('\n').slice(0, 5).join('\n') : ''
+      alert(`Export ล้มเหลว: ${e instanceof Error ? e.message : e}\n\n${stack}`)
+    }
+  }
+
+  function exportHTMLInner(msData: MSExportData | null = null) {
+    if (!report) { alert('ยังไม่มีข้อมูล report — กด Sync & Refresh ก่อน'); return }
     const acctName = selectedAccount?.descriptiveName ?? selectedId
-    const period   = DATE_RANGES.find((r) => r.value === dateRange)?.label ?? dateRange
+    const period   = rangeLabel(dateRange)
     const generatedDate = new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
     const s = report.summary
     const nr = narrative
@@ -1009,11 +1059,190 @@ ${ctx}`
     const fmt = (n: number) => `฿${n.toLocaleString('th-TH', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
     const fmtConv = (n: number) => n.toFixed(2)
     const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n}%`
+
+    // ── Muted chart helpers for the standalone report (no JS libs — pure SVG/CSS) ──
+    const MUTEDX = ['#5B9E92', '#DD8E63', '#8FA3B0', '#C9AF6E', '#A48EB8', '#84AE8C', '#D08C8C', '#A9CCC4']
+    // Donut pie: SVG stroke segments + side legend with value/%
+    const donutChartHtml = (slices: { name: string; value: number }[], centerLabel: string, fmtVal: (v: number) => string) => {
+      const total = slices.reduce((t, x) => t + x.value, 0)
+      if (total <= 0) return ''
+      const R = 15.9155, C = 2 * Math.PI * R
+      let offset = 0
+      const segs = slices.map((sl, i) => {
+        const frac = sl.value / total
+        const seg = `<circle r="${R}" cx="21" cy="21" fill="transparent" stroke="${MUTEDX[i % MUTEDX.length]}" stroke-width="7.5" stroke-dasharray="${(frac * C).toFixed(3)} ${(C - frac * C).toFixed(3)}" stroke-dashoffset="${(-offset * C).toFixed(3)}" stroke-linecap="butt"></circle>`
+        offset += frac
+        return seg
+      }).join('')
+      const legend = slices.map((sl, i) => `
+        <div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:6px">
+          <span style="width:10px;height:10px;border-radius:50%;background:${MUTEDX[i % MUTEDX.length]};flex-shrink:0"></span>
+          <span style="flex:1;color:#3D4852;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sl.name}</span>
+          <b style="color:#3D4852;font-variant-numeric:tabular-nums;white-space:nowrap">${fmtVal(sl.value)}</b>
+          <span style="color:#A3ADB8;min-width:44px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap">${((sl.value / total) * 100).toFixed(1)}%</span>
+        </div>`).join('')
+      return `
+        <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+          <div style="position:relative;width:150px;height:150px;flex-shrink:0;margin:0 auto">
+            <svg viewBox="0 0 42 42" style="width:100%;height:100%;transform:rotate(-90deg)">${segs}</svg>
+            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+              <b style="font-size:16px;color:#3D4852;font-variant-numeric:tabular-nums">${fmtVal(total)}</b>
+              <span style="font-size:10px;color:#A3ADB8">${centerLabel}</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:220px">${legend}</div>
+        </div>`
+    }
+    // Marketing funnel: กรวย trapezoid แบบเดียวกับ Sales Funnel หน้าเว็บ (FunnelBars)
+    // — ไล่แคบ 100% → 42% ด้วย clip-path + guard เคส rate > 100% (tracking ขั้นก่อนไม่ครบ)
+    const funnelHtml = (stages: { label: string; value: number; note?: string }[], fmtVal: (v: number) => string) => {
+      const n = stages.length
+      if (n === 0) return ''
+      const step = n > 1 ? 58 / (n - 1) : 0
+      const widthPct = (i: number) => 100 - i * step
+      return stages.map((st, i) => {
+        const prev = i > 0 ? stages[i - 1].value : null
+        const rate = prev && prev > 0 ? (st.value / prev) * 100 : null
+        const w = widthPct(i)
+        const wNext = i < n - 1 ? widthPct(i + 1) : Math.max(w - step, 30)
+        const inset = ((1 - wNext / w) / 2) * 100
+        const color = MUTEDX[i % MUTEDX.length]
+        return `
+          ${rate !== null ? (rate <= 100 ? `<div style="display:flex;justify-content:center;gap:14px;font-size:11px;padding:4px 0">
+            <span style="color:#5B9E92;font-weight:700">↓ ผ่านต่อ ${rate.toFixed(1)}%</span>
+            <span style="color:#D08C8C">หลุด ${(100 - rate).toFixed(1)}%</span>
+          </div>` : `<div style="display:flex;justify-content:center;font-size:11px;padding:4px 0">
+            <span style="color:#C9AF6E;font-weight:700">↑ ${rate.toFixed(0)}% ของขั้นก่อน — ขั้นก่อนอาจ track ไม่ครบ</span>
+          </div>`) : ''}
+          <div style="width:${w.toFixed(2)}%;margin:0 auto">
+            <div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:14px 24px;color:#fff;background:linear-gradient(135deg,${color},${color}CC);clip-path:polygon(0 0, 100% 0, ${(100 - inset).toFixed(2)}% 100%, ${inset.toFixed(2)}% 100%)">
+              <span style="font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap">${fmtVal(st.value)}</span>
+              <span style="font-size:11.5px;font-weight:600;opacity:.95;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st.label}${st.note ? ` · ${st.note}` : ''}</span>
+            </div>
+          </div>`
+      }).join('')
+    }
+
+    // Horizontal bar chart — value bar (+optional secondary metric chip) per row
+    const hbarHtml = (rows: { label: string; value: number; chip?: string }[], fmtVal: (v: number) => string, color = '#5B9E92') => {
+      const maxV = Math.max(1, ...rows.map(r => r.value))
+      return rows.map((r, i) => `
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+          <div style="width:min(190px,34%);font-size:11.5px;color:#3D4852;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0">${r.label}</div>
+          <div style="flex:1;height:20px;background:#F3F5F4;border-radius:7px;overflow:hidden">
+            <div style="width:${Math.max((r.value / maxV) * 100, 3).toFixed(1)}%;height:100%;border-radius:7px;background:linear-gradient(90deg,${MUTEDX[i % MUTEDX.length] ?? color},${(MUTEDX[i % MUTEDX.length] ?? color)}B3)"></div>
+          </div>
+          <div style="width:86px;font-size:11.5px;font-weight:700;color:#3D4852;font-variant-numeric:tabular-nums;flex-shrink:0">${fmtVal(r.value)}</div>
+          ${r.chip ? `<div style="width:96px;font-size:10.5px;color:#93A1AB;font-variant-numeric:tabular-nums;flex-shrink:0">${r.chip}</div>` : ''}
+        </div>`).join('')
+    }
+    const chartBlock = (title: string, inner: string) => inner ? `
+      <div style="background:#FBFCFB;border:1px solid #EEF1F0;border-radius:12px;padding:16px;margin-bottom:14px">
+        <p style="font-size:10.5px;font-weight:700;color:#93A1AB;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:12px">${title}</p>
+        ${inner}
+      </div>` : ''
+
+    // ── Market Share (Visibility Share) block — ใส่เมื่อถูกเลือกและมีข้อมูล ──
+    const msPct = (v: number | null | undefined) => v == null ? 'N/A' : v <= 0.1 && v >= 0.0999 ? '< 10%' : `${(v * 100).toFixed(1)}%`
+    const msS = msData?.overview?.search
+    const msD = msData?.overview?.display
+    const buildMsBlock = () => (msS || msD) ? `
+      <div class="kpi4" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px">
+        ${[
+          { label: 'Search Impr. Share', value: msPct(msS?.impressionShare), color: '#5B9E92' },
+          { label: 'Lost IS (Budget)', value: msPct(msS?.lostBudget), color: '#DD8E63' },
+          { label: 'Lost IS (Rank)', value: msPct(msS?.lostRank), color: '#D08C8C' },
+          { label: 'Top / Abs.Top', value: `${msPct(msS?.topShare)} / ${msPct(msS?.absTopShare)}`, color: '#8FA3B0' },
+        ].map(m => `<div style="background:#FBFCFB;border:1px solid #EEF1F0;border-radius:12px;padding:14px 16px">
+          <p style="font-size:10.5px;font-weight:700;color:#93A1AB;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px">${m.label}</p>
+          <p style="font-size:22px;font-weight:800;color:${m.color};font-variant-numeric:tabular-nums">${m.value}</p>
+        </div>`).join('')}
+      </div>
+      ${(msData?.campaigns ?? []).length > 0 ? tableWrap(`
+        <thead><tr>
+          <th style="padding:9px 14px;text-align:left;font-size:10.5px;color:#93A1AB;text-transform:uppercase">Campaign</th>
+          <th style="padding:9px 14px;text-align:right;font-size:10.5px;color:#93A1AB;text-transform:uppercase">Impr. Share</th>
+          <th style="padding:9px 14px;text-align:right;font-size:10.5px;color:#93A1AB;text-transform:uppercase">Lost (Budget)</th>
+          <th style="padding:9px 14px;text-align:right;font-size:10.5px;color:#93A1AB;text-transform:uppercase">Lost (Rank)</th>
+        </tr></thead>
+        <tbody>
+          ${(msData?.campaigns ?? []).slice(0, 10).map(c => `<tr style="border-top:1px solid #F3F5F4">
+            <td style="padding:9px 14px;font-size:12px;color:#3D4852">${c.name}</td>
+            <td style="padding:9px 14px;text-align:right;font-weight:700;color:#5B9E92">${msPct(c.impressionShare)}</td>
+            <td style="padding:9px 14px;text-align:right;color:#DD8E63">${msPct(c.lostBudget)}</td>
+            <td style="padding:9px 14px;text-align:right;color:#D08C8C">${msPct(c.lostRank)}</td>
+          </tr>`).join('')}
+        </tbody>
+      `) : ''}
+      ${msData?.aiSummary ? `<p style="font-size:13px;color:#3D4852;line-height:1.7;background:#F7FAF9;border:1px solid #DFEAE7;border-radius:10px;padding:14px 16px;margin-top:12px">${msData.aiSummary}</p>` : ''}
+      <p style="font-size:10px;color:#A3ADB8;margin-top:8px">* Visibility Share จาก Google Ads Impression Share — ไม่ใช่ส่วนแบ่งตลาดจริงของธุรกิจ · PMax ไม่รายงานค่านี้</p>
+    ` : ''
+
+    // ── per-section chart data (ดึงจากตารางเดียวกับที่ export) ──
+    const campBar = hbarHtml([...report.campaigns].sort((a, b) => b.cost - a.cost).slice(0, 10)
+      .map(c => ({ label: c.campaignName.replace(/^\(?CVC\)?\s*-?\s*/i, ''), value: c.cost, chip: `${fmtConv(c.conversions)} conv` })), (v) => fmt(v))
+    const kwBar = hbarHtml((keywords ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 10)
+      .map(k => ({ label: k.keyword, value: k.cost, chip: `${fmtConv(k.conversions)} conv` })), (v) => fmt(v))
+    const stBar = hbarHtml((searchTerms ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 10)
+      .map(t => ({ label: t.searchTerm, value: t.cost, chip: `${fmtConv(t.conversions)} conv` })), (v) => fmt(v))
+    const audienceRows = (audiences ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 10).map((a) => `
+      <tr>
+        <td style="padding:9px 14px;font-weight:500;color:#111827">${a.audienceName}</td>
+        <td style="padding:9px 14px"><span style="font-size:10px;padding:1px 7px;border-radius:20px;font-weight:600;background:#EDF4F2;color:#5B9E92">${a.type}</span></td>
+        <td style="padding:9px 14px;text-align:right">${fmt(a.cost)}</td>
+        <td style="padding:9px 14px;text-align:right;color:#059669;font-weight:600">${fmtConv(a.conversions)}</td>
+        <td style="padding:9px 14px;text-align:right">${a.cpa > 0 ? fmt(a.cpa) : '—'}</td>
+        <td style="padding:9px 14px;text-align:right">${a.ctr.toFixed(2)}%</td>
+      </tr>`).join('')
+    const audBar = hbarHtml((audiences ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 10)
+      .map(a => ({ label: a.audienceName, value: a.cost, chip: `${fmtConv(a.conversions)} conv` })), (v) => fmt(v))
+
+    const textAdCards = (textAds ?? []).slice().sort((a, b) => b.conversions - a.conversions).slice(0, 10).map((ad) => `
+      <div style="border:1px solid #ECEFEE;border-radius:12px;padding:14px 16px;margin-bottom:10px;background:#fff">
+        <div style="font-size:10px;color:#93A1AB;margin-bottom:3px">${ad.campaignName} › ${ad.adGroupName}${ad.adStrength ? ` · <b style="color:${ad.adStrength === 'EXCELLENT' ? '#5B9E92' : ad.adStrength === 'GOOD' ? '#84AE8C' : '#C9AF6E'}">Ad Strength: ${ad.adStrength}</b>` : ''}</div>
+        <div style="font-size:11px;color:#5B9E92">Ad · ${(ad.finalUrl || '').replace(/^https?:\/\//, '').split('/')[0]}</div>
+        <div style="font-size:14.5px;color:#1a0dab;font-weight:600;line-height:1.4">${(ad.headlines ?? []).filter(Boolean).slice(0, 3).join(' | ')}</div>
+        <div style="font-size:12px;color:#4B5563;margin-top:2px;line-height:1.5">${(ad.descriptions ?? []).filter(Boolean).slice(0, 2).join(' ')}</div>
+        <div style="font-size:11px;color:#93A1AB;margin-top:7px">${formatNumber(ad.impressions)} impr · ${formatNumber(ad.clicks)} clicks · CTR <b>${ad.ctr.toFixed(2)}%</b> · ${fmt(ad.cost)} · <b style="color:#5B9E92">${fmtConv(ad.conversions)} conv</b>${ad.cpa > 0 ? ` · CPA ${fmt(ad.cpa)}` : ''}</div>
+      </div>`).join('')
+
+    const locSlices = (locations ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 6)
+      .map(l => ({ name: l.location, value: l.cost })).filter(x => x.value > 0)
+    const locBar = hbarHtml((locations ?? []).slice().sort((a, b) => b.conversions - a.conversions).slice(0, 8)
+      .map(l => ({ label: l.location, value: l.conversions, chip: l.cpa > 0 ? `CPA ${fmt(l.cpa)}` : '' })), (v) => fmtConv(v))
+    const devBar = hbarHtml((devices ?? []).map(d => ({ label: ({ MOBILE: 'Mobile', DESKTOP: 'Desktop', TABLET: 'Tablet', CONNECTED_TV: 'TV' } as Record<string, string>)[d.device] ?? d.device, value: d.cost, chip: `${fmtConv(d.conversions)} conv` })), (v) => fmt(v))
+    const convSlices = (conversions?.actions ?? []).slice().sort((a, b) => b.conversions - a.conversions).slice(0, 6)
+      .map(a => ({ name: a.conversionName, value: a.conversions })).filter(x => x.value > 0)
+
+    // Spend share slices (top 5 + อื่นๆ)
+    const spendSorted = [...report.campaigns].sort((a, b) => b.cost - a.cost)
+    const spendSlices = [
+      ...spendSorted.slice(0, 5).map(c => ({ name: c.campaignName.replace(/^\(?CVC\)?\s*-?\s*/i, ''), value: c.cost })),
+      ...(spendSorted.slice(5).reduce((t, c) => t + c.cost, 0) > 0 ? [{ name: 'อื่นๆ', value: spendSorted.slice(5).reduce((t, c) => t + c.cost, 0) }] : []),
+    ].filter(x => x.value > 0)
+    const deviceSlices = (devices ?? []).map(d => ({ name: ({ MOBILE: 'Mobile', DESKTOP: 'Desktop', TABLET: 'Tablet', CONNECTED_TV: 'TV' } as Record<string, string>)[d.device] ?? d.device, value: d.impressions })).filter(x => x.value > 0)
+
+    // Marketing funnel: ad journey → (ecommerce ต่อท้ายด้วย view→purchase)
+    const ecoF = ecommerce?.ecommerceFunnel
+    const funnelStages = ecoF && ecoF.view_item > 0
+      ? [
+          { label: 'Impressions', value: s.totalImpressions },
+          { label: 'Clicks', value: s.totalClicks, note: `CTR ${s.blendedCTR.toFixed(2)}%` },
+          { label: 'View Item', value: ecoF.view_item },
+          { label: 'Add to Cart', value: ecoF.add_to_cart },
+          { label: 'Begin Checkout', value: ecoF.begin_checkout },
+          { label: 'Purchase', value: ecoF.purchase, note: `Revenue ${fmt(ecoF.revenue)}` },
+        ]
+      : [
+          { label: 'Impressions', value: s.totalImpressions },
+          { label: 'Clicks', value: s.totalClicks, note: `CTR ${s.blendedCTR.toFixed(2)}%` },
+          { label: 'Conversions', value: Math.round(s.totalConversions), note: `CPA ${fmt(s.blendedCPA)}` },
+        ]
     const cpaBadge = s.cpaVsTarget !== null
       ? `<span style="font-size:12px;padding:2px 10px;border-radius:20px;font-weight:700;background:${s.cpaVsTarget > 10 ? '#fef2f2' : '#ecfdf5'};color:${s.cpaVsTarget > 10 ? '#dc2626' : '#059669'}">${s.cpaVsTarget > 0 ? '+' + s.cpaVsTarget + '% เกินเป้า' : Math.abs(s.cpaVsTarget) + '% ต่ำกว่าเป้า'}</span>`
       : ''
 
-    const campaignRows = report.campaigns.map((c) => `
+    const campaignRows = [...report.campaigns].sort((a, b) => b.cost - a.cost).slice(0, 10).map((c) => `
       <tr>
         <td style="padding:10px 14px;font-weight:600;color:#111827">${c.campaignName}</td>
         <td style="padding:10px 14px;text-align:right">${fmt(c.cost)}</td>
@@ -1025,7 +1254,7 @@ ${ctx}`
         <td style="padding:10px 14px;text-align:right;font-weight:600;color:${c.cpa > s.targetCPA * 1.1 ? '#dc2626' : '#374151'}">${c.cpa > 0 ? fmt(c.cpa) : '—'}</td>
       </tr>`).join('')
 
-    const keywordRows = (keywords ?? []).sort((a, b) => b.cost - a.cost).slice(0, 20).map((k) => `
+    const keywordRows = (keywords ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 10).map((k) => `
       <tr>
         <td style="padding:9px 14px;font-weight:500;color:#111827">${k.keyword}</td>
         <td style="padding:9px 14px"><span style="font-size:11px;padding:1px 7px;border-radius:4px;font-weight:600;background:${k.matchType === 'EXACT' ? '#dcfce7' : k.matchType === 'PHRASE' ? '#f3e8ff' : '#dbeafe'};color:${k.matchType === 'EXACT' ? '#15803d' : k.matchType === 'PHRASE' ? '#7e22ce' : '#1d4ed8'}">${MATCH_LABEL[k.matchType] ?? k.matchType}</span></td>
@@ -1036,7 +1265,7 @@ ${ctx}`
         <td style="padding:9px 14px;text-align:right">${k.ctr.toFixed(2)}%</td>
       </tr>`).join('')
 
-    const searchTermRows = (searchTerms ?? []).sort((a, b) => b.cost - a.cost).slice(0, 20).map((st) => `
+    const searchTermRows = (searchTerms ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 10).map((st) => `
       <tr>
         <td style="padding:9px 14px;font-weight:500;color:#111827">${st.searchTerm}</td>
         <td style="padding:9px 14px;font-size:12px;color:#6b7280;font-family:monospace">${st.matchedKeyword || '—'}</td>
@@ -1047,7 +1276,7 @@ ${ctx}`
         <td style="padding:9px 14px;text-align:right">${st.ctr.toFixed(2)}%</td>
       </tr>`).join('')
 
-    const locationRows = (locations ?? []).sort((a, b) => b.cost - a.cost).slice(0, 15).map((l) => `
+    const locationRows = (locations ?? []).slice().sort((a, b) => b.cost - a.cost).slice(0, 10).map((l) => `
       <tr>
         <td style="padding:9px 14px;font-weight:500;color:#111827">${l.location}</td>
         <td style="padding:9px 14px;text-align:right">${formatNumber(l.impressions)}</td>
@@ -1118,6 +1347,14 @@ ${ctx}`
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans Thai', sans-serif; background: #f8fafc; color: #374151; line-height: 1.6; }
     a { color: inherit; text-decoration: none; }
+    svg, img { max-width: 100%; }
+    /* grid item default = min-width:auto ทำให้เนื้อหายาวดันการ์ดทะลุขอบขวา — บังคับให้หดได้ */
+    div[style*="display:grid"] > * { min-width: 0; }
+    div[style*="display:flex"] > * { min-width: 0; }
+    @media (max-width: 760px) {
+      .grid2, .grid3, .grid4 { grid-template-columns: 1fr !important; }
+      .kpi4 { grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+    }
     @media print {
       body { background: white; }
       .no-print { display: none !important; }
@@ -1132,7 +1369,7 @@ ${ctx}`
 <div class="page-wrap" style="max-width:960px;margin:0 auto;padding:32px 24px 60px">
 
   <!-- Header -->
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:20px;border-bottom:2px solid #e5e7eb">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:32px;padding-bottom:20px;border-bottom:2px solid #e5e7eb">
     <div>
       <p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px">Google Ads Performance Report</p>
       <h1 style="font-size:26px;font-weight:800;color:#111827;line-height:1.2">${acctName}</h1>
@@ -1146,12 +1383,13 @@ ${ctx}`
   </div>
 
   <!-- KPI Summary Strip -->
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px">
+  ${sec('kpi') ? `
+  <div class="kpi4" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:24px">
     ${[
-      { label: 'Total Spend', value: fmt(s.totalCost), sub: period, color: '#2563eb', bg: '#eff6ff' },
-      { label: 'Conversions', value: fmtConv(s.totalConversions), sub: `Conv Rate ${((s.totalConversions / Math.max(1, s.totalClicks)) * 100).toFixed(2)}%`, color: '#059669', bg: '#ecfdf5' },
-      { label: 'Blended CPA', value: fmt(s.blendedCPA), sub: s.cpaVsTarget !== null ? (s.cpaVsTarget > 0 ? `+${s.cpaVsTarget}% vs target` : `${Math.abs(s.cpaVsTarget)}% below target`) : `Target ${fmt(s.targetCPA)}`, color: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? '#dc2626' : '#059669', bg: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? '#fef2f2' : '#ecfdf5' },
-      { label: 'CTR', value: `${s.blendedCTR.toFixed(2)}%`, sub: `${s.totalClicks.toLocaleString()} clicks`, color: '#7c3aed', bg: '#f5f3ff' },
+      { label: 'Total Spend', value: fmt(s.totalCost), sub: period, color: '#5B9E92', bg: '#EDF4F2' },
+      { label: 'Conversions', value: fmtConv(s.totalConversions), sub: `Conv Rate ${((s.totalConversions / Math.max(1, s.totalClicks)) * 100).toFixed(2)}%`, color: '#84AE8C', bg: '#F0F6F1' },
+      { label: 'Blended CPA', value: fmt(s.blendedCPA), sub: s.cpaVsTarget !== null ? (s.cpaVsTarget > 0 ? `+${s.cpaVsTarget}% vs target` : `${Math.abs(s.cpaVsTarget)}% below target`) : `Target ${fmt(s.targetCPA)}`, color: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? '#D08C8C' : '#84AE8C', bg: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? '#FAF0F0' : '#F0F6F1' },
+      { label: 'CTR', value: `${s.blendedCTR.toFixed(2)}%`, sub: `${s.totalClicks.toLocaleString()} clicks`, color: '#A48EB8', bg: '#F5F2F8' },
     ].map((m) => `
       <div style="background:${m.bg};border-radius:12px;padding:16px 18px">
         <p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">${m.label}</p>
@@ -1160,59 +1398,43 @@ ${ctx}`
       </div>`).join('')}
   </div>
   ${cpaBadge ? `<div style="margin-bottom:24px;display:flex;align-items:center;gap:10px"><span style="font-size:13px;color:#6b7280">CPA vs Target:</span>${cpaBadge}</div>` : ''}
-
-  ${nr ? `
-  <!-- Executive Summary -->
-  ${sectionCard('Performance Summary', '#2563eb', 'linear-gradient(90deg,#60a5fa,#818cf8,#a78bfa)', `
-    <h2 style="font-size:19px;font-weight:800;color:#111827;line-height:1.35;margin-bottom:16px">${nr.headline}</h2>
-    ${nr.clientSummary ? `<p style="font-size:14px;color:#374151;line-height:1.7;margin-bottom:14px">${nr.clientSummary}</p>` : ''}
-    ${nr.performance ? `<div style="border-top:1px solid #f3f4f6;padding-top:14px;margin-top:4px"><p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Performance Analysis</p><p style="font-size:14px;color:#374151;line-height:1.7">${nr.performance}</p></div>` : ''}
-    ${nr.executiveSummary ? `<div style="background:#f8fafc;border-radius:10px;padding:16px;margin-top:16px;border:1px solid #e5e7eb"><p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Executive Summary</p><p style="font-size:14px;color:#374151;line-height:1.7">${nr.executiveSummary}</p></div>` : ''}
-  `)}
-
-  <!-- Winners & Concerns -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-    <div style="background:#fff;border:1px solid #bbf7d0;border-radius:14px;overflow:hidden">
-      <div style="height:3px;background:#4ade80"></div>
-      <div style="padding:18px 20px">
-        <p style="font-size:11px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">จุดเด่น · Winners</p>
-        <p style="font-size:14px;color:#374151;line-height:1.7">${nr.winners}</p>
-      </div>
-    </div>
-    <div style="background:#fff;border:1px solid #fecdd3;border-radius:14px;overflow:hidden">
-      <div style="height:3px;background:#f87171"></div>
-      <div style="padding:18px 20px">
-        <p style="font-size:11px;font-weight:700;color:#be123c;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">จุดเสี่ยง · Concerns</p>
-        <p style="font-size:14px;color:#374151;line-height:1.7">${nr.concerns}</p>
-      </div>
-    </div>
-  </div>
-
-  ${insightsList ? sectionCard('Key Data Insights', '#0369a1', 'linear-gradient(90deg,#38bdf8,#818cf8)', `<div style="background:#f0f9ff;border-radius:10px;padding:16px">${insightsList}</div>`) : ''}
-
-  ${(nr.deviceAnalysis || nr.locationInsights || nr.wastedBudget) ? `
-  <div style="display:grid;grid-template-columns:repeat(${[nr.deviceAnalysis, nr.locationInsights, nr.wastedBudget].filter(Boolean).length},1fr);gap:14px;margin-bottom:24px">
-    ${nr.deviceAnalysis ? `<div style="background:#fff;border:1px solid #ddd6fe;border-radius:12px;padding:18px"><p style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Device Analysis</p><p style="font-size:13px;color:#374151;line-height:1.7">${nr.deviceAnalysis}</p></div>` : ''}
-    ${nr.locationInsights ? `<div style="background:#fff;border:1px solid #fde68a;border-radius:12px;padding:18px"><p style="font-size:11px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Location Insights</p><p style="font-size:13px;color:#374151;line-height:1.7">${nr.locationInsights}</p></div>` : ''}
-    ${nr.wastedBudget ? `<div style="background:#fff;border:1px solid #fecdd3;border-radius:12px;padding:18px"><p style="font-size:11px;font-weight:700;color:#be123c;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Wasted Budget</p><p style="font-size:13px;color:#374151;line-height:1.7">${nr.wastedBudget}</p></div>` : ''}
-  </div>` : ''}
-
-  ${actionsList ? sectionCard('Action Items · แผนงาน 30 วัน', '#374151', 'linear-gradient(90deg,#94a3b8,#cbd5e1)', actionsList) : ''}
-
-  ${nr.outlook ? `
-  <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:18px 20px;margin-bottom:24px;display:flex;gap:14px;align-items:flex-start">
-    <div style="min-width:32px;height:32px;border-radius:50%;background:#0ea5e9;display:flex;align-items:center;justify-content:center">
-      <span style="color:white;font-size:14px">↗</span>
-    </div>
-    <div>
-      <p style="font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Outlook</p>
-      <p style="font-size:14px;color:#0c4a6e;line-height:1.7">${nr.outlook}</p>
-    </div>
-  </div>` : ''}
   ` : ''}
 
+  <!-- Charts row: spend share + device split donuts -->
+  ${sec('charts') ? `
+  <div class="grid2" style="display:grid;grid-template-columns:${deviceSlices.length > 0 ? 'minmax(0,1fr) minmax(0,1fr)' : 'minmax(0,1fr)'};gap:16px;margin-bottom:24px">
+    ${spendSlices.length > 0 ? `<div style="background:#fff;border:1px solid #ECEFEE;border-radius:16px;padding:20px">
+      <p style="font-size:11px;font-weight:700;color:#93A1AB;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px">Spend Share by Campaign</p>
+      ${donutChartHtml(spendSlices, 'Total Spend', (v) => fmt(v))}
+    </div>` : ''}
+    ${deviceSlices.length > 0 ? `<div style="background:#fff;border:1px solid #ECEFEE;border-radius:16px;padding:20px">
+      <p style="font-size:11px;font-weight:700;color:#93A1AB;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px">Impressions by Device</p>
+      ${donutChartHtml(deviceSlices, 'Impressions', (v) => formatNumber(v))}
+    </div>` : ''}
+  </div>
+  ` : ''}
+
+  ${sec('funnel') ? sectionCard('Marketing Funnel', '#5B9E92', 'linear-gradient(90deg,#5B9E92,#A9CCC4)', `
+    <div style="max-width:640px;margin:8px auto">${funnelHtml(funnelStages, (v) => formatNumber(v))}</div>
+    ${ecoF && ecoF.view_item > 0 ? `<div class="grid4" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:18px">
+      ${[
+        { label: 'Revenue', value: fmt(ecoF.revenue) },
+        { label: 'ROAS', value: ecoF.roas > 0 ? `${Number(ecoF.roas).toFixed(2)}x` : '—' },
+        { label: 'AOV', value: fmt(ecoF.aov) },
+        { label: 'Cart Abandon', value: `${Number(ecoF.cartAbandonRate).toFixed(1)}%` },
+      ].map(m => `<div style="background:#F6F8F7;border-radius:12px;padding:12px;text-align:center">
+        <div style="font-size:18px;font-weight:800;color:#5B9E92;font-variant-numeric:tabular-nums">${m.value}</div>
+        <div style="font-size:11px;color:#93A1AB;font-weight:600">${m.label}</div>
+      </div>`).join('')}
+    </div>` : ''}
+  `) : ''}
+
+  <!-- Market Share (Visibility Share) -->
+  ${sec('marketShare') ? (() => { const b = buildMsBlock(); return b ? sectionCard('Market Share (Visibility Share)', '#374151', 'linear-gradient(90deg,#5B9E92,#8FA3B0)', b) : '' })() : ''}
+
   <!-- Campaign Performance Table -->
-  ${sectionCard('Campaign Performance', '#374151', 'linear-gradient(90deg,#60a5fa,#34d399)', `
+  ${sec('campaigns') ? sectionCard('Campaign Performance · Top 10 by Spend', '#374151', 'linear-gradient(90deg,#5B9E92,#84AE8C)', `
+    ${chartBlock('Top 10 Campaigns by Spend', campBar)}
     ${tableWrap(`
       <thead>
         <tr>
@@ -1240,9 +1462,10 @@ ${ctx}`
         </tr>
       </tfoot>
     `)}
-  `)}
+  `) : ''}
 
-  ${keywordRows ? sectionCard('Keywords · Top 20 by Spend', '#374151', 'linear-gradient(90deg,#a78bfa,#60a5fa)', `
+  ${sec('keywords') && keywordRows ? sectionCard('Keywords · Top 10 by Spend', '#374151', 'linear-gradient(90deg,#A48EB8,#8FA3B0)', `
+    ${chartBlock('Top 10 Keywords by Spend', kwBar)}
     ${tableWrap(`
       <thead>
         <tr>
@@ -1259,7 +1482,8 @@ ${ctx}`
     `)}
   `) : ''}
 
-  ${searchTermRows ? sectionCard('Search Terms · Top 20 by Spend', '#374151', 'linear-gradient(90deg,#fbbf24,#f97316)', `
+  ${sec('searchTerms') && searchTermRows ? sectionCard('Search Terms · Top 10 by Spend', '#374151', 'linear-gradient(90deg,#C9AF6E,#DD8E63)', `
+    ${chartBlock('Top 10 Search Terms by Spend', stBar)}
     ${tableWrap(`
       <thead>
         <tr>
@@ -1276,7 +1500,26 @@ ${ctx}`
     `)}
   `) : ''}
 
-  ${locationRows ? sectionCard('Location Performance · Top 15', '#374151', 'linear-gradient(90deg,#f59e0b,#34d399)', `
+  ${sec('audiences') && audienceRows ? sectionCard('Audiences · Top 10 by Spend', '#374151', 'linear-gradient(90deg,#84AE8C,#5B9E92)', `
+    ${chartBlock('Top 10 Audiences by Spend', audBar)}
+    ${tableWrap(`
+      <thead>
+        <tr>
+          <th ${thStyle}>Audience</th>
+          <th ${thStyle}>Type</th>
+          <th ${thRight}>Spend</th>
+          <th ${thRight}>Conv.</th>
+          <th ${thRight}>CPA</th>
+          <th ${thRight}>CTR</th>
+        </tr>
+      </thead>
+      <tbody>${audienceRows}</tbody>
+    `)}
+  `) : ''}
+
+  ${sec('locations') && locationRows ? sectionCard('Location Performance · Top 10', '#374151', 'linear-gradient(90deg,#C9AF6E,#84AE8C)', `
+    ${locSlices.length > 1 ? chartBlock('Spend Share by Location', donutChartHtml(locSlices, 'Spend', (v) => fmt(v))) : ''}
+    ${chartBlock('Conversions by Location', locBar)}
     ${tableWrap(`
       <thead>
         <tr>
@@ -1292,7 +1535,8 @@ ${ctx}`
     `)}
   `) : ''}
 
-  ${deviceRows ? sectionCard('Device Split', '#374151', 'linear-gradient(90deg,#818cf8,#c084fc)', `
+  ${sec('devices') && deviceRows ? sectionCard('Device Split', '#374151', 'linear-gradient(90deg,#8FA3B0,#A48EB8)', `
+    ${chartBlock('Spend & Conversions by Device', devBar)}
     ${tableWrap(`
       <thead>
         <tr>
@@ -1309,7 +1553,8 @@ ${ctx}`
     `)}
   `) : ''}
 
-  ${conversionRows ? sectionCard('Conversion Actions', '#374151', 'linear-gradient(90deg,#34d399,#60a5fa)', `
+  ${sec('conversions') && conversionRows ? sectionCard('Conversion Actions', '#374151', 'linear-gradient(90deg,#5B9E92,#84AE8C)', `
+    ${convSlices.length > 1 ? chartBlock('Conversions by Action', donutChartHtml(convSlices, 'Conversions', (v) => fmtConv(v))) : ''}
     ${tableWrap(`
       <thead>
         <tr>
@@ -1323,6 +1568,62 @@ ${ctx}`
       <tbody>${conversionRows}</tbody>
     `)}
   `) : ''}
+
+
+  ${sec('textAds') && textAdCards ? sectionCard('Text Ads · Top 10 by Conversions', '#374151', 'linear-gradient(90deg,#5B9E92,#A48EB8)', textAdCards) : ''}
+
+  ${sec('narrative') && nr ? `
+  <!-- Performance Report (บทวิเคราะห์) — อธิบายตัวเลขด้านบน -->
+  <div style="margin:36px 0 20px;text-align:center">
+    <p style="display:inline-block;font-size:12px;font-weight:800;color:#5B9E92;text-transform:uppercase;letter-spacing:0.15em;border-top:2px solid #5B9E92;border-bottom:2px solid #5B9E92;padding:8px 22px">Performance Report · บทวิเคราะห์</p>
+  </div>
+  ${sectionCard('Performance Summary', '#2563eb', 'linear-gradient(90deg,#5B9E92,#A9CCC4)', `
+    <h2 style="font-size:19px;font-weight:800;color:#111827;line-height:1.35;margin-bottom:16px">${nr.headline}</h2>
+    ${nr.clientSummary ? `<p style="font-size:14px;color:#374151;line-height:1.7;margin-bottom:14px">${nr.clientSummary}</p>` : ''}
+    ${nr.performance ? `<div style="border-top:1px solid #f3f4f6;padding-top:14px;margin-top:4px"><p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Performance Analysis</p><p style="font-size:14px;color:#374151;line-height:1.7">${nr.performance}</p></div>` : ''}
+    ${nr.executiveSummary ? `<div style="background:#f8fafc;border-radius:10px;padding:16px;margin-top:16px;border:1px solid #e5e7eb"><p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Executive Summary</p><p style="font-size:14px;color:#374151;line-height:1.7">${nr.executiveSummary}</p></div>` : ''}
+  `)}
+
+  <!-- Winners & Concerns -->
+  <div class="grid2" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-bottom:24px">
+    <div style="background:#fff;border:1px solid #bbf7d0;border-radius:14px;overflow:hidden">
+      <div style="height:3px;background:#4ade80"></div>
+      <div style="padding:18px 20px">
+        <p style="font-size:11px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">จุดเด่น · Winners</p>
+        <p style="font-size:14px;color:#374151;line-height:1.7">${nr.winners}</p>
+      </div>
+    </div>
+    <div style="background:#fff;border:1px solid #fecdd3;border-radius:14px;overflow:hidden">
+      <div style="height:3px;background:#f87171"></div>
+      <div style="padding:18px 20px">
+        <p style="font-size:11px;font-weight:700;color:#be123c;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">จุดเสี่ยง · Concerns</p>
+        <p style="font-size:14px;color:#374151;line-height:1.7">${nr.concerns}</p>
+      </div>
+    </div>
+  </div>
+
+  ${insightsList ? sectionCard('Key Data Insights', '#0369a1', 'linear-gradient(90deg,#8FA3B0,#A9CCC4)', `<div style="background:#f0f9ff;border-radius:10px;padding:16px">${insightsList}</div>`) : ''}
+
+  ${(nr.deviceAnalysis || nr.locationInsights || nr.wastedBudget) ? `
+  <div class="grid3" style="display:grid;grid-template-columns:repeat(${[nr.deviceAnalysis, nr.locationInsights, nr.wastedBudget].filter(Boolean).length},minmax(0,1fr));gap:14px;margin-bottom:24px">
+    ${nr.deviceAnalysis ? `<div style="background:#fff;border:1px solid #ddd6fe;border-radius:12px;padding:18px"><p style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Device Analysis</p><p style="font-size:13px;color:#374151;line-height:1.7">${nr.deviceAnalysis}</p></div>` : ''}
+    ${nr.locationInsights ? `<div style="background:#fff;border:1px solid #fde68a;border-radius:12px;padding:18px"><p style="font-size:11px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Location Insights</p><p style="font-size:13px;color:#374151;line-height:1.7">${nr.locationInsights}</p></div>` : ''}
+    ${nr.wastedBudget ? `<div style="background:#fff;border:1px solid #fecdd3;border-radius:12px;padding:18px"><p style="font-size:11px;font-weight:700;color:#be123c;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:8px">Wasted Budget</p><p style="font-size:13px;color:#374151;line-height:1.7">${nr.wastedBudget}</p></div>` : ''}
+  </div>` : ''}
+
+  ${actionsList ? sectionCard('Action Items · แผนงาน 30 วัน', '#374151', 'linear-gradient(90deg,#94a3b8,#cbd5e1)', actionsList) : ''}
+
+  ${nr.outlook ? `
+  <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:18px 20px;margin-bottom:24px;display:flex;gap:14px;align-items:flex-start">
+    <div style="min-width:32px;height:32px;border-radius:50%;background:#0ea5e9;display:flex;align-items:center;justify-content:center">
+      <span style="color:white;font-size:14px">↗</span>
+    </div>
+    <div>
+      <p style="font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Outlook</p>
+      <p style="font-size:14px;color:#0c4a6e;line-height:1.7">${nr.outlook}</p>
+    </div>
+  </div>` : ''}
+  ` : ''}
 
   <!-- Footer -->
   <div style="margin-top:40px;padding-top:20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center">
@@ -1348,13 +1649,13 @@ ${ctx}`
 
   return (
     <AppShell>
-    <div className="space-y-5">
+    <div className={cn('space-y-5 text-[#3D4852] [font-variant-numeric:tabular-nums]', notoThai.className)}>
 
       {/* ── Header ── */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            <BarChart2 className="w-5 h-5 text-blue-500" />Reports
+            <BarChart2 className="w-5 h-5 text-[#5B9E92]" />Reports
           </h1>
           <p className="text-sm text-gray-400 mt-0.5">Google Ads Performance — ข้อมูลจริงจาก API</p>
         </div>
@@ -1374,17 +1675,90 @@ ${ctx}`
           {/* Date range */}
           <div className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-xl shadow-sm">
             <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
-            <select value={dateRange} onChange={(e) => setDateRange(e.target.value)}
+            <select value={dateRange.startsWith('CUSTOM_') ? 'CUSTOM' : dateRange}
+              onChange={(e) => {
+                if (e.target.value === 'CUSTOM') {
+                  const end = new Date(); const start = new Date(Date.now() - 29 * 86400000)
+                  const iso = (d: Date) => d.toISOString().slice(0, 10)
+                  setCustomStart((p) => p || iso(start)); setCustomEnd((p) => p || iso(end))
+                  setDateRange(`CUSTOM_${customStart || iso(start)}_${customEnd || iso(end)}`)
+                } else setDateRange(e.target.value)
+              }}
               className="text-sm text-gray-700 bg-transparent outline-none cursor-pointer">
               {DATE_RANGES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
           </div>
-          {/* Target CPA */}
+          {dateRange.startsWith('CUSTOM_') && (
+            <div className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-200 rounded-xl shadow-sm">
+              <input type="date" value={customStart} max={customEnd || undefined}
+                onChange={(e) => { setCustomStart(e.target.value); if (e.target.value && customEnd) setDateRange(`CUSTOM_${e.target.value}_${customEnd}`) }}
+                className="text-xs text-gray-700 bg-transparent outline-none" />
+              <span className="text-xs text-gray-400">–</span>
+              <input type="date" value={customEnd} min={customStart || undefined}
+                onChange={(e) => { setCustomEnd(e.target.value); if (customStart && e.target.value) setDateRange(`CUSTOM_${customStart}_${e.target.value}`) }}
+                className="text-xs text-gray-700 bg-transparent outline-none" />
+            </div>
+          )}
+          {/* KPI — เลือกชนิดได้ (CPA/ROAS) แต่ละเว็บไม่เหมือนกัน */}
           <div className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-200 rounded-xl shadow-sm">
-            <span className="text-xs text-gray-500">Target CPA ฿</span>
-            <input type="number" value={targetCPA} onChange={(e) => setTargetCPA(e.target.value)} onBlur={loadReport}
-              className="w-16 text-sm font-medium text-gray-700 bg-transparent outline-none" />
+            <select value={kpiType}
+              onChange={(e) => {
+                const v = e.target.value as 'CPA' | 'ROAS'
+                setKpiType(v)
+                try { localStorage.setItem(`reports-kpi:${selectedId}`, v) } catch { /* private mode */ }
+              }}
+              className="text-xs text-gray-500 bg-transparent outline-none cursor-pointer">
+              <option value="CPA">Target CPA ฿</option>
+              <option value="ROAS">Target ROAS</option>
+            </select>
+            {kpiType === 'CPA' ? (
+              <input type="number" value={targetCPA}
+                onChange={(e) => { setTargetCPA(e.target.value); try { localStorage.setItem(`reports-tcpa:${selectedId}`, e.target.value) } catch { /* private mode */ } }}
+                onBlur={loadReport}
+                className="w-16 text-sm font-medium text-gray-700 bg-transparent outline-none" />
+            ) : (
+              <span className="flex items-center gap-0.5">
+                <input type="number" step="0.5" value={targetROAS}
+                  onChange={(e) => { setTargetROAS(e.target.value); try { localStorage.setItem(`reports-troas:${selectedId}`, e.target.value) } catch { /* private mode */ } }}
+                  className="w-12 text-sm font-medium text-gray-700 bg-transparent outline-none" />
+                <span className="text-xs text-gray-400">x</span>
+              </span>
+            )}
           </div>
+          {/* เลือกข้อมูลที่จะใส่ในรายงาน — มีผลทั้ง Export HTML และเมล */}
+          <div className="relative">
+            <button onClick={() => setSectionPickerOpen(o => !o)}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50">
+              เลือกข้อมูล{hiddenCount > 0 ? ` (ซ่อน ${hiddenCount})` : ''} ▾
+            </button>
+            {sectionPickerOpen && (
+              <div className="absolute right-0 top-full mt-2 z-40 w-72 bg-white border border-gray-200 rounded-xl shadow-xl p-3 space-y-1">
+                <div className="flex items-center justify-between pb-2 border-b border-gray-100 mb-1">
+                  <p className="text-xs font-semibold text-gray-600">ใส่ในรายงาน (Export + เมล)</p>
+                  <div className="flex gap-2 text-[11px]">
+                    <button onClick={() => saveSections(Object.fromEntries(EXPORT_SECTIONS.map(x => [x.key, true])))} className="text-blue-600 hover:underline">เลือกทั้งหมด</button>
+                    <button onClick={() => saveSections(Object.fromEntries(EXPORT_SECTIONS.map(x => [x.key, x.key === 'kpi'])))} className="text-gray-400 hover:underline">เอาออกทั้งหมด</button>
+                  </div>
+                </div>
+                {EXPORT_SECTIONS.map(x => (
+                  <label key={x.key} className="flex items-center gap-2.5 px-1.5 py-1 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <input type="checkbox" checked={sec(x.key)}
+                      onChange={() => saveSections({ ...exportSections, [x.key]: !sec(x.key) })}
+                      className="w-3.5 h-3.5 text-blue-600 rounded" />
+                    <span className="text-xs text-gray-700">{x.label}</span>
+                  </label>
+                ))}
+                <p className="text-[10px] text-gray-300 pt-1.5 border-t border-gray-100">ระบบจำตัวเลือกไว้ให้ · ติ๊กออก = ไม่ใส่ทั้งใน Export HTML และเมลรายงาน</p>
+              </div>
+            )}
+          </div>
+          {/* Export — ปุ่มหลักบน header กดได้ตลอด (เดิมซ่อนใน Email Draft ต้องกดขยายก่อน) */}
+          <button onClick={exportHTML} disabled={!report}
+            title={!report ? 'รอข้อมูลโหลดก่อน' : 'ดาวน์โหลดรายงาน HTML ฉบับส่งลูกค้า'}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-white bg-[#5B9E92] rounded-xl shadow-sm hover:bg-[#4A8A7E] disabled:opacity-40 transition-colors">
+            <Download className="w-3.5 h-3.5" />
+            Export Report
+          </button>
           {/* Sync */}
           <button onClick={syncData} disabled={syncing || !selectedId}
             className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 disabled:opacity-50">
@@ -1412,522 +1786,9 @@ ${ctx}`
         </div>
       )}
 
-      {/* ── Summary cards ── */}
-      {loading ? (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {[1,2,3,4,5].map((i) => <div key={i} className="h-20 bg-gray-100 rounded-xl animate-pulse" />)}
-        </div>
-      ) : s && (
-        <div className={cn('grid gap-3', isEcommerceAccount ? 'grid-cols-2 md:grid-cols-6' : 'grid-cols-2 md:grid-cols-5')}>
-          {[
-            { label: 'Total Spend',    value: formatCurrency(s.totalCost),             sub: DATE_RANGES.find((r) => r.value === dateRange)?.label, trend: null,    changeKey: 'cost',        changeVal: s.changes?.totalCost,        highlight: false },
-            { label: 'Conversions',    value: formatConversions(s.totalConversions),   sub: `Conv Rate ${((s.totalConversions / Math.max(1, s.totalClicks)) * 100).toFixed(2)}%`, trend: null, changeKey: 'conversions', changeVal: s.changes?.totalConversions, highlight: false },
-            ...(isEcommerceAccount ? [
-              { label: 'Conv. Value',  value: formatCurrency(totalConvValue),          sub: 'ยอดขายรวม', trend: null,                                               changeKey: 'conversions', changeVal: null,                        highlight: true },
-              { label: 'ROAS',         value: `${accountRoas.toFixed(2)}x`,            sub: `ทุก ฿1 → ฿${accountRoas.toFixed(2)}`, trend: null,                    changeKey: 'ctr',         changeVal: null,                        highlight: true },
-            ] : []),
-            { label: 'Blended CPA',    value: formatCurrency(s.blendedCPA),            sub: `Target ฿${s.targetCPA}`, trend: s.cpaVsTarget,                         changeKey: 'cpa',         changeVal: s.changes?.blendedCPA,       highlight: false },
-            { label: 'Clicks',         value: formatNumber(s.totalClicks),             sub: `CTR ${s.blendedCTR.toFixed(2)}%`, trend: null,                          changeKey: 'clicks',      changeVal: s.changes?.totalClicks,      highlight: false },
-            ...(!isEcommerceAccount ? [
-              { label: 'Impressions',  value: formatNumber(s.totalImpressions),        sub: undefined, trend: null,                                                   changeKey: 'impressions', changeVal: s.changes?.totalImpressions, highlight: false },
-            ] : []),
-          ].map((c) => (
-            <div key={c.label} className={cn('rounded-xl border p-4', c.highlight ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-200')}>
-              <p className={cn('text-xs font-medium mb-1', c.highlight ? 'text-emerald-600' : 'text-gray-500')}>{c.label}</p>
-              <div className="flex items-baseline gap-1.5 flex-wrap">
-                <p className={cn('text-xl font-bold', c.highlight ? 'text-emerald-700' : 'text-gray-900')}>{c.value}</p>
-                <ChangeBadge metricKey={c.changeKey} value={c.changeVal} />
-              </div>
-              {c.sub && <p className={cn('text-xs mt-0.5', c.highlight ? 'text-emerald-500' : 'text-gray-400')}>{c.sub}</p>}
-              {c.trend !== null && <div className="mt-1"><Trend value={c.trend} inverse={c.label === 'Blended CPA'} /></div>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Performance Report ── (loads after all data is ready) */}
-      {(narrativeLoading || narrative) && (
-        <div className="space-y-4">
-          {/* Header */}
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-blue-500" />
-            <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">Performance Report</span>
-            {narrativeLoading && <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />}
-          </div>
-
-          {narrativeLoading ? (
-            <div className="bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 border border-blue-100 rounded-2xl p-6 space-y-3 animate-pulse">
-              <div className="h-6 bg-blue-100 rounded-lg w-3/4" />
-              <div className="h-4 bg-blue-100 rounded w-full" />
-              <div className="h-4 bg-blue-100 rounded w-5/6" />
-              <div className="grid grid-cols-2 gap-3">
-                <div className="h-20 bg-emerald-100 rounded-xl" />
-                <div className="h-20 bg-red-100 rounded-xl" />
-              </div>
-              <div className="space-y-2">
-                {[1,2,3,4,5].map((i) => <div key={i} className="h-3 bg-blue-100 rounded w-full" />)}
-              </div>
-              <p className="text-center text-xs text-blue-400 italic">กำลังวิเคราะห์ข้อมูลและเขียนรายงาน...</p>
-            </div>
-          ) : narrative && (
-            <>
-              {/* ══════════════════════════════════════════════════════════
-                  PERFORMANCE REPORT CARD — redesigned
-              ══════════════════════════════════════════════════════════ */}
-              <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-
-                {/* gradient accent */}
-                <div className="h-1 bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-500" />
-
-                {/* ── Header ── */}
-                <div className="px-6 pt-5 pb-4 flex items-start justify-between gap-4 flex-wrap border-b border-gray-100">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-blue-500">Performance Report · Strategic Analysis</p>
-                      {isEcommerceAccount && <span className="text-[9px] bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-bold">E-commerce</span>}
-                    </div>
-                    <h2 className="text-xl font-bold text-gray-900 leading-snug">{narrative.headline}</h2>
-                    {/* status badge */}
-                    {s && s.cpaVsTarget !== null && (
-                      <span className={cn(
-                        'mt-2 inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full',
-                        s.cpaVsTarget > 10
-                          ? 'bg-red-50 text-red-600 border border-red-200'
-                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      )}>
-                        <span className={cn('w-1.5 h-1.5 rounded-full', s.cpaVsTarget > 10 ? 'bg-red-500' : 'bg-emerald-500')} />
-                        {s.cpaVsTarget > 10
-                          ? `CPA เกินเป้า ${s.cpaVsTarget}%`
-                          : `ดีมาก · CPA ต่ำกว่าเป้า ${Math.abs(s.cpaVsTarget)}%`}
-                      </span>
-                    )}
-                  </div>
-                  {s && (
-                    <div className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 bg-gray-50 text-xs text-gray-500 font-medium">
-                      {DATE_RANGES.find((r) => r.value === dateRange)?.label}
-                    </div>
-                  )}
-                </div>
-
-                {/* ── KPI Cards ── */}
-                {s && (
-                  <>
-                  <div className={cn('grid gap-px bg-gray-100', isEcommerceAccount ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4')}>
-                    {[
-                      {
-                        label: 'Total Spend',
-                        value: formatCurrency(s.totalCost),
-                        helper: `${formatNumber(s.totalImpressions)} impressions`,
-                        color: 'text-blue-600',
-                        changeKey: 'cost',
-                        changeVal: s.changes?.totalCost,
-                        eco: false,
-                      },
-                      {
-                        label: 'Conversions',
-                        value: formatConversions(s.totalConversions),
-                        helper: `Conv Rate ${((s.totalConversions / Math.max(1, s.totalClicks)) * 100).toFixed(2)}%`,
-                        color: 'text-emerald-600',
-                        changeKey: 'conversions',
-                        changeVal: s.changes?.totalConversions,
-                        eco: false,
-                      },
-                      ...(isEcommerceAccount ? [
-                        {
-                          label: 'Conv. Value',
-                          value: formatCurrency(totalConvValue),
-                          helper: 'ยอดขายรวมจากโฆษณา',
-                          color: 'text-emerald-700',
-                          changeKey: 'conversions',
-                          changeVal: null as null,
-                          eco: true,
-                        },
-                        {
-                          label: 'ROAS',
-                          value: `${accountRoas.toFixed(2)}x`,
-                          helper: accountRoas >= 3 ? 'ดีมาก — พร้อม scale' : accountRoas >= 1 ? 'คุ้มทุน — ยังปรับได้' : 'ต่ำกว่าคุ้มทุน',
-                          color: accountRoas >= 3 ? 'text-emerald-600' : accountRoas >= 1 ? 'text-yellow-600' : 'text-red-500',
-                          changeKey: 'ctr',
-                          changeVal: null as null,
-                          eco: true,
-                        },
-                      ] : []),
-                      {
-                        label: isEcommerceAccount ? 'Cost/Purchase' : 'Avg. CPA',
-                        value: formatCurrency(s.blendedCPA),
-                        helper: s.targetCPA > 0 ? `Target ฿${s.targetCPA.toLocaleString('th-TH')}` : undefined,
-                        color: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? 'text-red-500' : 'text-emerald-600',
-                        changeKey: 'cpa',
-                        changeVal: s.changes?.blendedCPA,
-                        eco: false,
-                      },
-                      {
-                        label: 'CTR',
-                        value: `${s.blendedCTR.toFixed(2)}%`,
-                        helper: `${formatNumber(s.totalClicks)} clicks`,
-                        color: 'text-violet-600',
-                        changeKey: 'ctr',
-                        changeVal: s.changes?.blendedCTR,
-                        eco: false,
-                      },
-                    ].map((m) => (
-                      <div key={m.label} className={cn('px-5 py-4 space-y-1', m.eco ? 'bg-emerald-50' : 'bg-white')}>
-                        <p className={cn('text-[11px] font-semibold uppercase tracking-wide', m.eco ? 'text-emerald-600' : 'text-gray-400')}>{m.label}</p>
-                        <div className="flex items-baseline gap-2 flex-wrap">
-                          <p className={cn('text-2xl font-bold', m.color)}>{m.value}</p>
-                          <ChangeBadge metricKey={m.changeKey} value={m.changeVal} />
-                        </div>
-                        {m.helper && <p className={cn('text-[11px]', m.eco ? 'text-emerald-500' : 'text-gray-400')}>{m.helper}</p>}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Trend line chart — cost + conversions over time */}
-                  {timeData && timeData.length > 1 && (
-                    <div className="px-5 pt-5 pb-2">
-                      <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-3">Trend — Cost & Conversions</p>
-                      <TrendChart data={[...timeData].sort((a, b) => a.date.localeCompare(b.date)).map((d) => ({
-                        date: d.date.slice(5),
-                        cost: parseFloat(d.cost.toFixed(0)),
-                        conv: parseFloat(d.conversions.toFixed(2)),
-                      }))} />
-                      <div className="flex items-center gap-4 mt-1 justify-center">
-                        <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-blue-400 rounded" /><span className="text-[10px] text-gray-400">Cost</span></div>
-                        <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-emerald-400 rounded" /><span className="text-[10px] text-gray-400">Conversions</span></div>
-                      </div>
-                    </div>
-                  )}
-                  </>
-                )}
-
-                {/* ── Executive Summary — 4-section structured layout ── */}
-                <div className="border-t border-gray-100">
-                  <div className="px-6 pt-5 pb-2">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-blue-500">Executive Summary</p>
-                  </div>
-
-                  <div className="px-6 pb-6 space-y-3">
-
-                    {/* 1 · Performance Summary */}
-                    {s && (
-                      <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-5 py-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Performance Summary</p>
-                          {isEcommerceAccount && <span className="text-[9px] bg-emerald-200 text-emerald-800 rounded-full px-1.5 py-0.5 font-bold">E-commerce</span>}
-                        </div>
-                        {isEcommerceAccount ? (
-                          <p className="text-sm leading-relaxed text-gray-800">
-                            ในช่วง{' '}<span className="font-semibold text-gray-900">{DATE_RANGES.find(r => r.value === dateRange)?.label ?? dateRange}</span>{' '}
-                            account ใช้งบ{' '}<span className="font-semibold text-gray-900">฿{Math.round(s.totalCost).toLocaleString('th-TH')}</span>{' '}
-                            และสร้างยอดขายได้{' '}<span className="font-semibold text-emerald-700">฿{Math.round(totalConvValue).toLocaleString('th-TH')}</span>{' '}
-                            ROAS{' '}<span className={cn('font-semibold', accountRoas >= 3 ? 'text-emerald-700' : accountRoas >= 1 ? 'text-yellow-600' : 'text-red-500')}>{accountRoas.toFixed(2)}x</span>{' '}
-                            — ทุก ฿1 ที่ลงโฆษณาสร้างยอดขาย ฿{accountRoas.toFixed(2)}{' '}
-                            {accountRoas >= 3 ? 'ถือว่าดีมาก มีโอกาส scale ต่อได้' : accountRoas >= 1 ? 'คุ้มทุนแล้ว แต่ยังมีช่องว่างปรับปรุง' : 'ยังต่ำกว่าคุ้มทุน ต้องปรับ strategy'}{' '}
-                            จำนวน Conversion ทั้งหมด{' '}<span className="font-semibold text-gray-900">{formatConversions(s.totalConversions)}</span>{' '}รายการ
-                          </p>
-                        ) : (
-                          <p className="text-sm leading-relaxed text-gray-800">
-                            ในช่วง{' '}<span className="font-semibold text-gray-900">{DATE_RANGES.find(r => r.value === dateRange)?.label ?? dateRange}</span>{' '}
-                            account ใช้งบทั้งหมด{' '}
-                            <span className="font-semibold text-gray-900">฿{Math.round(s.totalCost).toLocaleString('th-TH')}</span>{' '}
-                            และสร้างได้{' '}
-                            <span className="font-semibold text-gray-900">{formatConversions(s.totalConversions)} conversions</span>{' '}
-                            โดยมี CPA เฉลี่ยอยู่ที่{' '}
-                            <span className="font-semibold text-gray-900">฿{Math.round(s.blendedCPA).toLocaleString('th-TH')}</span>
-                            {s.targetCPA > 0 && (
-                              <> ซึ่ง{s.cpaVsTarget !== null && s.cpaVsTarget < 0 ? 'ต่ำกว่า' : 'สูงกว่า'}เป้าหมาย <span className="font-semibold text-gray-900">฿{s.targetCPA.toLocaleString('th-TH')}</span>
-                              {s.cpaVsTarget !== null && s.cpaVsTarget < 0 && (
-                                <> ประมาณ <span className="font-semibold text-emerald-700">{Math.abs(s.cpaVsTarget)}%</span></>
-                              )}</>
-                            )}{' '}
-                            {s.cpaVsTarget !== null && s.cpaVsTarget <= 0
-                              ? 'โดยรวมถือว่าประสิทธิภาพดีมาก และยังมีโอกาส scale ต่อได้'
-                              : 'ควรปรับ bid strategy เพื่อลด CPA ให้เข้าเป้า'
-                            }
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {/* 2 · Best Performing Campaign */}
-                    {narrative.winners && (
-                      <div className="rounded-xl bg-white border border-gray-200 px-5 py-4">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">Best Performing Campaign</p>
-                        <div className="flex items-start gap-3">
-                          <div className="shrink-0 w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center mt-0.5">
-                            <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                            </svg>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 leading-snug">{narrative.winners}</p>
-                            {s && (() => {
-                              const best = report?.campaigns?.filter(c => c.conversions > 0).sort((a,b) => a.cpa - b.cpa)[0]
-                              return best ? (
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                    CPA ฿{Math.round(best.cpa).toLocaleString('th-TH')}
-                                  </span>
-                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                                    {Math.round(best.conversions)} Conversions
-                                  </span>
-                                  <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 px-2.5 py-1 rounded-full bg-gray-50 border border-gray-200">
-                                    เหมาะสำหรับ scale งบ
-                                  </span>
-                                </div>
-                              ) : null
-                            })()}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 3 · Optimization Opportunity */}
-                    {narrative.wastedBudget && (
-                      <div className="rounded-xl bg-amber-50 border border-amber-200 px-5 py-4 flex items-start gap-3">
-                        <div className="shrink-0 w-8 h-8 rounded-lg bg-amber-200 flex items-center justify-center mt-0.5">
-                          <svg className="w-4 h-4 text-amber-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-                          </svg>
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1.5">Optimization Opportunity</p>
-                          <p className="text-sm text-amber-900 leading-relaxed">{narrative.wastedBudget}</p>
-                          <p className="mt-1.5 text-[11px] text-amber-700 font-medium">ควรเพิ่มเป็น Negative Keywords เพื่อลดค่าใช้จ่ายที่ไม่จำเป็น</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 4 · Next Step */}
-                    {(narrative.strategicNextStep || (narrative.actions && narrative.actions.length > 0)) && (
-                      <div className="rounded-xl bg-blue-50 border border-blue-200 px-5 py-4 flex items-start gap-3">
-                        <div className="shrink-0 w-8 h-8 rounded-lg bg-blue-200 flex items-center justify-center mt-0.5">
-                          <svg className="w-4 h-4 text-blue-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                          </svg>
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-700 mb-1.5">Next Step</p>
-                          <p className="text-sm text-blue-900 leading-relaxed">
-                            {narrative.strategicNextStep || narrative.actions[0]}
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                  </div>
-                </div>
-
-              </div>
-
-              {/* ── BLOCK 3: Key Insights — horizontal scroll chips ── */}
-              {narrative.keyInsights && narrative.keyInsights.length > 0 && (
-                <div className="bg-sky-50 border border-sky-200 rounded-2xl p-5">
-                  <p className="text-[11px] font-bold text-sky-700 uppercase tracking-wide mb-3">Key Data Insights</p>
-                  <div className="space-y-2">
-                    {narrative.keyInsights.map((insight, i) => (
-                      <div key={i} className="flex items-start gap-3 bg-white rounded-xl px-4 py-3 border border-sky-100 shadow-sm">
-                        <span className="shrink-0 w-5 h-5 rounded-full bg-sky-100 text-sky-600 text-[10px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
-                        <span className="text-sm text-gray-700 leading-relaxed">{insight}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ── BLOCK 4: Performance Overview + Winners/Concerns ── */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Winners */}
-                <div className="bg-white border border-emerald-200 rounded-2xl overflow-hidden">
-                  <div className="h-0.5 bg-emerald-400" />
-                  <div className="p-5">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                      <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wide">จุดเด่น · Winners</p>
-                    </div>
-                    <p className="text-sm text-gray-700 leading-relaxed">{narrative.winners}</p>
-                  </div>
-                </div>
-                {/* Concerns */}
-                <div className="bg-white border border-rose-200 rounded-2xl overflow-hidden">
-                  <div className="h-0.5 bg-rose-400" />
-                  <div className="p-5">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="w-2 h-2 rounded-full bg-rose-400" />
-                      <p className="text-[11px] font-bold text-rose-600 uppercase tracking-wide">จุดเสี่ยง · Concerns</p>
-                    </div>
-                    <p className="text-sm text-gray-700 leading-relaxed">{narrative.concerns}</p>
-                  </div>
-                </div>
-              </div>
-
-
-              {/* ── BLOCK 5: Campaign Bar Chart ── */}
-              {report && report.campaigns.length > 0 && (
-                <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-                  <div className="px-5 py-4 border-b border-gray-100">
-                    <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">Campaign Spend vs Conversions</p>
-                  </div>
-                  <div className="px-5 py-4">
-                    <CampaignBarChart data={[...report.campaigns].sort((a, b) => b.cost - a.cost).slice(0, 6).map((c) => ({
-                      name: c.campaignName.length > 18 ? c.campaignName.slice(0, 18) + '…' : c.campaignName,
-                      spend: parseFloat(c.cost.toFixed(0)),
-                      conv: parseFloat(c.conversions.toFixed(2)),
-                    }))} />
-                    <div className="flex items-center gap-4 mt-1 justify-center">
-                      <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded bg-blue-200" /><span className="text-[10px] text-gray-400">Spend</span></div>
-                      <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded bg-emerald-300" /><span className="text-[10px] text-gray-400">Conversions</span></div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ── BLOCK 6: Device / Location / Wasted — light pills ── */}
-              {(narrative.deviceAnalysis || narrative.locationInsights || narrative.wastedBudget) && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {narrative.deviceAnalysis && (
-                    <div className="bg-white border border-violet-200 rounded-xl p-4">
-                      <p className="text-[11px] font-bold text-violet-600 uppercase tracking-wide mb-2">Device Analysis</p>
-                      <p className="text-sm text-gray-700 leading-relaxed">{narrative.deviceAnalysis}</p>
-                    </div>
-                  )}
-                  {narrative.locationInsights && (
-                    <div className="bg-white border border-amber-200 rounded-xl p-4">
-                      <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wide mb-2">Location Insights</p>
-                      <p className="text-sm text-gray-700 leading-relaxed">{narrative.locationInsights}</p>
-                    </div>
-                  )}
-                  {narrative.wastedBudget && (
-                    <div className="bg-white border border-rose-200 rounded-xl p-4">
-                      <p className="text-[11px] font-bold text-rose-600 uppercase tracking-wide mb-2">Wasted Budget</p>
-                      <p className="text-sm text-gray-700 leading-relaxed">{narrative.wastedBudget}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ── BLOCK 7: Strategic Planner ── */}
-              {(narrative.strategicContext || narrative.strategicNextStep || (narrative.clientTalkingPoints && narrative.clientTalkingPoints.length > 0)) && (
-                <div className="bg-white border border-indigo-200 rounded-2xl overflow-hidden">
-                  <div className="h-0.5 bg-gradient-to-r from-indigo-400 to-violet-400" />
-                  <div className="px-5 py-4 border-b border-indigo-50">
-                    <div className="flex items-center gap-2">
-                      <Zap className="w-3.5 h-3.5 text-indigo-500" />
-                      <p className="text-[11px] font-bold text-indigo-700 uppercase tracking-wide">Strategic Planner · สำหรับทีมอธิบายลูกค้า</p>
-                    </div>
-                  </div>
-                  <div className="p-5 space-y-4">
-                    {narrative.strategicContext && (
-                      <div>
-                        <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wide mb-1.5">Situation Analysis — ทำไมตัวเลขถึงเป็นแบบนี้</p>
-                        <p className="text-sm text-gray-700 leading-relaxed bg-indigo-50 rounded-xl px-4 py-3 border border-indigo-100">{narrative.strategicContext}</p>
-                      </div>
-                    )}
-                    {narrative.strategicNextStep && (
-                      <div>
-                        <p className="text-[10px] font-semibold text-violet-600 uppercase tracking-wide mb-1.5">Strategic Priority · 30 วันข้างหน้า</p>
-                        <p className="text-sm text-gray-700 leading-relaxed bg-violet-50 rounded-xl px-4 py-3 border border-violet-100">{narrative.strategicNextStep}</p>
-                      </div>
-                    )}
-                    {narrative.clientTalkingPoints && narrative.clientTalkingPoints.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-semibold text-indigo-600 uppercase tracking-wide mb-2">Client Talking Points · ประโยคที่พูดกับลูกค้าได้เลย</p>
-                        <div className="space-y-2">
-                          {narrative.clientTalkingPoints.map((point, i) => (
-                            <div key={i} className="flex items-start gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
-                              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
-                              <span className="text-sm text-gray-700 leading-relaxed">{point}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* ── BLOCK 8: Action Items ── */}
-              {narrative.actions.length > 0 && (
-                <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3">
-                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">Action Items · สิ่งที่ต้องทำ</p>
-                  <ol className="space-y-2">
-                    {narrative.actions.map((action, i) => (
-                      <li key={i} className="flex items-start gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
-                        <span className="shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
-                        <span className="text-sm text-gray-700 leading-relaxed">{action}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-
-              {/* ── BLOCK 9: Summary Snapshot ── */}
-              {s && (
-                <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-                  <div className="h-0.5 bg-gradient-to-r from-blue-400 to-emerald-400" />
-                  <div className="px-5 py-4 border-b border-gray-100">
-                    <div className="flex items-center gap-2">
-                      <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">สรุปภาพรวม · Summary Snapshot</p>
-                      {isEcommerceAccount && <span className="text-[10px] bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-semibold">E-commerce Mode</span>}
-                    </div>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {/* Metric row */}
-                    <div className={cn('grid gap-px bg-gray-100', isEcommerceAccount ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4')}>
-                      {[
-                        { label: 'Total Spend',   value: formatCurrency(s.totalCost),          color: 'text-blue-600',    eco: false },
-                        { label: 'Conversions',   value: formatConversions(s.totalConversions), color: 'text-emerald-600', eco: false },
-                        ...(isEcommerceAccount ? [
-                          { label: 'Conv. Value', value: formatCurrency(totalConvValue),        color: 'text-emerald-700', eco: true },
-                          { label: 'ROAS',        value: `${accountRoas.toFixed(2)}x`,          color: accountRoas >= 3 ? 'text-emerald-600' : accountRoas >= 1 ? 'text-yellow-600' : 'text-red-500', eco: true },
-                        ] : []),
-                        { label: isEcommerceAccount ? 'Cost/Purchase' : 'Blended CPA', value: formatCurrency(s.blendedCPA), color: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? 'text-red-500' : 'text-emerald-600', eco: false },
-                        { label: 'CTR',           value: `${s.blendedCTR.toFixed(2)}%`,        color: 'text-violet-600',  eco: false },
-                      ].map((m) => (
-                        <div key={m.label} className={cn('px-5 py-4 text-center space-y-1', m.eco ? 'bg-emerald-50' : 'bg-white')}>
-                          <p className={cn('text-[11px] font-medium', m.eco ? 'text-emerald-500' : 'text-gray-400')}>{m.label}</p>
-                          <p className={cn('text-xl font-bold', m.color)}>{m.value}</p>
-                        </div>
-                      ))}
-                    </div>
-                    {/* CPA vs target bar */}
-                    {s.cpaVsTarget !== null && (
-                      <div className="px-5 py-4 flex items-center gap-4">
-                        <div className="shrink-0 text-sm font-medium text-gray-700">
-                          CPA vs Target
-                        </div>
-                        <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className={cn('h-full rounded-full transition-all', s.cpaVsTarget > 10 ? 'bg-red-400' : 'bg-emerald-400')}
-                            style={{ width: `${Math.min(100, Math.abs(s.cpaVsTarget))}%` }}
-                          />
-                        </div>
-                        <div className={cn('shrink-0 text-sm font-bold', s.cpaVsTarget > 10 ? 'text-red-500' : 'text-emerald-600')}>
-                          {s.cpaVsTarget > 0 ? `+${s.cpaVsTarget}% เกินเป้า` : `${Math.abs(s.cpaVsTarget)}% ต่ำกว่าเป้า`}
-                        </div>
-                      </div>
-                    )}
-                    {/* Executive Summary paragraph */}
-                    {narrative.executiveSummary && (
-                      <div className="px-5 py-4 space-y-1.5">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Executive Summary</p>
-                        <p className="text-sm text-gray-700 leading-relaxed">{narrative.executiveSummary}</p>
-                      </div>
-                    )}
-                    {/* Outlook */}
-                    <div className="px-5 py-4 flex items-start gap-3 bg-sky-50">
-                      <TrendingUp className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
-                      <div className="space-y-0.5">
-                        <p className="text-[10px] font-bold text-sky-600 uppercase tracking-widest">Outlook</p>
-                        <p className="text-sm text-sky-800 leading-relaxed">{narrative.outlook}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+      {/* ── Market Share / Visibility Share (โมดูลแยก — ไม่กระทบ report เดิม) ── */}
+      {selectedId && !loading && (
+        <MarketShareSection customerId={selectedId} dateRange={dateRange} />
       )}
 
       {/* ── Dimension Tabs ── */}
@@ -1957,27 +1818,72 @@ ${ctx}`
                   <>
                     {/* 1. Performance Summary — 6 metric cards */}
                     <div className="p-5 space-y-3">
-                      <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">Performance Summary</p>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                      <p className="text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.1em]">Performance Summary</p>
+                      <div className={cn('grid grid-cols-2 md:grid-cols-4 gap-3', isEcommerceAccount ? 'xl:grid-cols-8' : 'xl:grid-cols-6')}>
                         {[
-                          { label: 'Total Spend',   value: formatCurrency(s.totalCost),          changeKey: 'cost',        changeVal: s.changes?.totalCost,        color: 'bg-blue-50 text-blue-700' },
-                          { label: 'Conversions',   value: formatConversions(s.totalConversions), changeKey: 'conversions', changeVal: s.changes?.totalConversions,  color: 'bg-emerald-50 text-emerald-700' },
-                          { label: 'CPA vs Target', value: formatCurrency(s.blendedCPA),         changeKey: 'cpa',         changeVal: s.changes?.blendedCPA,        color: s.cpaVsTarget !== null && s.cpaVsTarget > 20 ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700' },
-                          { label: 'CTR',           value: `${s.blendedCTR.toFixed(2)}%`,        changeKey: 'ctr',         changeVal: s.changes?.blendedCTR,        color: 'bg-purple-50 text-purple-700' },
-                          { label: 'Clicks',        value: formatNumber(s.totalClicks),          changeKey: 'clicks',      changeVal: s.changes?.totalClicks,       color: 'bg-amber-50 text-amber-700' },
-                          { label: 'Impressions',   value: formatNumber(s.totalImpressions),     changeKey: 'impressions', changeVal: s.changes?.totalImpressions,  color: 'bg-gray-50 text-gray-700' },
+                          { label: 'Total Spend',   value: formatCurrency(s.totalCost),          changeKey: 'cost',        changeVal: s.changes?.totalCost,        accent: '#5B9E92', soft: '#EDF4F2' },
+                          { label: 'Conversions',   value: formatConversions(s.totalConversions), changeKey: 'conversions', changeVal: s.changes?.totalConversions,  accent: '#84AE8C', soft: '#F0F6F1' },
+                          ...(isEcommerceAccount ? [
+                            { label: 'Conv. Value', value: formatCurrency(totalConvValue), changeKey: 'conversions', changeVal: null as number | null, accent: '#5B9E92', soft: '#EDF4F2' },
+                            { label: 'ROAS',        value: `${accountRoas.toFixed(2)}x`,   changeKey: 'ctr',         changeVal: null as number | null, accent: accountRoas >= 3 ? '#84AE8C' : accountRoas >= 1 ? '#C9AF6E' : '#D08C8C', soft: '#F0F6F1' },
+                          ] : []),
+                          ...(kpiType === 'ROAS' ? [
+                            { label: 'ROAS vs Target', value: `${accountRoas.toFixed(2)}x`, changeKey: 'ctr', changeVal: null as number | null, accent: accountRoas >= Number(targetROAS) ? '#84AE8C' : '#D08C8C', soft: accountRoas >= Number(targetROAS) ? '#F0F6F1' : '#FAF0F0' },
+                          ] : [
+                            { label: 'CPA vs Target', value: formatCurrency(s.blendedCPA), changeKey: 'cpa', changeVal: s.changes?.blendedCPA, accent: s.cpaVsTarget !== null && s.cpaVsTarget > 20 ? '#D08C8C' : '#84AE8C', soft: s.cpaVsTarget !== null && s.cpaVsTarget > 20 ? '#FAF0F0' : '#F0F6F1' },
+                          ]),
+                          { label: 'CTR',           value: `${s.blendedCTR.toFixed(2)}%`,        changeKey: 'ctr',         changeVal: s.changes?.blendedCTR,        accent: '#A48EB8', soft: '#F5F2F8' },
+                          { label: 'Clicks',        value: formatNumber(s.totalClicks),          changeKey: 'clicks',      changeVal: s.changes?.totalClicks,       accent: '#C9AF6E', soft: '#F9F6EE' },
+                          { label: 'Impressions',   value: formatNumber(s.totalImpressions),     changeKey: 'impressions', changeVal: s.changes?.totalImpressions,  accent: '#8FA3B0', soft: '#F1F4F6' },
                         ].map((m) => (
-                          <div key={m.label} className={cn('rounded-xl p-3 text-center space-y-1', m.color.split(' ')[0])}>
-                            <p className={cn('text-xl font-bold', m.color.split(' ')[1])}>{m.value}</p>
-                            <p className="text-[11px] opacity-70 font-medium">{m.label}</p>
-                            {m.label === 'CPA vs Target' && s.cpaVsTarget !== null && (
-                              <p className="text-[10px] font-semibold">{s.cpaVsTarget > 0 ? `+${s.cpaVsTarget}% เกินเป้า` : `${s.cpaVsTarget}% ต่ำกว่าเป้า`}</p>
+                          <div key={m.label} className="rounded-2xl p-3.5 space-y-1.5 border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)]">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: m.accent }} />
+                              <p className="text-[10px] font-semibold text-[#93A1AB] uppercase tracking-wide truncate">{m.label}</p>
+                            </div>
+                            <p className="text-xl font-bold tabular-nums" style={{ color: m.accent }}>{m.value}</p>
+                            {m.label === 'ROAS vs Target' && (
+                              <p className="text-[10px] font-semibold rounded-full inline-block px-2 py-0.5" style={{ background: m.soft, color: m.accent }}>
+                                {Number(targetROAS) > 0
+                                  ? (accountRoas >= Number(targetROAS)
+                                      ? `+${(((accountRoas - Number(targetROAS)) / Number(targetROAS)) * 100).toFixed(1)}% ถึงเป้า ${targetROAS}x`
+                                      : `${(((accountRoas - Number(targetROAS)) / Number(targetROAS)) * 100).toFixed(1)}% ต่ำกว่าเป้า ${targetROAS}x`)
+                                  : `เป้า ${targetROAS}x`}
+                              </p>
                             )}
-                            <div className="flex justify-center"><ChangeBadge metricKey={m.changeKey} value={m.changeVal} /></div>
+                            {m.label === 'CPA vs Target' && s.cpaVsTarget !== null && (
+                              <p className="text-[10px] font-semibold rounded-full inline-block px-2 py-0.5" style={{ background: m.soft, color: m.accent }}>{s.cpaVsTarget > 0 ? `+${s.cpaVsTarget}% เกินเป้า` : `${s.cpaVsTarget}% ต่ำกว่าเป้า`}</p>
+                            )}
+                            <ChangeBadge metricKey={m.changeKey} value={m.changeVal} />
                           </div>
                         ))}
                       </div>
                     </div>
+
+                    {/* 1.5 Charts row — spend share donut + top campaigns bars */}
+                    {(report?.campaigns?.length ?? 0) > 0 && (
+                      <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-4">
+                          <p className="text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.1em] mb-3">Spend Share by Campaign</p>
+                          <DonutChart
+                            centerLabel="Total Spend"
+                            format={(v) => `฿${Math.round(v).toLocaleString()}`}
+                            data={(() => {
+                              const sorted = [...(report?.campaigns ?? [])].sort((a, b) => b.cost - a.cost)
+                              const top = sorted.slice(0, 5).map(c => ({ name: c.campaignName.replace(/^CVC\s*-\s*/, ''), value: c.cost }))
+                              const rest = sorted.slice(5).reduce((sum, c) => sum + c.cost, 0)
+                              return rest > 0 ? [...top, { name: 'อื่นๆ', value: rest }] : top
+                            })()} />
+                        </div>
+                        <div className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-4">
+                          <p className="text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.1em] mb-3">Spend vs Conversions — Top Campaigns</p>
+                          <CampaignBarChart data={[...(report?.campaigns ?? [])].sort((a, b) => b.cost - a.cost).slice(0, 6).map(c => ({
+                            name: c.campaignName.replace(/^CVC\s*-\s*/, '').slice(0, 14),
+                            spend: c.cost, conv: c.conversions,
+                          }))} />
+                        </div>
+                      </div>
+                    )}
 
                     {/* 2. Campaign Table — full inline */}
                     <div>
@@ -1991,10 +1897,18 @@ ${ctx}`
                         <div className="overflow-x-auto">
                           <table className="w-full">
                             <thead className="bg-gray-50 border-b border-gray-100">
-                              <tr><Th>Campaign</Th><Th className="text-right">Spend</Th><Th className="text-right">Conv.</Th><Th className="text-right">CPA</Th><Th className="text-right">Clicks</Th><Th className="text-right">CTR</Th><Th className="text-right">CPC</Th></tr>
+                              <tr>
+                                <SortTh col="campaignName" label="Campaign" {...campSort} />
+                                <SortTh col="cost"        label="Spend"  {...campSort} className="text-right" />
+                                <SortTh col="conversions" label="Conv."  {...campSort} className="text-right" />
+                                <SortTh col="cpa"         label="CPA"    {...campSort} className="text-right" />
+                                <SortTh col="clicks"      label="Clicks" {...campSort} className="text-right" />
+                                <SortTh col="ctr"         label="CTR"    {...campSort} className="text-right" />
+                                <SortTh col="cpc"         label="CPC"    {...campSort} className="text-right" />
+                              </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-50">
-                              {report.campaigns.map((c, i) => (
+                              {(campSort.sorted as unknown as CampaignRow[]).map((c, i) => (
                                 <tr key={i} className="hover:bg-gray-50 transition-colors">
                                   <Td><span className="font-medium text-gray-900">{c.campaignName}</span></Td>
                                   <Td className="text-right">
@@ -2537,7 +2451,7 @@ ${ctx}`
                 <div className="px-4 py-3 border-b border-gray-50">
                   <span className="text-sm font-semibold text-gray-700">Audiences ({audiences?.length ?? 0})</span>
                 </div>
-                {!audiences?.length ? <EmptyDim /> : (
+                {!audiences?.length ? <EmptyDim note="ข้อมูลนี้มาจาก audience ที่ผูกกับแคมเปญ Search/Display (targeting หรือ observation) — แคมเปญ Performance Max ไม่รายงานผลราย audience ผ่าน Google API (audience ใน PMax เป็นเพียง signal) ถ้าบัญชีเป็น PMax ทั้งหมด ตารางนี้จะว่าง" /> : (
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead className="bg-gray-50 border-b border-gray-100">
@@ -2616,9 +2530,18 @@ ${ctx}`
                   <span className="text-sm font-semibold text-gray-700">Devices</span>
                 </div>
                 {!devices?.length ? <EmptyDim /> : (
+                  <>
+                  <div className="p-4 pb-0">
+                    <div className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-4 max-w-xl">
+                      <p className="text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.1em] mb-3">Impressions by Device</p>
+                      <DonutChart centerLabel="Impressions"
+                        format={(v) => formatNumber(v)}
+                        data={devices.map(d => ({ name: DEVICE_LABEL[d.device] ?? d.device, value: d.impressions }))} />
+                    </div>
+                  </div>
                   <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
                     {devices.map((d, i) => (
-                      <div key={i} className="bg-gray-50 rounded-xl p-4 space-y-2">
+                      <div key={i} className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-4 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold text-gray-800 text-sm">{DEVICE_LABEL[d.device] ?? d.device}</span>
                           <span className="text-xs text-gray-400">{maxImpDev > 0 ? Math.round((d.impressions / maxImpDev) * 100) : 0}%</span>
@@ -2635,6 +2558,7 @@ ${ctx}`
                       </div>
                     ))}
                   </div>
+                  </>
                 )}
               </div>
             )}
@@ -2646,6 +2570,13 @@ ${ctx}`
                   <span className="text-sm font-semibold text-gray-700">Daily Performance ({timeData?.length ?? 0} days)</span>
                 </div>
                 {!timeData?.length ? <EmptyDim /> : (
+                  <>
+                  <div className="p-4 pb-2">
+                    <div className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-4">
+                      <p className="text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.1em] mb-3">Spend & Conversions Trend</p>
+                      <TrendChart data={[...timeData].sort((a, b) => a.date.localeCompare(b.date)).map(d => ({ date: d.date.slice(5), cost: d.cost, conv: d.conversions }))} />
+                    </div>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead className="bg-gray-50 border-b border-gray-100">
@@ -2664,6 +2595,7 @@ ${ctx}`
                       </tbody>
                     </table>
                   </div>
+                  </>
                 )}
               </div>
             )}
@@ -2675,6 +2607,16 @@ ${ctx}`
                   <span className="text-sm font-semibold text-gray-700">Conversion Actions</span>
                 </div>
                 {!conversions?.actions?.length ? <EmptyDim /> : (
+                  <>
+                  <div className="p-4 pb-2">
+                    <div className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-4 max-w-xl">
+                      <p className="text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.1em] mb-3">Conversions by Action</p>
+                      <DonutChart centerLabel="Conversions"
+                        format={(v) => formatConversions(v)}
+                        data={[...conversions.actions].sort((a, b) => b.conversions - a.conversions).slice(0, 6)
+                          .map(a => ({ name: a.conversionName, value: a.conversions })).filter(x => x.value > 0)} />
+                    </div>
+                  </div>
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead className="bg-gray-50 border-b border-gray-100">
@@ -2694,6 +2636,7 @@ ${ctx}`
                       </tbody>
                     </table>
                   </div>
+                  </>
                 )}
               </div>
             )}
@@ -2706,23 +2649,30 @@ ${ctx}`
                     {/* Funnel */}
                     {ecommerce.ecommerceFunnel ? (
                       <div className="space-y-3">
-                        <p className="text-sm font-semibold text-gray-700">Sales Funnel</p>
-                        <div className="grid grid-cols-4 gap-2">
-                          <FunnelStep label="View Item" value={ecommerce.ecommerceFunnel.view_item} color="bg-blue-50 text-blue-700" />
-                          <FunnelStep label="Add to Cart" value={ecommerce.ecommerceFunnel.add_to_cart} prev={ecommerce.ecommerceFunnel.view_item} color="bg-purple-50 text-purple-700" />
-                          <FunnelStep label="Begin Checkout" value={ecommerce.ecommerceFunnel.begin_checkout} prev={ecommerce.ecommerceFunnel.add_to_cart} color="bg-amber-50 text-amber-700" />
-                          <FunnelStep label="Purchase" value={ecommerce.ecommerceFunnel.purchase} prev={ecommerce.ecommerceFunnel.begin_checkout} color="bg-emerald-50 text-emerald-700" />
+                        <p className="text-[10px] font-bold text-[#93A1AB] uppercase tracking-[0.1em]">Sales Funnel</p>
+                        <div className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-4">
+                          <FunnelBars stages={[
+                            { label: 'View Item',      value: ecommerce.ecommerceFunnel.view_item },
+                            { label: 'Add to Cart',    value: ecommerce.ecommerceFunnel.add_to_cart },
+                            { label: 'Begin Checkout', value: ecommerce.ecommerceFunnel.begin_checkout },
+                            { label: 'Purchase',       value: ecommerce.ecommerceFunnel.purchase },
+                          ]} />
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
                           {[
                             { label: 'Revenue', value: formatCurrency(ecommerce.ecommerceFunnel.revenue) },
-                            { label: 'ROAS', value: ecommerce.ecommerceFunnel.roas > 0 ? `${Number(ecommerce.ecommerceFunnel.roas).toFixed(2)}x` : '—' },
+                            // API บางบัญชีคืน roas=0 ทั้งที่มี revenue — fallback คำนวณ revenue/spend เอง
+                            { label: 'ROAS', value: (() => {
+                              const f = ecommerce.ecommerceFunnel
+                              const r = f.roas > 0 ? Number(f.roas) : (s && s.totalCost > 0 && f.revenue > 0 ? f.revenue / s.totalCost : 0)
+                              return r > 0 ? `${r.toFixed(2)}x` : '—'
+                            })() },
                             { label: 'AOV', value: formatCurrency(ecommerce.ecommerceFunnel.aov) },
                             { label: 'Cart Abandon', value: `${Number(ecommerce.ecommerceFunnel.cartAbandonRate).toFixed(2)}%` },
                           ].map((m) => (
-                            <div key={m.label} className="bg-gray-50 rounded-xl p-3 text-center">
-                              <p className="text-xl font-bold text-gray-900">{m.value}</p>
-                              <p className="text-xs text-gray-500 mt-0.5">{m.label}</p>
+                            <div key={m.label} className="rounded-2xl border border-[#ECEFEE] bg-white shadow-[0_1px_3px_rgba(61,72,82,0.04)] p-3 text-center">
+                              <p className="text-xl font-bold tabular-nums text-[#5B9E92]">{m.value}</p>
+                              <p className="text-[11px] text-[#93A1AB] mt-0.5 font-medium">{m.label}</p>
                             </div>
                           ))}
                         </div>
@@ -2758,38 +2708,495 @@ ${ctx}`
         </div>
       )}
 
-      {/* ── Recommendations ── */}
-      {report?.recommendations && report.recommendations.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-900 text-sm">Recommendations</h2>
-            <p className="text-xs text-gray-400 mt-0.5">จาก performance data — {DATE_RANGES.find((r) => r.value === dateRange)?.label}</p>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {report.recommendations.map((rec, i) => (
-              <div key={i} className="px-5 py-4 flex items-start gap-4">
-                <span className={cn('shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full border mt-0.5', PRIORITY_COLOR[rec.priority])}>
-                  {PRIORITY_LABEL[rec.priority]}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">{rec.title}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{rec.detail}</p>
-                  <p className="text-xs text-blue-600 mt-1.5 font-medium">→ {rec.action}</p>
-                  {rec.estimatedImpact && <p className="text-xs text-emerald-600 mt-0.5">✦ {rec.estimatedImpact}</p>}
-                </div>
-                <span className="shrink-0 text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                  {rec.campaignName === 'All Campaigns' ? 'ทุก campaign' : rec.campaignName.slice(0, 22)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {!loading && !report && !error && selectedId && (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
           <BarChart2 className="w-12 h-12 text-gray-200 mx-auto mb-3" />
           <p className="text-gray-400 text-sm">กำลังโหลดข้อมูลจาก Google Ads API...</p>
+        </div>
+      )}
+
+      {/* ── Performance Report ── (loads after all data is ready) */}
+      {(narrativeLoading || narrative) && (
+        <div className="space-y-4">
+          {/* Header */}
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-blue-500" />
+            <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">Performance Report</span>
+            {narrativeLoading && <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />}
+          </div>
+
+          {narrativeLoading ? (
+            <div className="bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 border border-blue-100 rounded-2xl p-6 space-y-3 animate-pulse">
+              <div className="h-6 bg-blue-100 rounded-lg w-3/4" />
+              <div className="h-4 bg-blue-100 rounded w-full" />
+              <div className="h-4 bg-blue-100 rounded w-5/6" />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="h-20 bg-emerald-100 rounded-xl" />
+                <div className="h-20 bg-red-100 rounded-xl" />
+              </div>
+              <div className="space-y-2">
+                {[1,2,3,4,5].map((i) => <div key={i} className="h-3 bg-blue-100 rounded w-full" />)}
+              </div>
+              <p className="text-center text-xs text-blue-400 italic">กำลังวิเคราะห์ข้อมูลและเขียนรายงาน...</p>
+            </div>
+          ) : narrative && (
+            <>
+              {/* ══════════════════════════════════════════════════════════
+                  PERFORMANCE REPORT CARD — redesigned
+              ══════════════════════════════════════════════════════════ */}
+              <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+
+                {/* gradient accent */}
+                <div className="h-1 bg-gradient-to-r from-blue-500 via-indigo-500 to-violet-500" />
+
+                {/* ── Header ── */}
+                <div className="px-6 pt-5 pb-4 flex items-start justify-between gap-4 flex-wrap border-b border-gray-100">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-blue-500">Performance Report · Strategic Analysis</p>
+                      {isEcommerceAccount && <span className="text-[9px] bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-bold">E-commerce</span>}
+                    </div>
+                    <h2 className="text-xl font-bold text-gray-900 leading-snug">{narrative.headline}</h2>
+                    {/* status badge */}
+                    {s && s.cpaVsTarget !== null && (
+                      <span className={cn(
+                        'mt-2 inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full',
+                        s.cpaVsTarget > 10
+                          ? 'bg-red-50 text-red-600 border border-red-200'
+                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      )}>
+                        <span className={cn('w-1.5 h-1.5 rounded-full', s.cpaVsTarget > 10 ? 'bg-red-500' : 'bg-emerald-500')} />
+                        {s.cpaVsTarget > 10
+                          ? `CPA เกินเป้า ${s.cpaVsTarget}%`
+                          : `ดีมาก · CPA ต่ำกว่าเป้า ${Math.abs(s.cpaVsTarget)}%`}
+                      </span>
+                    )}
+                  </div>
+                  {s && (
+                    <div className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 bg-gray-50 text-xs text-gray-500 font-medium">
+                      {DATE_RANGES.find((r) => r.value === dateRange)?.label}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── KPI Cards ── */}
+                {s && (
+                  <>
+                  <div className={cn('grid gap-px bg-gray-100', isEcommerceAccount ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4')}>
+                    {[
+                      {
+                        label: 'Total Spend',
+                        value: formatCurrency(s.totalCost),
+                        helper: `${formatNumber(s.totalImpressions)} impressions`,
+                        color: 'text-blue-600',
+                        changeKey: 'cost',
+                        changeVal: s.changes?.totalCost,
+                        eco: false,
+                      },
+                      {
+                        label: 'Conversions',
+                        value: formatConversions(s.totalConversions),
+                        helper: `Conv Rate ${((s.totalConversions / Math.max(1, s.totalClicks)) * 100).toFixed(2)}%`,
+                        color: 'text-emerald-600',
+                        changeKey: 'conversions',
+                        changeVal: s.changes?.totalConversions,
+                        eco: false,
+                      },
+                      ...(isEcommerceAccount ? [
+                        {
+                          label: 'Conv. Value',
+                          value: formatCurrency(totalConvValue),
+                          helper: 'ยอดขายรวมจากโฆษณา',
+                          color: 'text-emerald-700',
+                          changeKey: 'conversions',
+                          changeVal: null as null,
+                          eco: true,
+                        },
+                        {
+                          label: 'ROAS',
+                          value: `${accountRoas.toFixed(2)}x`,
+                          helper: accountRoas >= 3 ? 'ดีมาก — พร้อม scale' : accountRoas >= 1 ? 'คุ้มทุน — ยังปรับได้' : 'ต่ำกว่าคุ้มทุน',
+                          color: accountRoas >= 3 ? 'text-emerald-600' : accountRoas >= 1 ? 'text-yellow-600' : 'text-red-500',
+                          changeKey: 'ctr',
+                          changeVal: null as null,
+                          eco: true,
+                        },
+                      ] : []),
+                      {
+                        label: isEcommerceAccount ? 'Cost/Purchase' : 'Avg. CPA',
+                        value: formatCurrency(s.blendedCPA),
+                        helper: s.targetCPA > 0 ? `Target ฿${s.targetCPA.toLocaleString('th-TH')}` : undefined,
+                        color: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? 'text-red-500' : 'text-emerald-600',
+                        changeKey: 'cpa',
+                        changeVal: s.changes?.blendedCPA,
+                        eco: false,
+                      },
+                      {
+                        label: 'CTR',
+                        value: `${s.blendedCTR.toFixed(2)}%`,
+                        helper: `${formatNumber(s.totalClicks)} clicks`,
+                        color: 'text-violet-600',
+                        changeKey: 'ctr',
+                        changeVal: s.changes?.blendedCTR,
+                        eco: false,
+                      },
+                    ].map((m) => (
+                      <div key={m.label} className={cn('px-5 py-4 space-y-1', m.eco ? 'bg-emerald-50' : 'bg-white')}>
+                        <p className={cn('text-[11px] font-semibold uppercase tracking-wide', m.eco ? 'text-emerald-600' : 'text-gray-400')}>{m.label}</p>
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <p className={cn('text-2xl font-bold', m.color)}>{m.value}</p>
+                          <ChangeBadge metricKey={m.changeKey} value={m.changeVal} />
+                        </div>
+                        {m.helper && <p className={cn('text-[11px]', m.eco ? 'text-emerald-500' : 'text-gray-400')}>{m.helper}</p>}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Trend line chart — cost + conversions over time */}
+                  {timeData && timeData.length > 1 && (
+                    <div className="px-5 pt-5 pb-2">
+                      <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-3">Trend — Cost & Conversions</p>
+                      <TrendChart data={[...timeData].sort((a, b) => a.date.localeCompare(b.date)).map((d) => ({
+                        date: d.date.slice(5),
+                        cost: parseFloat(d.cost.toFixed(0)),
+                        conv: parseFloat(d.conversions.toFixed(2)),
+                      }))} />
+                      <div className="flex items-center gap-4 mt-1 justify-center">
+                        <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-blue-400 rounded" /><span className="text-[10px] text-gray-400">Cost</span></div>
+                        <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-emerald-400 rounded" /><span className="text-[10px] text-gray-400">Conversions</span></div>
+                      </div>
+                    </div>
+                  )}
+                  </>
+                )}
+
+                {/* ── Executive Summary — 4-section structured layout ── */}
+                <div className="border-t border-gray-100">
+                  <div className="px-6 pt-5 pb-2">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-blue-500">Executive Summary</p>
+                  </div>
+
+                  <div className="px-6 pb-6 space-y-3">
+
+                    {/* 1 · Performance Summary */}
+                    {s && (
+                      <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-5 py-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Performance Summary</p>
+                          {isEcommerceAccount && <span className="text-[9px] bg-emerald-200 text-emerald-800 rounded-full px-1.5 py-0.5 font-bold">E-commerce</span>}
+                        </div>
+                        {isEcommerceAccount ? (
+                          <p className="text-sm leading-relaxed text-gray-800">
+                            ในช่วง{' '}<span className="font-semibold text-gray-900">{DATE_RANGES.find(r => r.value === dateRange)?.label ?? dateRange}</span>{' '}
+                            account ใช้งบ{' '}<span className="font-semibold text-gray-900">฿{Math.round(s.totalCost).toLocaleString('th-TH')}</span>{' '}
+                            และสร้างยอดขายได้{' '}<span className="font-semibold text-emerald-700">฿{Math.round(totalConvValue).toLocaleString('th-TH')}</span>{' '}
+                            ROAS{' '}<span className={cn('font-semibold', accountRoas >= 3 ? 'text-emerald-700' : accountRoas >= 1 ? 'text-yellow-600' : 'text-red-500')}>{accountRoas.toFixed(2)}x</span>{' '}
+                            — ทุก ฿1 ที่ลงโฆษณาสร้างยอดขาย ฿{accountRoas.toFixed(2)}{' '}
+                            {accountRoas >= 3 ? 'ถือว่าดีมาก มีโอกาส scale ต่อได้' : accountRoas >= 1 ? 'คุ้มทุนแล้ว แต่ยังมีช่องว่างปรับปรุง' : 'ยังต่ำกว่าคุ้มทุน ต้องปรับ strategy'}{' '}
+                            จำนวน Conversion ทั้งหมด{' '}<span className="font-semibold text-gray-900">{formatConversions(s.totalConversions)}</span>{' '}รายการ
+                          </p>
+                        ) : (
+                          <p className="text-sm leading-relaxed text-gray-800">
+                            ในช่วง{' '}<span className="font-semibold text-gray-900">{DATE_RANGES.find(r => r.value === dateRange)?.label ?? dateRange}</span>{' '}
+                            account ใช้งบทั้งหมด{' '}
+                            <span className="font-semibold text-gray-900">฿{Math.round(s.totalCost).toLocaleString('th-TH')}</span>{' '}
+                            และสร้างได้{' '}
+                            <span className="font-semibold text-gray-900">{formatConversions(s.totalConversions)} conversions</span>{' '}
+                            โดยมี CPA เฉลี่ยอยู่ที่{' '}
+                            <span className="font-semibold text-gray-900">฿{Math.round(s.blendedCPA).toLocaleString('th-TH')}</span>
+                            {s.targetCPA > 0 && (
+                              <> ซึ่ง{s.cpaVsTarget !== null && s.cpaVsTarget < 0 ? 'ต่ำกว่า' : 'สูงกว่า'}เป้าหมาย <span className="font-semibold text-gray-900">฿{s.targetCPA.toLocaleString('th-TH')}</span>
+                              {s.cpaVsTarget !== null && s.cpaVsTarget < 0 && (
+                                <> ประมาณ <span className="font-semibold text-emerald-700">{Math.abs(s.cpaVsTarget)}%</span></>
+                              )}</>
+                            )}{' '}
+                            {s.cpaVsTarget !== null && s.cpaVsTarget <= 0
+                              ? 'โดยรวมถือว่าประสิทธิภาพดีมาก และยังมีโอกาส scale ต่อได้'
+                              : 'ควรปรับ bid strategy เพื่อลด CPA ให้เข้าเป้า'
+                            }
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 2 · Best Performing Campaign */}
+                    {narrative.winners && (
+                      <div className="rounded-xl bg-white border border-gray-200 px-5 py-4">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-3">Best Performing Campaign</p>
+                        <div className="flex items-start gap-3">
+                          <div className="shrink-0 w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center mt-0.5">
+                            <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                            </svg>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 leading-snug">{narrative.winners}</p>
+                            {s && (() => {
+                              const best = report?.campaigns?.filter(c => c.conversions > 0).sort((a,b) => a.cpa - b.cpa)[0]
+                              return best ? (
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    CPA ฿{Math.round(best.cpa).toLocaleString('th-TH')}
+                                  </span>
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                    {Math.round(best.conversions)} Conversions
+                                  </span>
+                                  <span className="inline-flex items-center gap-1 text-[11px] text-gray-500 px-2.5 py-1 rounded-full bg-gray-50 border border-gray-200">
+                                    เหมาะสำหรับ scale งบ
+                                  </span>
+                                </div>
+                              ) : null
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 3 · Optimization Opportunity */}
+                    {narrative.wastedBudget && (
+                      <div className="rounded-xl bg-amber-50 border border-amber-200 px-5 py-4 flex items-start gap-3">
+                        <div className="shrink-0 w-8 h-8 rounded-lg bg-amber-200 flex items-center justify-center mt-0.5">
+                          <svg className="w-4 h-4 text-amber-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1.5">Optimization Opportunity</p>
+                          <p className="text-sm text-amber-900 leading-relaxed">{narrative.wastedBudget}</p>
+                          <p className="mt-1.5 text-[11px] text-amber-700 font-medium">ควรเพิ่มเป็น Negative Keywords เพื่อลดค่าใช้จ่ายที่ไม่จำเป็น</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 4 · Next Step */}
+                    {(narrative.strategicNextStep || (narrative.actions && narrative.actions.length > 0)) && (
+                      <div className="rounded-xl bg-blue-50 border border-blue-200 px-5 py-4 flex items-start gap-3">
+                        <div className="shrink-0 w-8 h-8 rounded-lg bg-blue-200 flex items-center justify-center mt-0.5">
+                          <svg className="w-4 h-4 text-blue-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-700 mb-1.5">Next Step</p>
+                          <p className="text-sm text-blue-900 leading-relaxed">
+                            {narrative.strategicNextStep || narrative.actions[0]}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                </div>
+
+              </div>
+
+              {/* ── BLOCK 3: Key Insights — horizontal scroll chips ── */}
+              {narrative.keyInsights && narrative.keyInsights.length > 0 && (
+                <div className="bg-sky-50 border border-sky-200 rounded-2xl p-5">
+                  <p className="text-[11px] font-bold text-sky-700 uppercase tracking-wide mb-3">Key Data Insights</p>
+                  <div className="space-y-2">
+                    {narrative.keyInsights.map((insight, i) => (
+                      <div key={i} className="flex items-start gap-3 bg-white rounded-xl px-4 py-3 border border-sky-100 shadow-sm">
+                        <span className="shrink-0 w-5 h-5 rounded-full bg-sky-100 text-sky-600 text-[10px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                        <span className="text-sm text-gray-700 leading-relaxed">{insight}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ── BLOCK 4: Performance Overview + Winners/Concerns ── */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Winners */}
+                <div className="bg-white border border-emerald-200 rounded-2xl overflow-hidden">
+                  <div className="h-0.5 bg-emerald-400" />
+                  <div className="p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                      <p className="text-[11px] font-bold text-emerald-700 uppercase tracking-wide">จุดเด่น · Winners</p>
+                    </div>
+                    <p className="text-sm text-gray-700 leading-relaxed">{narrative.winners}</p>
+                  </div>
+                </div>
+                {/* Concerns */}
+                <div className="bg-white border border-rose-200 rounded-2xl overflow-hidden">
+                  <div className="h-0.5 bg-rose-400" />
+                  <div className="p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-2 h-2 rounded-full bg-rose-400" />
+                      <p className="text-[11px] font-bold text-rose-600 uppercase tracking-wide">จุดเสี่ยง · Concerns</p>
+                    </div>
+                    <p className="text-sm text-gray-700 leading-relaxed">{narrative.concerns}</p>
+                  </div>
+                </div>
+              </div>
+
+
+              {/* ── BLOCK 5: Campaign Bar Chart ── */}
+              {report && report.campaigns.length > 0 && (
+                <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-gray-100">
+                    <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">Campaign Spend vs Conversions</p>
+                  </div>
+                  <div className="px-5 py-4">
+                    <CampaignBarChart data={[...report.campaigns].sort((a, b) => b.cost - a.cost).slice(0, 6).map((c) => ({
+                      name: c.campaignName.length > 18 ? c.campaignName.slice(0, 18) + '…' : c.campaignName,
+                      spend: parseFloat(c.cost.toFixed(0)),
+                      conv: parseFloat(c.conversions.toFixed(2)),
+                    }))} />
+                    <div className="flex items-center gap-4 mt-1 justify-center">
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded bg-blue-200" /><span className="text-[10px] text-gray-400">Spend</span></div>
+                      <div className="flex items-center gap-1.5"><div className="w-3 h-2.5 rounded bg-emerald-300" /><span className="text-[10px] text-gray-400">Conversions</span></div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── BLOCK 6: Device / Location / Wasted — light pills ── */}
+              {(narrative.deviceAnalysis || narrative.locationInsights || narrative.wastedBudget) && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {narrative.deviceAnalysis && (
+                    <div className="bg-white border border-violet-200 rounded-xl p-4">
+                      <p className="text-[11px] font-bold text-violet-600 uppercase tracking-wide mb-2">Device Analysis</p>
+                      <p className="text-sm text-gray-700 leading-relaxed">{narrative.deviceAnalysis}</p>
+                    </div>
+                  )}
+                  {narrative.locationInsights && (
+                    <div className="bg-white border border-amber-200 rounded-xl p-4">
+                      <p className="text-[11px] font-bold text-amber-600 uppercase tracking-wide mb-2">Location Insights</p>
+                      <p className="text-sm text-gray-700 leading-relaxed">{narrative.locationInsights}</p>
+                    </div>
+                  )}
+                  {narrative.wastedBudget && (
+                    <div className="bg-white border border-rose-200 rounded-xl p-4">
+                      <p className="text-[11px] font-bold text-rose-600 uppercase tracking-wide mb-2">Wasted Budget</p>
+                      <p className="text-sm text-gray-700 leading-relaxed">{narrative.wastedBudget}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── BLOCK 7: Strategic Planner ── */}
+              {(narrative.strategicContext || narrative.strategicNextStep || (narrative.clientTalkingPoints && narrative.clientTalkingPoints.length > 0)) && (
+                <div className="bg-white border border-indigo-200 rounded-2xl overflow-hidden">
+                  <div className="h-0.5 bg-gradient-to-r from-indigo-400 to-violet-400" />
+                  <div className="px-5 py-4 border-b border-indigo-50">
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-3.5 h-3.5 text-indigo-500" />
+                      <p className="text-[11px] font-bold text-indigo-700 uppercase tracking-wide">Strategic Planner · สำหรับทีมอธิบายลูกค้า</p>
+                    </div>
+                  </div>
+                  <div className="p-5 space-y-4">
+                    {narrative.strategicContext && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wide mb-1.5">Situation Analysis — ทำไมตัวเลขถึงเป็นแบบนี้</p>
+                        <p className="text-sm text-gray-700 leading-relaxed bg-indigo-50 rounded-xl px-4 py-3 border border-indigo-100">{narrative.strategicContext}</p>
+                      </div>
+                    )}
+                    {narrative.strategicNextStep && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-violet-600 uppercase tracking-wide mb-1.5">Strategic Priority · 30 วันข้างหน้า</p>
+                        <p className="text-sm text-gray-700 leading-relaxed bg-violet-50 rounded-xl px-4 py-3 border border-violet-100">{narrative.strategicNextStep}</p>
+                      </div>
+                    )}
+                    {narrative.clientTalkingPoints && narrative.clientTalkingPoints.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-indigo-600 uppercase tracking-wide mb-2">Client Talking Points · ประโยคที่พูดกับลูกค้าได้เลย</p>
+                        <div className="space-y-2">
+                          {narrative.clientTalkingPoints.map((point, i) => (
+                            <div key={i} className="flex items-start gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+                              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
+                              <span className="text-sm text-gray-700 leading-relaxed">{point}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── BLOCK 8: Action Items ── */}
+              {narrative.actions.length > 0 && (
+                <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3">
+                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">Action Items · สิ่งที่ต้องทำ</p>
+                  <ol className="space-y-2">
+                    {narrative.actions.map((action, i) => (
+                      <li key={i} className="flex items-start gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+                        <span className="shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold flex items-center justify-center mt-0.5">{i + 1}</span>
+                        <span className="text-sm text-gray-700 leading-relaxed">{action}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {/* ── BLOCK 9: Summary Snapshot ── */}
+              {s && (
+                <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+                  <div className="h-0.5 bg-gradient-to-r from-blue-400 to-emerald-400" />
+                  <div className="px-5 py-4 border-b border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <p className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">สรุปภาพรวม · Summary Snapshot</p>
+                      {isEcommerceAccount && <span className="text-[10px] bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-full px-2 py-0.5 font-semibold">E-commerce Mode</span>}
+                    </div>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {/* Metric row */}
+                    <div className={cn('grid gap-px bg-gray-100', isEcommerceAccount ? 'grid-cols-2 md:grid-cols-5' : 'grid-cols-2 md:grid-cols-4')}>
+                      {[
+                        { label: 'Total Spend',   value: formatCurrency(s.totalCost),          color: 'text-blue-600',    eco: false },
+                        { label: 'Conversions',   value: formatConversions(s.totalConversions), color: 'text-emerald-600', eco: false },
+                        ...(isEcommerceAccount ? [
+                          { label: 'Conv. Value', value: formatCurrency(totalConvValue),        color: 'text-emerald-700', eco: true },
+                          { label: 'ROAS',        value: `${accountRoas.toFixed(2)}x`,          color: accountRoas >= 3 ? 'text-emerald-600' : accountRoas >= 1 ? 'text-yellow-600' : 'text-red-500', eco: true },
+                        ] : []),
+                        { label: isEcommerceAccount ? 'Cost/Purchase' : 'Blended CPA', value: formatCurrency(s.blendedCPA), color: s.cpaVsTarget !== null && s.cpaVsTarget > 10 ? 'text-red-500' : 'text-emerald-600', eco: false },
+                        { label: 'CTR',           value: `${s.blendedCTR.toFixed(2)}%`,        color: 'text-violet-600',  eco: false },
+                      ].map((m) => (
+                        <div key={m.label} className={cn('px-5 py-4 text-center space-y-1', m.eco ? 'bg-emerald-50' : 'bg-white')}>
+                          <p className={cn('text-[11px] font-medium', m.eco ? 'text-emerald-500' : 'text-gray-400')}>{m.label}</p>
+                          <p className={cn('text-xl font-bold', m.color)}>{m.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {/* CPA vs target bar */}
+                    {s.cpaVsTarget !== null && (
+                      <div className="px-5 py-4 flex items-center gap-4">
+                        <div className="shrink-0 text-sm font-medium text-gray-700">
+                          CPA vs Target
+                        </div>
+                        <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                          <div
+                            className={cn('h-full rounded-full transition-all', s.cpaVsTarget > 10 ? 'bg-red-400' : 'bg-emerald-400')}
+                            style={{ width: `${Math.min(100, Math.abs(s.cpaVsTarget))}%` }}
+                          />
+                        </div>
+                        <div className={cn('shrink-0 text-sm font-bold', s.cpaVsTarget > 10 ? 'text-red-500' : 'text-emerald-600')}>
+                          {s.cpaVsTarget > 0 ? `+${s.cpaVsTarget}% เกินเป้า` : `${Math.abs(s.cpaVsTarget)}% ต่ำกว่าเป้า`}
+                        </div>
+                      </div>
+                    )}
+                    {/* Executive Summary paragraph */}
+                    {narrative.executiveSummary && (
+                      <div className="px-5 py-4 space-y-1.5">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Executive Summary</p>
+                        <p className="text-sm text-gray-700 leading-relaxed">{narrative.executiveSummary}</p>
+                      </div>
+                    )}
+                    {/* Outlook */}
+                    <div className="px-5 py-4 flex items-start gap-3 bg-sky-50">
+                      <TrendingUp className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <p className="text-[10px] font-bold text-sky-600 uppercase tracking-widest">Outlook</p>
+                        <p className="text-sm text-sky-800 leading-relaxed">{narrative.outlook}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -2904,135 +3311,6 @@ ${ctx}`
         </div>
       )}
 
-      {/* ── Media Buyer Chat — ถามต่อจาก AI Report ── */}
-      {report && (
-        <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-          {/* Header — click to collapse/expand */}
-          <button
-            onClick={() => setChatOpen((v) => !v)}
-            className="w-full flex items-center gap-2.5 px-5 py-3.5 border-b border-gray-100 bg-gradient-to-r from-slate-50 to-white hover:from-slate-100 hover:to-slate-50 transition-colors text-left"
-          >
-            <MessageSquare className="w-4 h-4 text-slate-500 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-800">ถามต่อกับ Mercy Expert</p>
-              <p className="text-xs text-gray-400">อ่าน report ครบแล้ว — ถามได้เลย เช่น &quot;ทำไม CPA สูง?&quot;, &quot;ควร scale campaign ไหน?&quot;, &quot;อธิบายให้ลูกค้าฟังยังไง?&quot;</p>
-            </div>
-            {chatOpen
-              ? <ChevronUp className="w-4 h-4 text-slate-400 shrink-0" />
-              : <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
-            }
-          </button>
-
-          {chatOpen && (
-          <>
-          {/* Messages */}
-          {chatMessages.length > 0 && (
-            <div className="px-4 py-4 space-y-3 max-h-[480px] overflow-y-auto">
-              {chatMessages.map((msg, i) => (
-                <div key={i} className={cn('flex gap-2.5', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
-                  {msg.role === 'assistant' && (
-                    <div className="shrink-0 w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center">
-                      <Bot className="w-3.5 h-3.5 text-white" />
-                    </div>
-                  )}
-                  <div className={cn(
-                    'rounded-2xl px-4 py-3 text-sm leading-relaxed max-w-[85%] whitespace-pre-wrap',
-                    msg.role === 'user'
-                      ? 'bg-slate-800 text-white rounded-tr-sm'
-                      : 'bg-slate-50 border border-slate-200 text-gray-800 rounded-tl-sm'
-                  )}>
-                    {msg.content}
-                  </div>
-                  {msg.role === 'user' && (
-                    <div className="shrink-0 w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center">
-                      <User className="w-3.5 h-3.5 text-white" />
-                    </div>
-                  )}
-                </div>
-              ))}
-              {chatLoading && (
-                <div className="flex gap-2.5 justify-start">
-                  <div className="shrink-0 w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center">
-                    <Bot className="w-3.5 h-3.5 text-white" />
-                  </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
-                  </div>
-                </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
-          )}
-
-          {/* Quick prompts — แสดงหลัง opening brief ก่อนทีมเริ่มถาม */}
-          {chatMessages.length <= 1 && (
-            <div className="px-4 py-4 flex flex-wrap gap-2">
-              {[
-                'ทำไม CPA ถึงสูงกว่าเป้า?',
-                'ควร scale campaign ไหนก่อน?',
-                'อธิบายผลให้ลูกค้าฟังยังไง?',
-                'keyword ไหนควร pause?',
-                'budget ควรจัดสรรยังไงเดือนหน้า?',
-              ].map((q) => (
-                <button key={q} onClick={() => {
-                  setChatInput(q)
-                  // auto-send immediately
-                  setTimeout(() => {
-                    const userMsg = { role: 'user' as const, content: q }
-                    setChatMessages((prev) => [...prev, userMsg])
-                    setChatLoading(true)
-                    fetch('/api/chat', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        messages: [...chatMessages, userMsg],
-                        customerId: selectedId,
-                        accountName: selectedAccount?.descriptiveName ?? '',
-                        reportContext: buildReportContext(),
-                      }),
-                    })
-                      .then((r) => r.json() as Promise<{ content: string }>)
-                      .then((d) => setChatMessages((prev) => [...prev, { role: 'assistant', content: d.content }]))
-                      .catch(() => setChatMessages((prev) => [...prev, { role: 'assistant', content: 'ขอโทษครับ เกิดข้อผิดพลาด' }]))
-                      .finally(() => { setChatLoading(false); setChatInput(''); setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100) })
-                  }, 0)
-                }}
-                  className="text-xs px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 transition-colors">
-                  {q}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Input */}
-          <div className="px-4 pb-4 pt-2">
-            <div className="flex gap-2 items-end">
-              <textarea
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() } }}
-                placeholder="ถามเกี่ยวกับ report นี้... (Enter ส่ง, Shift+Enter ขึ้นบรรทัดใหม่)"
-                rows={1}
-                className="flex-1 resize-none rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-slate-400 bg-gray-50 focus:bg-white transition-colors"
-                style={{ minHeight: '42px', maxHeight: '120px' }}
-                onInput={(e) => {
-                  const t = e.target as HTMLTextAreaElement
-                  t.style.height = 'auto'
-                  t.style.height = Math.min(t.scrollHeight, 120) + 'px'
-                }}
-              />
-              <button onClick={sendChat} disabled={!chatInput.trim() || chatLoading}
-                className="shrink-0 w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 disabled:bg-gray-200 disabled:text-gray-400 transition-colors">
-                <Send className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-          </>
-          )}
-        </div>
-      )}
 
     </div>
     </AppShell>

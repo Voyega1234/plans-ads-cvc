@@ -1,7 +1,5 @@
 import NextAuth from 'next-auth'
 import Google from 'next-auth/providers/google'
-import { PrismaAdapter } from '@auth/prisma-adapter'
-import { prisma } from '@/lib/prisma'
 
 async function refreshAccessToken(refreshToken: string) {
   const res = await fetch('https://oauth2.googleapis.com/token', {
@@ -24,7 +22,8 @@ async function refreshAccessToken(refreshToken: string) {
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(prisma),
+  // JWT sessions live in the cookie — no DB adapter needed. Using the Prisma adapter
+  // here caused sign-in to hang/error (SQLite write lock / OAuthAccountNotLinked vs seed).
   providers: [
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID ?? '',

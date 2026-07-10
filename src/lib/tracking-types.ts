@@ -150,3 +150,95 @@ export type AutoTrackingStep =
   | "qa_test"
   | "human_approve"
   | "publish";
+
+// ── Extended scan output types ────────────────────────────────
+export interface DetectedTag {
+  platform: "GTM" | "GA4" | "Google Ads" | "Meta Pixel" | "TikTok Pixel" | "Consent Mode" | "CMP" | "Ecommerce DL" | "Duplicate Risk" | "Hardcoded Tags";
+  status: "found" | "missing" | "partial" | "warning" | "manual_check";
+  evidence: string;
+  recommendation: string;
+  priority: "high" | "medium" | "low";
+  detectedId?: string;
+}
+
+export interface DetectedElement {
+  elementType: "button" | "link" | "form" | "ecommerce" | "booking" | "media" | "download" | "chat" | "social";
+  label: string;
+  selector: string;
+  href?: string;
+  pageUrl?: string;
+  recommendedEvent: string;
+  confidence: number;   // 0–100
+  notes: string;
+  priority: "high" | "medium" | "low";
+}
+
+export interface ScanWarning {
+  code: string;
+  message: string;
+  severity: "critical" | "warning" | "info";
+  fix: string;
+}
+
+export interface TrackingHealthScore {
+  total: number;          // 0–100
+  breakdown: Record<string, number>;
+  status: "excellent" | "good" | "partial" | "weak" | "missing";
+  criticalIssues: string[];
+  quickWins: string[];
+}
+
+export interface RecommendedEventMapping {
+  eventKey: string;
+  displayName: string;
+  ga4EventName: string;
+  googleAdsCategory: string;
+  metaEventName: string;
+  tiktokEventName: string;
+  priority: "high" | "medium" | "low";
+  conversionRole: "primary" | "secondary" | "remarketing" | "diagnostic";
+  funnelStage: string;
+  requiredParameters: string[];
+  dataLayerExample: Record<string, unknown>;
+  triggerLogic: string;
+  gtmTasks: string[];
+  qaChecklist: string[];
+  warnings: string[];
+  duplicateRisk: "high" | "medium" | "low";
+}
+
+export type LeadFormPattern = "thank_you_page" | "ajax_inline" | "unknown";
+
+export interface LeadFunnelStep {
+  step: string;
+  event: string;
+  pattern: "gtm_auto" | "developer_required" | "optional";
+  description: string;
+  gtmMethod?: string;
+  developerCode?: string;
+  warning?: string;
+}
+
+export interface LeadFunnelAnalysis {
+  pattern: LeadFormPattern;
+  patternLabel: string;
+  patternDescription: string;
+  canGtmDoItAlone: boolean;
+  thankYouUrls: string[];
+  formCount: number;
+  steps: LeadFunnelStep[];
+  developerTasks: string[];
+  gtmOnlyTasks: string[];
+}
+
+export interface ScanReport {
+  url: string;
+  scanDate: string;
+  websiteTypes: string[];
+  healthScore: TrackingHealthScore;
+  detectedTags: DetectedTag[];
+  detectedElements: DetectedElement[];
+  warnings: ScanWarning[];
+  recommendedEvents: RecommendedEventMapping[];
+  leadFunnelAnalysis?: LeadFunnelAnalysis;
+}

@@ -155,7 +155,7 @@ export async function generateKeywordAudiencePlan(
       prompt,
       (raw) => validateKwPlan(raw) as KeywordAudiencePlan | null,
       () => mockKwPlan(mediaPlan, brief),
-      { temperature: 0.3 }
+      { temperature: 0.3, _route: '/api/keyword-audience/generate', _feature: 'keyword_audience', _subfeature: 'generate' }
     )
   }
 

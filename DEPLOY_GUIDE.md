@@ -6,13 +6,13 @@
 
 ## สิ่งที่ต้องเตรียมก่อน
 
-| รายการ                      | หมายเหตุ                              |
-| --------------------------- | ------------------------------------- |
-| Node.js ≥ 18                | local machine                         |
-| Turso account               | https://turso.tech (free tier ใช้ได้) |
-| Google Cloud Console access | เพื่อเพิ่ม domain ใน OAuth            |
-| Vercel account              | https://vercel.com                    |
-| GitHub repository           | push code ขึ้นก่อน deploy             |
+| รายการ | หมายเหตุ |
+|--------|---------|
+| Node.js ≥ 18 | local machine |
+| Turso account | https://turso.tech (free tier ใช้ได้) |
+| Google Cloud Console access | เพื่อเพิ่ม domain ใน OAuth |
+| Vercel account | https://vercel.com |
+| GitHub repository | push code ขึ้นก่อน deploy |
 
 ---
 
@@ -32,7 +32,24 @@ git push -u origin main
 
 ---
 
-## ขั้นตอนที่ 2 — ติดตั้ง Turso (แทน SQLite บน Vercel)
+## ขั้นตอนที่ 2 — Database: Supabase Postgres (อัปเดต 2026-07-06)
+
+> ✅ **ทีม dev เลือกใช้ Supabase Postgres แล้ว** (schema `plans_ads`) — โค้ด + prisma schema สลับเป็น `postgresql` เรียบร้อย ข้อมูล dev เดิมถูก migrate ขึ้นไปแล้ว · **ส่วน Turso ด้านล่างเลิกใช้ ข้ามได้เลย**
+
+ตั้ง env บน Vercel 2 ตัว (ค่าจริงขอจากทีม — อย่า commit ลง repo):
+
+```
+DATABASE_URL="postgresql://postgres:***@db.<project>.supabase.co:5432/postgres?schema=plans_ads"
+DIRECT_URL="postgresql://postgres:***@db.<project>.supabase.co:5432/postgres?schema=plans_ads"
+```
+
+- ถ้าใช้ pooler (pgbouncer) ให้ `DATABASE_URL` เป็น pooler URL + `?pgbouncer=true&connection_limit=1` และ `DIRECT_URL` เป็น direct :5432 เสมอ (Prisma ใช้ตอน migrate)
+- สร้าง/อัปเดตตาราง: `npx prisma db push` (รันจากเครื่องที่ตั้ง env แล้ว)
+- schema ล่าสุดเพิ่ม AI usage labels สำหรับ Gemini/Vertex (`project=mercy`, `provider`, `feature`, `subfeature`, `label`) ใน `AiCostLog`; ต้องรัน `npx prisma db push` หลัง deploy schema
+
+---
+
+## (เลิกใช้) ขั้นตอนเดิม — Turso
 
 Vercel เป็น serverless — ไม่มี persistent filesystem ดังนั้น SQLite ใช้บน production ไม่ได้ ต้องใช้ **Turso** (LibSQL cloud)
 
@@ -58,7 +75,6 @@ turso db tokens create plans-ads-v1
 ```
 
 จดค่าสองอย่างนี้ไว้:
-
 - **DB URL**: `libsql://plans-ads-v1-xxxxxxxx.turso.io`
 - **Token**: `eyJhbGciOiJFZERTQSJ9...`
 
@@ -66,7 +82,8 @@ turso db tokens create plans-ads-v1
 
 ```bash
 cd /Users/bob/plans-ads
-npm install @prisma/adapter-libsql @libsql/client
+# ⚠ ต้อง pin @5.22.0 ให้ตรง Prisma 5.22 (เวอร์ชันล่าสุดเป็นของ Prisma 7 ใช้ด้วยกันไม่ได้)
+npm install @prisma/adapter-libsql@5.22.0 @libsql/client --legacy-peer-deps
 ```
 
 ### 2.3 แก้ `prisma/schema.prisma` เพิ่ม adapter
@@ -85,7 +102,9 @@ datasource db {
 }
 ```
 
-### 2.4 แก้ `src/lib/prisma.ts` ให้รองรับ Turso
+### 2.4 `src/lib/prisma.ts` — ✅ โค้ดรองรับแล้ว ไม่ต้องแก้เอง (อ่านทั้ง TURSO_DATABASE_URL และ DATABASE_URL=libsql://)
+
+<details><summary>ของเดิม (อ้างอิง — ไม่ต้องทำ)</summary>
 
 เปิดไฟล์ `src/lib/prisma.ts` แก้เป็น:
 
@@ -94,21 +113,21 @@ import { PrismaClient } from '@prisma/client'
 
 function createPrismaClient() {
   const url = process.env.DATABASE_URL ?? ''
-
+  
   if (url.startsWith('libsql://') || url.startsWith('file:')) {
     if (url.startsWith('libsql://')) {
       // Production: Turso
       const { createClient } = require('@libsql/client')
       const { PrismaLibSQL } = require('@prisma/adapter-libsql')
-
-      const urlOnly = url.split('?')[0]
-      const token = url.split('authToken=')[1]
-      const libsql = createClient({ url: urlOnly, authToken: token })
-      const adapter = new PrismaLibSQL(libsql)
+      
+      const urlOnly  = url.split('?')[0]
+      const token    = url.split('authToken=')[1]
+      const libsql   = createClient({ url: urlOnly, authToken: token })
+      const adapter  = new PrismaLibSQL(libsql)
       return new PrismaClient({ adapter })
     }
   }
-
+  
   // Local: SQLite
   return new PrismaClient()
 }
@@ -117,6 +136,8 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 export const prisma = globalForPrisma.prisma ?? createPrismaClient()
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 ```
+
+</details>
 
 ### 2.5 Push Schema ขึ้น Turso
 
@@ -179,83 +200,76 @@ turso db shell plans-ads-v1 < /tmp/plans-ads-dump.sql
 > เลือก Environment: **Production** (และ Preview ถ้าต้องการ)
 
 ### Auth
-
-| Key               | Value                                              |
-| ----------------- | -------------------------------------------------- |
-| `NEXTAUTH_URL`    | `https://your-app.vercel.app`                      |
+| Key | Value |
+|-----|-------|
+| `NEXTAUTH_URL` | `https://your-app.vercel.app` |
 | `NEXTAUTH_SECRET` | รันคำสั่ง `openssl rand -base64 32` แล้วเอาผลมาใส่ |
 
 ### Database (Turso)
-
-| Key            | Value                                                      |
-| -------------- | ---------------------------------------------------------- |
+| Key | Value |
+|-----|-------|
 | `DATABASE_URL` | `libsql://plans-ads-v1-xxxxxxxx.turso.io?authToken=eyJ...` |
 
 > URL + Token รวมกันใน `DATABASE_URL` เดียว — Prisma จัดการเองอัตโนมัติ
 
 ### Google OAuth (Login)
-
-| Key                    | Value                                  |
-| ---------------------- | -------------------------------------- |
-| `GOOGLE_CLIENT_ID`     | Client ID จาก Google Cloud Console     |
+| Key | Value |
+|-----|-------|
+| `GOOGLE_CLIENT_ID` | Client ID จาก Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | Client Secret จาก Google Cloud Console |
 
 ### AI
+| Key | Value |
+|-----|-------|
+| `GCP_PROJECT_ID` | Google Cloud project id สำหรับ Vertex AI |
+| `GCP_PROJECT_NUMBER` | Google Cloud project number |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | Service Account ที่มีสิทธิ์ `roles/aiplatform.user` |
+| `GCP_WORKLOAD_IDENTITY_POOL_ID` | Workload Identity Pool ID |
+| `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | Workload Identity Provider ID |
+| `VERTEX_LOCATION` | `us-central1` หรือ region ที่เปิด Vertex AI |
+| `GCP_AUDIENCE` | optional: audience จาก GCP provider details ถ้าใช้ custom/default audience |
+| `ANTHROPIC_API_KEY` | optional fallback จาก console.anthropic.com |
+| `OPENAI_API_KEY` | optional fallback |
+| `AI_MODEL_QUALITY` | `gemini-3.5-flash` |
+| `AI_MODEL_STANDARD` | `gemini-3.5-flash` |
+| `MOCK_AI` | `false` |
 
-| Key                                      | Value                                                                   |
-| ---------------------------------------- | ----------------------------------------------------------------------- |
-| `GCP_PROJECT_ID`                         | Google Cloud project id ที่เปิด Vertex AI                               |
-| `GCP_PROJECT_NUMBER`                     | Google Cloud project number                                             |
-| `GCP_SERVICE_ACCOUNT_EMAIL`              | Service Account ที่ให้ Vercel impersonate เพื่อเรียก Vertex AI          |
-| `GCP_WORKLOAD_IDENTITY_POOL_ID`          | Workload Identity Pool ID                                               |
-| `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | Workload Identity Pool Provider ID สำหรับ Vercel OIDC                   |
-| `GCP_VERTEX_LOCATION`                    | Vertex AI location เช่น `us-central1` (optional; default `us-central1`) |
-| `ANTHROPIC_API_KEY`                      | API Key จาก console.anthropic.com                                       |
-| `OPENAI_API_KEY`                         | (optional)                                                              |
-| `AI_MODEL_QUALITY`                       | `gemini-3.5-flash`                                                      |
-| `AI_MODEL_STANDARD`                      | `gemini-3.5-flash`                                                      |
-| `MOCK_AI`                                | `false`                                                                 |
-
-> AI Gemini ใช้ Vercel OIDC + Google Cloud Workload Identity Federation แล้ว ไม่ต้องตั้งค่า `GEMINI_API_KEY`
+> ไม่ต้องตั้ง `GEMINI_API_KEY` แล้ว ถ้ามีอยู่บน Vercel ให้ลบออก
 
 ### Google Ads
-
-| Key                            | Value                                       |
-| ------------------------------ | ------------------------------------------- |
-| `MOCK_GOOGLE_ADS`              | `false`                                     |
-| `AUTOMATION_MUTATE`            | `false`                                     |
-| `GOOGLE_ADS_DEVELOPER_TOKEN`   | จาก Google Ads Manager → Tools → API Center |
-| `GOOGLE_ADS_CLIENT_ID`         | ใช้ค่าเดียวกับ `GOOGLE_CLIENT_ID`           |
-| `GOOGLE_ADS_CLIENT_SECRET`     | ใช้ค่าเดียวกับ `GOOGLE_CLIENT_SECRET`       |
-| `GOOGLE_ADS_REFRESH_TOKEN`     | ดูวิธีสร้างด้านล่าง (ข้อ 3 ของ Appendix)    |
-| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | MCC ID ไม่มี dash เช่น `6140243864`         |
-| `GOOGLE_ADS_CUSTOMER_ID`       | Sub-account IDs คั่นด้วย comma              |
-| `COMPANY_MCC_CUSTOMER_ID`      | ค่าเดียวกับ `GOOGLE_ADS_LOGIN_CUSTOMER_ID`  |
+| Key | Value |
+|-----|-------|
+| `MOCK_GOOGLE_ADS` | `false` |
+| `AUTOMATION_MUTATE` | `false` |
+| `GOOGLE_ADS_DEVELOPER_TOKEN` | จาก Google Ads Manager → Tools → API Center |
+| `GOOGLE_ADS_CLIENT_ID` | ใช้ค่าเดียวกับ `GOOGLE_CLIENT_ID` |
+| `GOOGLE_ADS_CLIENT_SECRET` | ใช้ค่าเดียวกับ `GOOGLE_CLIENT_SECRET` |
+| `GOOGLE_ADS_REFRESH_TOKEN` | ดูวิธีสร้างด้านล่าง (ข้อ 3 ของ Appendix) |
+| `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | MCC ID ไม่มี dash เช่น `6140243864` |
+| `GOOGLE_ADS_CUSTOMER_ID` | Sub-account IDs คั่นด้วย comma |
+| `COMPANY_MCC_CUSTOMER_ID` | ค่าเดียวกับ `GOOGLE_ADS_LOGIN_CUSTOMER_ID` |
 
 ### GA4
-
-| Key               | Value                                         |
-| ----------------- | --------------------------------------------- |
+| Key | Value |
+|-----|-------|
 | `GA4_PROPERTY_ID` | Property ID จาก GA4 Admin → Property Settings |
 
 ### GTM
-
-| Key                               | Value                                                                |
-| --------------------------------- | -------------------------------------------------------------------- |
-| `GTM_ACCOUNT_ID`                  | GTM Account ID                                                       |
-| `GTM_CONTAINER_ID`                | GTM Container ID                                                     |
-| `GTM_SERVICE_ACCOUNT_EMAIL`       | Service Account email ที่มี GTM Read access                          |
+| Key | Value |
+|-----|-------|
+| `GTM_ACCOUNT_ID` | GTM Account ID |
+| `GTM_CONTAINER_ID` | GTM Container ID |
+| `GTM_SERVICE_ACCOUNT_EMAIL` | Service Account email ที่มี GTM Read access |
 | `GTM_SERVICE_ACCOUNT_PRIVATE_KEY` | Private key จาก Service Account JSON (ต้องแทน newline จริงด้วย `\n`) |
 
 ### Google Sheets / Drive
-
-| Key                          | Value                                       |
-| ---------------------------- | ------------------------------------------- |
-| `GOOGLE_SHEETS_ENABLED`      | `true`                                      |
-| `GOOGLE_DRIVE_ENABLED`       | `true`                                      |
-| `GOOGLE_SHEETS_CLIENT_EMAIL` | Service Account email                       |
-| `GOOGLE_SHEETS_PRIVATE_KEY`  | Private key (ต้องแทน newline จริงด้วย `\n`) |
-| `GOOGLE_DRIVE_FOLDER_ID`     | Google Drive Folder ID                      |
+| Key | Value |
+|-----|-------|
+| `GOOGLE_SHEETS_ENABLED` | `true` |
+| `GOOGLE_DRIVE_ENABLED` | `true` |
+| `GOOGLE_SHEETS_CLIENT_EMAIL` | Service Account email |
+| `GOOGLE_SHEETS_PRIVATE_KEY` | Private key (ต้องแทน newline จริงด้วย `\n`) |
+| `GOOGLE_DRIVE_FOLDER_ID` | Google Drive Folder ID |
 
 > **เรื่อง Private Key**: เวลา copy ค่า private_key จาก JSON file มาใส่ใน Vercel ต้องแน่ใจว่า `\n` อยู่ในบรรทัดเดียว ไม่ใช่ enter จริง Vercel จะจัดการให้ถ้า paste ตรงๆ
 
@@ -297,7 +311,6 @@ git push origin main
 Vercel auto-deploy ทุกครั้งที่ push ขึ้น `main`
 
 ถ้าแก้ Prisma schema ต้องรัน:
-
 ```bash
 DATABASE_URL="libsql://plans-ads-v1-xxxxxxxx.turso.io?authToken=eyJ..." \
   npx prisma db push
@@ -307,11 +320,11 @@ DATABASE_URL="libsql://plans-ads-v1-xxxxxxxx.turso.io?authToken=eyJ..." \
 
 ## ข้อจำกัดที่มีบน Vercel
 
-| รายการ                            | สถานะ                       | วิธีแก้                                       |
-| --------------------------------- | --------------------------- | --------------------------------------------- |
-| Image upload (`/public/uploads/`) | ไม่ persistent บน Vercel    | ใช้ Vercel Blob หรือ Cloudinary — ดู Appendix |
-| AI timeout สูง                    | ตั้งไว้ 300s ใน vercel.json | ถ้า timeout บ่อยให้ลด scope prompt            |
-| SQLite                            | ใช้ได้แค่ local             | ใช้ Turso บน production (ทำแล้วในขั้นตอน 2)   |
+| รายการ | สถานะ | วิธีแก้ |
+|--------|--------|---------|
+| Image upload (`/public/uploads/`) | ไม่ persistent บน Vercel | ใช้ Vercel Blob หรือ Cloudinary — ดู Appendix |
+| AI timeout สูง | ตั้งไว้ 300s ใน vercel.json | ถ้า timeout บ่อยให้ลด scope prompt |
+| SQLite | ใช้ได้แค่ local | ใช้ Turso บน production (ทำแล้วในขั้นตอน 2) |
 
 ---
 
@@ -343,7 +356,6 @@ npm install @vercel/blob
 ```
 
 ตั้ง Environment Variable บน Vercel:
-
 - `BLOB_READ_WRITE_TOKEN` — สร้างได้ที่ Vercel → Storage → Create Blob Store
 
 แก้ `/src/app/api/upload/image/route.ts` ให้ใช้ `@vercel/blob` แทนการเขียนไฟล์ local
@@ -367,19 +379,16 @@ Local ใช้ SQLite (`DATABASE_URL=file:./prisma/dev.db`) — Turso ถูก
 ไปที่: **Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID (Web application)**
 
 **Authorized JavaScript origins** — เพิ่มบรรทัดใหม่ (ห้ามลบของเดิม):
-
 ```
 https://your-app.vercel.app
 ```
 
 **Authorized redirect URIs** — เพิ่มบรรทัดใหม่ (ห้ามลบของเดิม):
-
 ```
 https://your-app.vercel.app/api/auth/callback/google
 ```
 
 ของเดิมที่ต้องยังอยู่:
-
 ```
 http://localhost:3010
 http://localhost:3010/api/auth/callback/google
@@ -393,16 +402,15 @@ http://localhost:3010/api/auth/callback/google
 
 ไปที่: **Google Cloud Console → APIs & Services → Library** ค้นหาแล้ว Enable:
 
-| API                           | ใช้สำหรับ                         |
-| ----------------------------- | --------------------------------- |
-| **Google Ads API**            | ดึง campaign data, สร้าง campaign |
-| **Google Analytics Data API** | GA4 dashboard                     |
-| **Tag Manager API**           | GTM integration                   |
-| **Google Sheets API**         | Export reports                    |
-| **Google Drive API**          | เก็บ report files                 |
+| API | ใช้สำหรับ |
+|-----|---------|
+| **Google Ads API** | ดึง campaign data, สร้าง campaign |
+| **Google Analytics Data API** | GA4 dashboard |
+| **Tag Manager API** | GTM integration |
+| **Google Sheets API** | Export reports |
+| **Google Drive API** | เก็บ report files |
 
 Enable ได้ที่:
-
 ```
 https://console.cloud.google.com/apis/library
 ```
@@ -414,7 +422,6 @@ https://console.cloud.google.com/apis/library
 Developer Token ต้องมี **Standard Access** (ไม่ใช่ Test Account) เพื่อใช้กับ production accounts
 
 วิธีตรวจสอบ:
-
 1. Google Ads Manager (MCC) → Tools & Settings → Setup → **API Center**
 2. ดูสถานะ: ต้องเป็น **Standard access** ไม่ใช่ **Test account**
 3. ถ้ายังเป็น Test → กด Apply for Basic Access → รอ Google อนุมัติ (ปกติ 1-2 วันทำการ)
@@ -456,7 +463,6 @@ curl -s -X POST https://oauth2.googleapis.com/token \
 Service Account ที่ใช้อยู่แล้วสามารถใช้ต่อได้บน production ไม่ต้องสร้างใหม่
 
 แต่ต้องตรวจสอบว่า Service Account มี access ถึง resources เหล่านี้:
-
 - **Google Drive Folder**: Share folder กับ `SERVICE_ACCOUNT_EMAIL` (Editor)
 - **Google Sheets**: Share sheet กับ `SERVICE_ACCOUNT_EMAIL` (Editor)
 - **GTM Container**: GTM → Admin → User Management → เพิ่ม `SERVICE_ACCOUNT_EMAIL` (Read)
@@ -466,7 +472,6 @@ Service Account ที่ใช้อยู่แล้วสามารถใ�
 ### D6. GA4 — ไม่ต้องตั้งค่าเพิ่ม
 
 GA4 ใช้ OAuth token ของ user ที่ login (ไม่ใช่ service account) ดังนั้น:
-
 - user ที่ login ต้องมี **Viewer** access ใน GA4 property
 - `GA4_PROPERTY_ID` ใส่ตัวเลข property ID เดิมได้เลย ใช้ได้ทั้ง local และ production
 
@@ -504,4 +509,4 @@ GA4:
 
 ---
 
-_Plans Ads V1 — Convert Cake_
+*Plans Ads V1 — Convert Cake*

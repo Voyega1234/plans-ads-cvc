@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
+import { gaqlDuring } from '@/lib/google-ads/reporting'
 
 // ── In-memory cache (5-min TTL per customer+dateRange combo) ─────────────────
 interface CacheEntry { data: unknown; expiresAt: number }
@@ -44,38 +45,79 @@ async function gadsQuery(customerId: string, query: string, token: string): Prom
 // ── Real GAQL queries ─────────────────────────────────────────────────────────
 
 async function realAudiences(customerId: string, dateRange: string, token: string) {
-  const rows = await gadsQuery(customerId, `
-    SELECT
-      user_list.name,
-      user_list.type,
-      metrics.impressions, metrics.clicks, metrics.cost_micros,
-      metrics.conversions, metrics.ctr, metrics.average_cpc,
-      metrics.cost_per_conversion
-    FROM user_list
-    WHERE segments.date DURING ${dateRange}
-      AND campaign.status != 'REMOVED'
-    ORDER BY metrics.cost_micros DESC
-    LIMIT 50
-  `, token) as Array<{
-    userList: { name: string; type: string }
-    metrics: { impressions: string; clicks: string; costMicros: string; conversions: string; ctr: string; averageCpc: string; costPerConversion: string }
-  }>
+  // audience performance อยู่ใน 2 view: ระดับ ad group + ระดับแคมเปญ (observation/targeting)
+  // ครอบคลุม remarketing list + In-Market/Affinity + custom audiences
+  // (เดิม query FROM user_list → เห็นแค่ remarketing list เลยว่างในบัญชีส่วนใหญ่)
+  const metricsSel = `metrics.impressions, metrics.clicks, metrics.cost_micros,
+      metrics.conversions, metrics.ctr, metrics.average_cpc`
+  type Row = {
+    adGroupCriterion?: { displayName?: string; type?: string }
+    campaignCriterion?: { displayName?: string; type?: string }
+    metrics: { impressions?: string; clicks?: string; costMicros?: string; conversions?: string }
+  }
+  const [agRows, campRows] = await Promise.all([
+    gadsQuery(customerId, `
+      SELECT ad_group_criterion.display_name, ad_group_criterion.type, ${metricsSel}
+      FROM ad_group_audience_view
+      WHERE ${gaqlDuring(dateRange)} AND campaign.status != 'REMOVED'
+      ORDER BY metrics.cost_micros DESC
+      LIMIT 200
+    `, token).catch(() => []) as Promise<Row[]>,
+    gadsQuery(customerId, `
+      SELECT campaign_criterion.display_name, campaign_criterion.type, ${metricsSel}
+      FROM campaign_audience_view
+      WHERE ${gaqlDuring(dateRange)} AND campaign.status != 'REMOVED'
+      ORDER BY metrics.cost_micros DESC
+      LIMIT 200
+    `, token).catch(() => []) as Promise<Row[]>,
+  ])
 
-  return rows.map((r) => {
-    const cost = (Number(r.metrics.costMicros) || 0) / 1e6
-    const conv = Number(r.metrics.conversions) || 0
-    return {
-      audienceName: r.userList.name,
-      type:         r.userList.type ?? 'UNKNOWN',
-      impressions:  Number(r.metrics.impressions) || 0,
-      clicks:       Number(r.metrics.clicks) || 0,
-      cost,
-      conversions:  conv,
-      ctr:          (Number(r.metrics.ctr) || 0) * 100,
-      cpc:          (Number(r.metrics.averageCpc) || 0) / 1e6,
-      cpa:          conv > 0 ? cost / conv : 0,
-    }
-  })
+  // รวมตามชื่อ segment (segment เดียวอาจโผล่หลาย ad group)
+  const agg = new Map<string, { type: string; impressions: number; clicks: number; cost: number; conversions: number }>()
+  for (const r of [...agRows, ...campRows]) {
+    const crit = r.adGroupCriterion ?? r.campaignCriterion
+    const name = crit?.displayName
+    if (!name) continue
+    const cur = agg.get(name) ?? { type: crit?.type ?? 'AUDIENCE', impressions: 0, clicks: 0, cost: 0, conversions: 0 }
+    cur.impressions += Number(r.metrics.impressions) || 0
+    cur.clicks      += Number(r.metrics.clicks) || 0
+    cur.cost        += (Number(r.metrics.costMicros) || 0) / 1e6
+    cur.conversions += Number(r.metrics.conversions) || 0
+    agg.set(name, cur)
+  }
+
+  // campaign_audience_view คืน user_interest เป็น "uservertical::<id>" — แปลงเป็นชื่อจริงจาก taxonomy
+  const verticalIds = Array.from(agg.keys()).map(n => n.match(/^uservertical::(\d+)$/)?.[1]).filter((x): x is string => !!x)
+  const idToName = new Map<string, string>()
+  if (verticalIds.length > 0) {
+    try {
+      const rows = await gadsQuery(customerId, `
+        SELECT user_interest.user_interest_id, user_interest.name
+        FROM user_interest
+        WHERE user_interest.user_interest_id IN (${verticalIds.join(',')})
+      `, token) as Array<{ userInterest: { userInterestId: string; name: string } }>
+      for (const r of rows) idToName.set(String(r.userInterest.userInterestId), r.userInterest.name)
+    } catch { /* ใช้ชื่อดิบ */ }
+  }
+  const prettyName = (n: string) => {
+    const id = n.match(/^uservertical::(\d+)$/)?.[1]
+    return id ? (idToName.get(id) ?? n) : n
+  }
+
+  return Array.from(agg.entries())
+    .map(([rawName, m]) => ({
+      audienceName: prettyName(rawName),
+      type:        m.type,
+      impressions: m.impressions,
+      clicks:      m.clicks,
+      cost:        m.cost,
+      conversions: m.conversions,
+      ctr:         m.impressions > 0 ? (m.clicks / m.impressions) * 100 : 0,
+      cpc:         m.clicks > 0 ? m.cost / m.clicks : 0,
+      cpa:         m.conversions > 0 ? m.cost / m.conversions : 0,
+    }))
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 50)
 }
 
 async function realKeywords(customerId: string, dateRange: string, token: string) {
@@ -88,7 +130,7 @@ async function realKeywords(customerId: string, dateRange: string, token: string
       metrics.conversions, metrics.ctr, metrics.average_cpc,
       metrics.cost_per_conversion
     FROM keyword_view
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
       AND campaign.status != 'REMOVED'
       AND ad_group.status != 'REMOVED'
       AND ad_group_criterion.status != 'REMOVED'
@@ -129,7 +171,7 @@ async function realLocations(customerId: string, dateRange: string, token: strin
       metrics.cost_per_conversion,
       segments.geo_target_region
     FROM geographic_view
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
       AND metrics.impressions > 0
     ORDER BY metrics.cost_micros DESC
     LIMIT 100
@@ -198,7 +240,7 @@ async function realDevices(customerId: string, dateRange: string, token: string)
       metrics.conversions, metrics.ctr, metrics.average_cpc,
       metrics.cost_per_conversion
     FROM campaign
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
       AND campaign.status != 'REMOVED'
     ORDER BY metrics.cost_micros DESC
   `, token) as Array<{
@@ -232,7 +274,7 @@ async function realSearchTerms(customerId: string, dateRange: string, token: str
       metrics.impressions, metrics.clicks, metrics.cost_micros,
       metrics.conversions, metrics.ctr, metrics.average_cpc
     FROM search_term_view
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
     ORDER BY metrics.cost_micros DESC
     LIMIT 100
   `, token) as Array<{
@@ -264,7 +306,7 @@ async function realTime(customerId: string, dateRange: string, token: string) {
       segments.date,
       metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions
     FROM campaign
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
       AND campaign.status != 'REMOVED'
     ORDER BY segments.date ASC
   `, token) as Array<{
@@ -294,7 +336,7 @@ async function realConversions(customerId: string, dateRange: string, token: str
       metrics.all_conversions,
       metrics.view_through_conversions
     FROM campaign
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
       AND campaign.status != 'REMOVED'
       AND metrics.all_conversions > 0
     ORDER BY metrics.conversions DESC

@@ -1,3 +1,5 @@
+export const maxDuration = 300  // Vercel Pro (hobby สูงสุด 60 — ถ้า deploy fail ให้ลดเหลือ 60)
+
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { pushCampaignBlueprint } from '@/lib/google-ads/campaign-builder'
@@ -10,6 +12,8 @@ const schema = z.object({
   customerId: z.string().min(1),
   blueprintJson: z.record(z.unknown()),
   mode: z.enum(['live', 'dry_run']).default('dry_run'),
+  // client ยิงทีละแคมเปญ (กัน timeout บน serverless): append=true = อย่าลบ blueprint เดิมของรอบนี้
+  append: z.boolean().default(false),
 })
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -20,7 +24,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const planId = params.id
 
     const body = await req.json()
-    const { customerId, blueprintJson, mode } = schema.parse(body)
+    const { customerId, blueprintJson, mode, append } = schema.parse(body)
 
     // Verify plan exists and belongs to user
     const plan = await prisma.mediaPlan.findFirst({
@@ -29,7 +33,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (!plan) return NextResponse.json({ error: 'Media plan not found' }, { status: 404 })
 
     // Delete existing blueprints for this plan and save the new one
-    const existing = await prisma.campaignBlueprint.findMany({ where: { mediaPlanId: planId }, select: { id: true } })
+    // (append mode = แคมเปญที่ 2..n ของ push ชุดเดียวกัน — ห้ามลบของที่เพิ่งบันทึก)
+    const existing = append ? [] : await prisma.campaignBlueprint.findMany({ where: { mediaPlanId: planId }, select: { id: true } })
     if (existing.length > 0) {
       const ids = existing.map(b => b.id)
       await prisma.pushJob.deleteMany({ where: { campaignBlueprintId: { in: ids } } })
@@ -59,15 +64,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     })
 
     try {
-      // Debug: log blueprint structure to find logo assets
-      const bpCampaigns = (blueprintJson as Record<string, unknown>).campaigns as Array<Record<string, unknown>> ?? []
-      for (const c of bpCampaigns) {
-        const assetGroups = (c.assetGroups as Array<Record<string, unknown>> | undefined) ?? []
-        const adGroups = (c.adGroups as Array<Record<string, unknown>> | undefined) ?? []
-        console.log('[push-blueprint] campaign:', c.campaignName, 'type:', c.campaignType)
-        console.log('[push-blueprint]   assetGroups:', assetGroups.length, JSON.stringify(assetGroups.map(ag => ({ name: ag.assetGroupName, imgCount: (ag.imageAssets as unknown[] | undefined)?.length ?? 0, imgs: (ag.imageAssets as Array<{assetType:string;imageUrl?:string}> | undefined)?.map(i => i.assetType + ':' + (i.imageUrl?.slice(0,40) ?? 'none')) }))))
-        console.log('[push-blueprint]   adGroups:', adGroups.length)
-      }
       const result = await pushCampaignBlueprint(blueprintJson as unknown as CampaignBlueprintJson, customerId, mode)
 
       await prisma.pushJob.update({

@@ -4,10 +4,17 @@
 export const COPYWRITING_SKILL = `
 # Mercy Skill: Master-Level Google Ads Copywriting
 
-## Asset Count Rules (STRICT — ห้ามเขียนน้อยกว่านี้)
-- Search RSA:       15 Headlines (≤30 chars each) + 4 Descriptions (≤90 chars each)
-- Performance Max:  15 Headlines + 5 Long Headlines (≤90 chars) + 5 Descriptions
-- Display:           5 Headlines + 1 Long Headline (≤90 chars) + 5 Descriptions
+## Asset Count Rules (STRICT — ห้ามเขียนน้อยกว่านี้ ครบทุก Campaign Type)
+- Search RSA:       15 Headlines (≤30 chars) + 4 Descriptions (≤90 chars) + displayPath1/2 (≤15, no spaces)
+- Performance Max:  15 Headlines (≤30) + 5 Long Headlines (≤90) + 5 Descriptions (อันแรก ≤60 เป็น short description, ที่เหลือ ≤90)
+- Display (RDA):     5 Headlines (≤30) + 1 Long Headline (≤90) + 5 Descriptions (≤90)
+- Demand Gen:        5 Headlines (≤40 — ยาวกว่า Search ได้) + 5 Descriptions (≤90)
+- Video (Action):    5 Headlines (≤15 — สั้นมาก!) + 1 Long Headline (≤90) + 5 Descriptions (≤70) + CTA (≤10 เช่น "สมัครเลย")
+
+## Asset Extension Rules (Search + PMax ต้องมีทุกครั้ง — attach ที่ campaign level)
+- Sitelinks: ≥4 รายการ — text ≤25 chars + description1/2 ≤35 chars + finalUrl (หน้าเพจจริง เช่น /pricing /contact /reviews /promotion)
+- Callouts: ≥6 รายการ ≤25 chars — จุดขายสั้นๆ ไม่มี CTA (เช่น "ที่ปรึกษามืออาชีพ", "ไม่มีค่าซ่อนเร้น")
+- Structured Snippets: ≥1 ชุด — header ที่ Google รองรับ (Services/Brands/Types/Courses ฯลฯ) + values ≥4 รายการ
 
 ## Core Rules
 1. เขียนครบจำนวน Asset ตาม Campaign Type เสมอ — ห้ามน้อยกว่า
@@ -480,6 +487,13 @@ PMax requires caution when: tracking is not ready, budget is very low, lead qual
 ### eCommerce Shopping Priority
 For eCommerce businesses, PMax/Shopping should receive the highest budget share. Always check: Merchant Center status, Product Feed quality, Dynamic Remarketing readiness.
 
+### Volume vs Budget Feasibility (ตรวจก่อนทำ keyword research เสมอ)
+1. ประเมิน Est. Clicks = monthlyBudget ÷ avg CPC ของตลาดนั้น (Search TH ทั่วไป ฿5-15, แข่งสูง ฿20-60)
+2. เทียบกับ total monthly search volume ของ category: clicks ที่งบซื้อได้ไม่ควรเกิน ~15-20% ของ volume (impression share ที่ทำได้จริง)
+3. **งบมากกว่า demand** (volume ต่ำ ซื้อ click ได้เกิน 20% ของ volume) → ลดสัดส่วน Search แล้วย้ายงบไป PMax/Demand Gen เพื่อสร้าง demand ใหม่ — อย่าฝืนอัดงบใส่ Search ที่ volume ไม่มี
+4. **demand มากกว่างบ** (volume สูงมากเมื่อเทียบงบ) → โฟกัส keyword intent สูงสุดก่อน (Brand + high-intent generic), ใช้ PHRASE/EXACT เป็นหลัก อย่าเปิด BROAD กว้าง
+5. ระบุผลการตรวจนี้ใน strategicRationale เสมอ พร้อมตัวเลขที่ใช้คำนวณ
+
 ### Funnel Balance
 1. Awareness: YouTube, Demand Gen, Display, PMax
 2. Consideration: Demand Gen, YouTube Remarketing, GDN Remarketing, Generic Search
@@ -817,6 +831,7 @@ Return JSON (no markdown):
 }
 
 CRITICAL RULES:
+- Generate EXACTLY the campaigns listed in the Media Plan — one output campaign per plan campaign, same type. DO NOT invent additional campaigns.
 - All campaigns MUST start as PAUSED
 - Headlines STRICTLY ≤ 30 characters — Thai character = 1 char, English letter = 1 char, space = 1 char. COUNT EVERY CHARACTER before writing. REWRITE if over limit — do NOT truncate mid-word.
   → BEFORE writing each headline: count mentally. If "บริการ Google Ads ครบวงจร" = 26 chars ✓. If "ผู้เชี่ยวชาญ Google Ads Thailand" = 33 chars ✗ → rewrite as "ผู้เชี่ยวชาญ Google Ads ไทย" = 28 chars ✓
@@ -830,6 +845,7 @@ CRITICAL RULES:
 - Never use policy-blocked words listed in context above
 - Ad 1 and Ad 2 must use DIFFERENT copy angles (not just word swaps)
 - SEARCH campaigns: 2 RSA ads per ad group (Variant A trust/emotional + Variant B sales/urgency)
+- SEARCH and PERFORMANCE_MAX campaigns MUST include sitelinks (≥4), callouts (≥6), structuredSnippets (≥1) — ห้ามส่ง array ว่าง
 - DISPLAY campaigns: use displayAd format instead of ads array (see format below)
 - DEMAND_GEN campaigns: use displayAd format SAME as DISPLAY — adGroups with displayAd object, NO keywords, audience targeting only
 - PERFORMANCE_MAX: use assetGroups instead of adGroups
@@ -843,9 +859,9 @@ DISPLAY / DEMAND_GEN adGroup format (replace the ads[] array with displayAd obje
   "audiences": ["Remarketing - All Visitors", "Similar Audiences", "In-Market: [relevant category]"],
   "displayAd": {
     "adType": "RESPONSIVE_DISPLAY",
-    "headlines": ["string ≤30 chars — 3-5 items, short punchy hooks"],
+    "headlines": ["string ≤30 chars — EXACTLY 5 items, short punchy hooks"],
     "longHeadlines": ["string ≤90 chars — EXACTLY 1 item, complete value proposition sentence"],
-    "descriptions": ["string ≤90 chars — 2-3 items, benefit-focused complete sentences"],
+    "descriptions": ["string ≤90 chars — EXACTLY 5 items, benefit-focused complete sentences"],
     "businessName": "string ≤25 chars — brand name",
     "finalUrl": "string",
     "imageAssets": [
@@ -855,6 +871,36 @@ DISPLAY / DEMAND_GEN adGroup format (replace the ads[] array with displayAd obje
   }
 }
 Each DISPLAY/DEMAND_GEN campaign should have 2-3 adGroups: one for remarketing, one for in-market/similar audiences, optionally one for custom intent.
+DEMAND_GEN headlines may be up to 40 chars (Search/Display limit is 30).
+
+PERFORMANCE_MAX campaign format (assetGroups at campaign level — adGroups MUST be []):
+{
+  "campaignName": "string",
+  "campaignType": "PERFORMANCE_MAX",
+  ...same campaign fields...,
+  "adGroups": [],
+  "assetGroups": [
+    {
+      "assetGroupName": "string",
+      "headlines": ["string×15 — EXACTLY 15 items, each ≤30 chars, diverse angles"],
+      "longHeadlines": ["string×5 — EXACTLY 5 items, each ≤90 chars, complete value-proposition sentences"],
+      "descriptions": ["string×5 — FIRST item ≤60 chars (short description slot), items 2-5 ≤90 chars"],
+      "businessName": "string ≤25 chars",
+      "finalUrl": "string",
+      "imageAssets": [
+        { "assetType": "MARKETING_IMAGE",          "description": "1200x628px — hero image" },
+        { "assetType": "SQUARE_MARKETING_IMAGE",   "description": "1200x1200px — square visual" },
+        { "assetType": "PORTRAIT_MARKETING_IMAGE", "description": "960x1200px — portrait visual" },
+        { "assetType": "LOGO",                     "description": "1200x1200px — square logo" }
+      ]
+    }
+  ],
+  "sitelinks": [...≥4 items — PMax uses campaign-level sitelinks too...],
+  "callouts": [...≥6 items...],
+  "structuredSnippets": [...]
+}
+
+VIDEO/YOUTUBE campaign format: use assetGroups like PMax BUT headlines ≤15 chars (video action limit), longHeadlines ≤90, descriptions ≤70 — วิดีโอจริงแนบทีหลังใน Google Ads UI.
 
 KEYWORD CHARACTER RULES (Google Ads API enforcement — violations cause KEYWORD_HAS_INVALID_CHARS error):
 - ห้ามใช้อักขระพิเศษใน keywords และ negativeKeywords: ! @ # $ % ^ & * = { } \\ | < > ;

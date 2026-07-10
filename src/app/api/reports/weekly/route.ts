@@ -38,8 +38,17 @@ export async function GET(req: NextRequest) {
     THIS_MONTH:   'LAST_MONTH',
     LAST_MONTH:   'LAST_MONTH',
   }
-  const days       = daysMap[dateRange] ?? 30
-  const prevPeriod = prevPeriodMap[dateRange] ?? 'LAST_60_DAYS'
+  // Custom range: CUSTOM_YYYY-MM-DD_YYYY-MM-DD → prev = window เท่ากันก่อนหน้า
+  const customM = dateRange.match(/^CUSTOM_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/)
+  const customDays = customM
+    ? Math.max(1, Math.round((Date.parse(customM[2]) - Date.parse(customM[1])) / 86400000) + 1)
+    : null
+  const iso = (d: Date) => d.toISOString().slice(0, 10)
+  const customPrev = customM && customDays
+    ? `CUSTOM_${iso(new Date(Date.parse(customM[1]) - customDays * 86400000))}_${iso(new Date(Date.parse(customM[1]) - 86400000))}`
+    : null
+  const days       = customDays ?? daysMap[dateRange] ?? 30
+  const prevPeriod = customPrev ?? prevPeriodMap[dateRange] ?? 'LAST_60_DAYS'
 
   function pct(curr: number, prev: number): number | null {
     if (prev === 0) return null

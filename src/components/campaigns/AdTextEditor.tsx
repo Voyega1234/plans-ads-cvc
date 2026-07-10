@@ -163,12 +163,46 @@ function ImageUploadSlot({
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Center-crop + resize ให้ตรงสัดส่วนที่ Google บังคับก่อนอัปโหลด — กัน
+  // "aspect ratio does not match" และเคส Logo อัปโหลดแล้วแต่ Google reject เงียบ
+  const CROP_SPECS: Record<string, { w: number; h: number }> = {
+    LOGO:                     { w: 1200, h: 1200 },
+    SQUARE_LOGO:              { w: 1200, h: 1200 },
+    MARKETING_IMAGE:          { w: 1200, h: 628 },
+    SQUARE_MARKETING_IMAGE:   { w: 1200, h: 1200 },
+    PORTRAIT_MARKETING_IMAGE: { w: 960,  h: 1200 },
+  }
+  async function cropToSpec(file: File): Promise<File> {
+    const cspec = CROP_SPECS[assetType]
+    if (!cspec) return file
+    try {
+      const img = await createImageBitmap(file)
+      const target = cspec.w / cspec.h
+      const src = img.width / img.height
+      let sx = 0, sy = 0, sw = img.width, sh = img.height
+      if (src > target) { sw = Math.round(img.height * target); sx = Math.round((img.width - sw) / 2) }
+      else if (src < target) { sh = Math.round(img.width / target); sy = Math.round((img.height - sh) / 2) }
+      const outW = Math.min(cspec.w, sw)
+      const outH = Math.round(outW / target)
+      const canvas = document.createElement('canvas')
+      canvas.width = outW; canvas.height = outH
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return file
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH)
+      const isLogo = assetType === 'LOGO' || assetType === 'SQUARE_LOGO'
+      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, isLogo ? 'image/png' : 'image/jpeg', 0.92))
+      if (!blob) return file
+      return new File([blob], file.name.replace(/\.\w+$/, isLogo ? '.png' : '.jpg'), { type: blob.type })
+    } catch { return file }
+  }
+
   async function handleFile(file: File) {
     setUploading(true); setError(null)
     const localUrl = URL.createObjectURL(file)
     if (!compact) setPreview(localUrl)
     try {
-      const fd = new FormData(); fd.append('file', file)
+      const cropped = await cropToSpec(file)
+      const fd = new FormData(); fd.append('file', cropped)
       const res = await fetch('/api/upload/image', { method: 'POST', body: fd })
       const text = await res.text()
       let data: { url?: string; error?: string }
@@ -1025,11 +1059,43 @@ function PMaxAssetGroupEditor({
 
 // ─── Display/DemandGen Ad Editor ───────────────────────────────────────────────
 
+type ImageSlot = { assetType: string; label: string; required: boolean; min: number; max: number }
+
+const DISPLAY_IMAGE_SLOTS: ImageSlot[] = [
+  { assetType: 'MARKETING_IMAGE',        label: 'Landscape',   required: true,  min: 1, max: 20 },
+  { assetType: 'SQUARE_MARKETING_IMAGE', label: 'Square',      required: true,  min: 1, max: 20 },
+  { assetType: 'LOGO',                   label: 'Logo',        required: true,  min: 1, max: 5  },
+]
+
+// Demand Gen supports an additional Portrait image (like PMax)
+const DEMANDGEN_IMAGE_SLOTS: ImageSlot[] = [
+  { assetType: 'MARKETING_IMAGE',          label: 'Landscape',  required: true,  min: 1, max: 20 },
+  { assetType: 'SQUARE_MARKETING_IMAGE',   label: 'Square',     required: true,  min: 1, max: 20 },
+  { assetType: 'PORTRAIT_MARKETING_IMAGE', label: 'Portrait',   required: false, min: 0, max: 20 },
+  { assetType: 'LOGO',                     label: 'Logo',       required: true,  min: 1, max: 5  },
+]
+
+// A blank but valid Display/Demand Gen ad so the editor (with image upload) always
+// renders, even before the AI fills in copy — images are required for these ad types.
+function emptyDisplayAd(finalUrl = '', businessName = ''): DisplayAdCopy {
+  return {
+    adType: 'RESPONSIVE_DISPLAY',
+    headlines: [''],
+    longHeadlines: [''],
+    descriptions: [''],
+    businessName,
+    finalUrl,
+    imageAssets: [],
+  }
+}
+
 function DisplayAdEditor({
   ad,
+  slots = DISPLAY_IMAGE_SLOTS,
   onChange,
 }: {
   ad: DisplayAdCopy
+  slots?: ImageSlot[]
   onChange: (updated: DisplayAdCopy) => void
 }) {
   function updateHeadline(i: number, val: string) {
@@ -1141,22 +1207,71 @@ function DisplayAdEditor({
         )}
       </div>
 
-      {/* Image Assets */}
+      {/* Image Assets — fixed slots: Landscape, Square, Logo */}
       <div>
-        <SectionLabel label="Image Assets" count={safeIA.length} min={3} />
-        <div className="grid grid-cols-2 gap-3">
-          {safeIA.map((asset, i) => (
-            <ImageUploadSlot
-              key={i}
-              assetType={asset.assetType}
-              imageUrl={asset.imageUrl}
-              onUploaded={url => {
-                const next = safeIA.map((a, idx) => idx === i ? { ...a, imageUrl: url } : a)
-                onChange({ ...ad, imageAssets: next })
-              }}
-            />
-          ))}
+        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+          <ImageIcon className="w-3.5 h-3.5" /> Image Assets
+        </p>
+        <div className="space-y-4">
+          {slots.map(slot => {
+            const spec = IMAGE_SPECS[slot.assetType]
+            const uploaded = safeIA.filter(a => a.assetType === slot.assetType && a.imageUrl)
+            const count = uploaded.length
+            const canAdd = count < slot.max
+            const meetsMin = count >= slot.min
+            function addImage(url: string) {
+              const next = [...safeIA, { assetType: slot.assetType, description: slot.label, imageUrl: url }]
+              onChange({ ...ad, imageAssets: next })
+            }
+            function removeImage(imgIdx: number) {
+              let c = 0
+              const next = safeIA.filter(a => {
+                if (a.assetType !== slot.assetType) return true
+                const keep = c !== imgIdx; c++; return keep
+              })
+              onChange({ ...ad, imageAssets: next })
+            }
+            return (
+              <div key={slot.assetType}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-gray-700">
+                      {slot.label} {slot.required && <span className="text-red-400">*</span>}
+                    </span>
+                    <span className={cn('text-[9px] font-bold px-1.5 py-0.5 rounded-full',
+                      meetsMin ? 'bg-emerald-100 text-emerald-700' : slot.required ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500')}>
+                      {count}/{slot.max}
+                    </span>
+                  </div>
+                  <span className="text-[9px] text-gray-400">{spec?.size} · {spec?.ratio}</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {uploaded.map((img, imgIdx) => (
+                    <div key={imgIdx} className="relative w-16 h-16 rounded-lg overflow-hidden border border-emerald-200 group">
+                      <img src={img.imageUrl} alt={slot.label} className="w-full h-full object-cover" />
+                      <button onClick={() => removeImage(imgIdx)}
+                        className="absolute top-0.5 right-0.5 bg-red-500 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <X className="w-2.5 h-2.5 text-white" />
+                      </button>
+                    </div>
+                  ))}
+                  {canAdd && (
+                    <ImageUploadSlot
+                      key={`${slot.assetType}-add-${count}`}
+                      assetType={slot.assetType}
+                      onUploaded={addImage}
+                      compact
+                    />
+                  )}
+                </div>
+                <p className="text-[9px] text-gray-400 mt-1">
+                  {slot.required ? `ต้องมีอย่างน้อย ${slot.min} รูป` : 'ไม่บังคับ'} · สูงสุด {slot.max} รูป
+                </p>
+              </div>
+            )
+          })}
         </div>
+        <p className="text-[10px] text-gray-400 mt-3">* = จำเป็น | รองรับ JPG, PNG, GIF</p>
       </div>
     </div>
   )
@@ -1304,9 +1419,13 @@ export default function AdTextEditor({ campaign, onChange }: Props) {
   const handleDisplayChange = (agIdx: number, adIdx: number, updated: DisplayAdCopy) => {
     const newAdGroups = (campaign.adGroups ?? []).map((ag, i) => {
       if (i !== agIdx) return ag
+      // Seed an ad when the group has none, so the edited display ad gets persisted
+      const baseAds: AdCopy[] = ag.ads && ag.ads.length > 0
+        ? ag.ads
+        : [{ headline1: '', headline2: '', headline3: '', description1: '', description2: '', finalUrl: updated.finalUrl }]
       return {
         ...ag,
-        ads: ag.ads.map((ad, j) => j !== adIdx ? ad : { ...ad, display: updated }),
+        ads: baseAds.map((ad, j) => j !== adIdx ? ad : { ...ad, display: updated }),
       }
     })
     onChange({ ...campaign, adGroups: newAdGroups })
@@ -1358,17 +1477,15 @@ export default function AdTextEditor({ campaign, onChange }: Props) {
                 ))}
               </div>
             )}
-            {ag.ads.map((ad, adIdx) => {
-              const display = ad.display
-              if (!display) return (
-                <div key={adIdx} className="text-xs text-gray-400 italic px-3 py-2 border border-dashed rounded-lg">
-                  ไม่มีข้อมูล Display Ad
-                </div>
-              )
+            {(ag.ads.length > 0 ? ag.ads : [{} as AdCopy]).map((ad, adIdx) => {
+              // Always render the editor (with image upload) — seed a blank ad when the
+              // AI hasn't produced display copy yet, since images are required here.
+              const display = ad.display ?? emptyDisplayAd(ad.finalUrl ?? campaign.finalUrl ?? '')
               return (
                 <DisplayAdEditor
                   key={adIdx}
                   ad={display}
+                  slots={type === 'DEMAND_GEN' ? DEMANDGEN_IMAGE_SLOTS : DISPLAY_IMAGE_SLOTS}
                   onChange={updated => handleDisplayChange(agIdx, adIdx, updated)}
                 />
               )

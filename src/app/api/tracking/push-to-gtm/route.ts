@@ -14,30 +14,37 @@ import type { GtmWorkspace as AppGtmWorkspace } from '@/lib/tracking-types'
 interface PushBody {
   accountId:              string
   containerId:            string
-  workspace:              AppGtmWorkspace
+  workspace?:             AppGtmWorkspace   // not needed when remarketingOnly
   workspaceId?:           string  // pass to skip listWorkspaces API call entirely
   ga4MeasurementId?:      string
   googleAdsConversionId?: string
   googleAdsRemarketingId?: string
   pushRemarketing?:        boolean
   pushConversionLinker?:   boolean
+  minimal?:                boolean  // only GA4 Config + Conversion Linker + Remarketing (fewer GTM API calls → avoids 429)
+  remarketingOnly?:        boolean  // ONLY the Google Ads Remarketing tag (+ optional Linker) — no GA4, no variables, no event tags. Fewest calls possible (~6) for quota-tight days
 }
 
 // GTM API has a 5 QPS limit — throttle all calls
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 async function gtmCall<T>(fn: () => Promise<T>, label: string): Promise<T> {
-  await sleep(300) // 300ms between calls = max ~3 QPS, safely under 5 QPS limit
+  // GTM write quota is low (per-minute). Space writes out and retry hard on 429 so a
+  // burst of ~14 create calls (variables + triggers + tags) doesn't exhaust the quota.
+  await sleep(1200) // GTM write rate is strict — space calls out
   let lastErr: unknown
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // Keep retries LOW: each 429 retry is another request that burns the same quota, so
+  // retrying hard when the quota is exhausted only digs deeper. 1 retry handles a transient
+  // burst; beyond that we fail fast and tell the user to wait for the quota to reset.
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       return await fn()
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-        const backoff = attempt * 3000 // 3s, 6s, 9s
-        console.warn(`[GTM 429] ${label} — retry ${attempt}/3 in ${backoff}ms`)
-        await sleep(backoff)
+      const is429 = msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('rateLimitExceeded')
+      if (is429 && attempt < 2) {
+        console.warn(`[GTM 429] ${label} — one retry in 5s`)
+        await sleep(5000)
         lastErr = e
       } else {
         throw e
@@ -223,16 +230,20 @@ function buildRemarketingTagBody(initTriggerId: string, remarketingId: string) {
 }
 
 export async function POST(req: NextRequest) {
+  // Use the caller's OAuth token when present; otherwise the GTM lib falls back to
+  // the configured service account (GTM_SERVICE_ACCOUNT_*), so push/publish still works
+  // even when the user's session has no GTM-scoped token.
   const token = req.headers.get('x-access-token') ?? undefined
-  if (!token) return NextResponse.json({ error: 'No access token' }, { status: 401 })
 
   try {
     const body = await req.json() as PushBody
     const {
-      accountId, containerId, workspace,
+      accountId, containerId,
       ga4MeasurementId, googleAdsConversionId,
       googleAdsRemarketingId, pushRemarketing, pushConversionLinker,
+      minimal, remarketingOnly,
     } = body
+    const workspace: AppGtmWorkspace = body.workspace ?? ({ tags: [], triggers: [], variables: [] } as unknown as AppGtmWorkspace)
 
     const log: string[] = []
 
@@ -263,13 +274,15 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Create variables — throttled, skip on duplicate name error
-    const varDefs = [
+    // Minimal mode only needs the GA4 Measurement ID variable (added below) — skip the
+    // DataLayer/URL helper variables that per-event tags would use.
+    const varDefs = (minimal || remarketingOnly) ? [] : [
       { name: 'DL - Event',     type: 'v', parameter: [{ type: 'template', key: 'name', value: 'event' }] },
       { name: 'DL - Form ID',   type: 'v', parameter: [{ type: 'template', key: 'name', value: 'formId' }] },
       { name: 'DL - Form Name', type: 'v', parameter: [{ type: 'template', key: 'name', value: 'formName' }] },
       { name: 'JS - Page URL',  type: 'u', parameter: [{ type: 'template', key: 'component', value: 'URL' }] },
     ]
-    if (ga4MeasurementId) {
+    if (ga4MeasurementId && !remarketingOnly) {
       varDefs.push({ name: 'GA4 Measurement ID', type: 'c', parameter: [{ type: 'template', key: 'value', value: ga4MeasurementId }] })
     }
     for (const v of varDefs) {
@@ -326,7 +339,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    for (const trigger of workspace.triggers ?? []) {
+    for (const trigger of ((minimal || remarketingOnly) ? [] : (workspace.triggers ?? []))) {
       if (existingTriggerMap[trigger.name]) {
         triggerIdMap[trigger.name] = existingTriggerMap[trigger.name]
         log.push(`✓ Trigger already exists: ${trigger.name}`)
@@ -344,8 +357,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 5. Create workspace tags — skip if name already exists
-    for (const tag of workspace.tags ?? []) {
+    // 5. Create workspace tags — skip if name already exists.
+    // Minimal mode keeps only the GA4 Config tag (Linker + Remarketing are added below);
+    // per-event GA4/Conversion tags are skipped to stay under the GTM write quota.
+    const workspaceTags = remarketingOnly
+      ? []   // remarketing-only: no GA4 Config, no event tags — just Linker/Remarketing below
+      : minimal
+        ? (workspace.tags ?? []).filter(t => t.type === 'GA4_CONFIG')
+        : (workspace.tags ?? [])
+    for (const tag of workspaceTags) {
       if (existingTagNames.has(tag.name)) {
         log.push(`✓ Tag already exists — skipping: ${tag.name}`)
       } else {

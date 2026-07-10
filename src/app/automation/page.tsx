@@ -9,6 +9,7 @@ import {
   AlertTriangle, Bell, ChevronDown, ChevronUp, ShieldAlert, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { conditionSentence, actionSentence, HIGH_IMPACT_TYPES as HI_TYPES } from '@/lib/automation/labels'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -56,29 +57,15 @@ const RULE_TYPE_COLORS: Record<string, string> = {
 }
 
 const RESULT_CONFIG: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
-  triggered: { icon: <CheckCircle2 className="w-3.5 h-3.5" />, color: 'text-emerald-600', label: 'Triggered' },
-  no_match:  { icon: <Clock className="w-3.5 h-3.5" />,        color: 'text-gray-400',    label: 'No match' },
-  error:     { icon: <XCircle className="w-3.5 h-3.5" />,      color: 'text-red-500',     label: 'Error' },
+  triggered: { icon: <CheckCircle2 className="w-3.5 h-3.5" />, color: 'text-emerald-600', label: 'เงื่อนไขเข้า — ทำงานแล้ว' },
+  no_match:  { icon: <Clock className="w-3.5 h-3.5" />,        color: 'text-gray-400',    label: 'เงื่อนไขยังไม่เข้า' },
+  error:     { icon: <XCircle className="w-3.5 h-3.5" />,      color: 'text-red-500',     label: 'ผิดพลาด' },
 }
 
 function fmtTime(iso: string | null): string {
   if (!iso) return 'ยังไม่เคยรัน'
   const d = new Date(iso)
   return d.toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })
-}
-
-function parseCondition(json: string): string {
-  try {
-    const c = JSON.parse(json) as { metric: string; operator: string; value: number; window: string }
-    return `IF ${c.metric} ${c.operator} ${c.value} (${c.window})`
-  } catch { return json }
-}
-
-function parseAction(json: string): string {
-  try {
-    const a = JSON.parse(json) as { action: string }
-    return a.action.replace(/_/g, ' ')
-  } catch { return json }
 }
 
 interface Account { id: string; descriptiveName?: string }
@@ -95,18 +82,23 @@ export default function AutomationPage() {
   const [runningId, setRunningId]         = useState<string | null>(null)
   const [runningAll, setRunningAll]       = useState(false)
   const [pendingApproval, setPendingApproval] = useState<AutomationRule | null>(null)
+  const [mutateEnabled, setMutateEnabled] = useState(false)
 
-  const HIGH_IMPACT_TYPES = ['budget_adjust', 'campaign_pause', 'bid_adjust']
+  const HIGH_IMPACT_TYPES = HI_TYPES
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [runAllMsg, setRunAllMsg]   = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     const [rRes, aRes] = await Promise.all([
-      fetch('/api/automation/rules'),
+      fetch('/api/automation/rules?withMeta=1'),
       fetch('/api/automation/alerts'),
     ])
-    if (rRes.ok) setRules(await rRes.json() as AutomationRule[])
+    if (rRes.ok) {
+      const d = await rRes.json() as { rules: AutomationRule[]; mutateEnabled: boolean }
+      setRules(d.rules ?? [])
+      setMutateEnabled(!!d.mutateEnabled)
+    }
     if (aRes.ok) {
       const data = await aRes.json() as { alerts?: AutomationAlert[] } | AutomationAlert[]
       setAlerts(Array.isArray(data) ? data : (data.alerts ?? []))
@@ -210,8 +202,13 @@ export default function AutomationPage() {
       <div className="flex items-start justify-between mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Automation Center</h1>
-          <p className="text-sm text-gray-400 mt-0.5">
+          <p className="text-sm text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
             {enabledCount} rules active · {openAlerts} open alerts
+            {mutateEnabled ? (
+              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-100 text-red-700 border border-red-200">โหมดจริง — rule แก้ค่าใน Google Ads ได้</span>
+            ) : (
+              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-50 text-blue-600 border border-blue-100">โหมดจำลอง — รายงานผลอย่างเดียว ไม่แก้ค่าจริง</span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
@@ -296,9 +293,12 @@ export default function AutomationPage() {
                           {RULE_TYPE_LABELS[rule.type] ?? rule.type}
                         </span>
                         {rule.enabled
-                          ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Active</span>
-                          : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">Paused</span>
+                          ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">เปิดใช้</span>
+                          : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">ปิดอยู่</span>
                         }
+                        {HIGH_IMPACT_TYPES.includes(rule.type) && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title="รันจริงต้องกดยืนยันก่อนทุกครั้ง">⚡ แก้ค่าจริง</span>
+                        )}
                         {res && (
                           <span className={cn('flex items-center gap-0.5 text-[10px] font-medium', res.color)}>
                             {res.icon}{res.label}
@@ -307,8 +307,9 @@ export default function AutomationPage() {
                       </div>
 
                       <p className="text-sm font-medium text-gray-900">{rule.name}</p>
-                      <p className="text-xs text-gray-500 mt-0.5 font-mono">
-                        {parseCondition(rule.conditionJson)} → {parseAction(rule.actionJson)}
+                      <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                        <span className="text-gray-400">ถ้า</span> <span className="font-medium">{conditionSentence(rule.conditionJson)}</span>
+                        <span className="text-gray-400"> ให้ระบบ</span> <span className="font-medium text-blue-700">{actionSentence(rule.actionJson)}</span>
                       </p>
 
                       {/* Last run info */}
@@ -405,12 +406,12 @@ export default function AutomationPage() {
 
           {/* Execution note */}
           <div className="mt-4 bg-gray-50 rounded-xl border border-gray-100 p-4">
-            <p className="text-xs font-semibold text-gray-600 mb-1.5">วิธีการทำงาน</p>
+            <p className="text-xs font-semibold text-gray-600 mb-1.5">วิธีใช้ (อ่าน 20 วินาที)</p>
             <ul className="space-y-1.5 text-[11px] text-gray-500">
-              <li className="flex gap-1.5"><span className="text-blue-500 font-bold">▸</span>กดปุ่ม ▶ Run Now เพื่อรัน rule ทันที</li>
-              <li className="flex gap-1.5"><span className="text-emerald-500 font-bold">▸</span>กด Run All เพื่อรันทุก rule พร้อมกัน</li>
-              <li className="flex gap-1.5"><span className="text-amber-500 font-bold">▸</span>Budget/Campaign actions ต้องตั้ง AUTOMATION_MUTATE=true ใน .env</li>
-              <li className="flex gap-1.5"><span className="text-gray-400 font-bold">▸</span>ถ้าไม่ได้ตั้ง — ระบบจะ simulate และ log ผล</li>
+              <li className="flex gap-1.5"><span className="text-blue-500 font-bold">1.</span>เลือก account ด้านบน แล้วกด ▶ ที่ rule เพื่อลองรันทันที (หรือ Run All รันทุกกฎ)</li>
+              <li className="flex gap-1.5"><span className="text-emerald-500 font-bold">2.</span>ผลรันจะบอกว่า &quot;เงื่อนไขเข้า&quot; หรือ &quot;ยังไม่เข้า&quot; พร้อมรายละเอียด — กด ▼ ดูได้</li>
+              <li className="flex gap-1.5"><span className="text-amber-500 font-bold">3.</span>rule ที่มีป้าย <strong>⚡ แก้ค่าจริง</strong> จะถามยืนยันก่อน execute ทุกครั้ง</li>
+              <li className="flex gap-1.5"><span className="text-gray-400 font-bold">4.</span>{mutateEnabled ? 'ตอนนี้อยู่โหมดจริง — เงื่อนไขเข้าเมื่อไหร่ ระบบแก้ค่าใน Google Ads ทันที' : 'ตอนนี้อยู่โหมดจำลอง — ระบบจะบอกว่า \'จะทำอะไร\' แต่ยังไม่แก้ค่าจริง (ให้ทีม dev เปิดโหมดจริงเมื่อพร้อม)'}</li>
             </ul>
           </div>
         </div>

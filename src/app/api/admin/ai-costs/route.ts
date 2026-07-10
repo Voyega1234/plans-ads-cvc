@@ -31,13 +31,24 @@ export async function GET(req: NextRequest) {
     }),
   ])
 
-  // Group by route for summary
+  // Group by route/function labels for summary
   const byRoute: Record<string, { calls: number; totalTokens: number; estimatedUSD: number }> = {}
+  const byFunction: Record<string, { project: string; provider: string; feature: string; subfeature: string; calls: number; totalTokens: number; estimatedUSD: number }> = {}
   for (const log of logs) {
     if (!byRoute[log.route]) byRoute[log.route] = { calls: 0, totalTokens: 0, estimatedUSD: 0 }
     byRoute[log.route].calls++
     byRoute[log.route].totalTokens += log.totalTokens
     byRoute[log.route].estimatedUSD += log.estimatedUSD
+
+    const project = log.project ?? 'mercy'
+    const provider = log.provider ?? (log.model.includes(':') ? log.model.split(':')[0] : 'unknown')
+    const feature = log.feature ?? log.route.replace(/^\/api\/?/, '').split('/')[0] ?? 'unknown'
+    const subfeature = log.subfeature ?? (log.route.replace(/^\/api\/?/, '').split('/').slice(1).join('_') || feature)
+    const key = `${project}:${provider}:${feature}:${subfeature}`
+    if (!byFunction[key]) byFunction[key] = { project, provider, feature, subfeature, calls: 0, totalTokens: 0, estimatedUSD: 0 }
+    byFunction[key].calls++
+    byFunction[key].totalTokens += log.totalTokens
+    byFunction[key].estimatedUSD += log.estimatedUSD
   }
 
   return NextResponse.json({
@@ -51,6 +62,8 @@ export async function GET(req: NextRequest) {
       byRoute: Object.entries(byRoute)
         .sort((a, b) => b[1].estimatedUSD - a[1].estimatedUSD)
         .map(([route, v]) => ({ route, ...v })),
+      byFunction: Object.values(byFunction)
+        .sort((a, b) => b.estimatedUSD - a.estimatedUSD),
     },
     days,
   })

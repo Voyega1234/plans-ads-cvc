@@ -69,15 +69,32 @@ interface Props {
     targetLocation?: string
     objective?:      string
   } | null
+  // Keywords already on the plan (per campaign id) — pre-loaded so the user doesn't re-research
+  initialApplied?: Record<string, EmbedKeywordResult[]>
   onApply:      (campaignId: string, keywords: EmbedKeywordResult[], searchThemes?: string[]) => void
   onSkipPmax:   (campaignId: string) => void
   onNext:       () => void
   allDone:      boolean
 }
 
+// Convert a plan keyword into the research-workspace shape so it can be displayed
+function embedToResearch(k: EmbedKeywordResult): ResearchKeyword {
+  return {
+    keyword:     k.keyword,
+    matchType:   k.matchType,
+    group:       'service',
+    intent:      'high',
+    volume:      'กลาง',
+    competition: k.competition,
+    cpcEst:      k.suggestedCpc,
+    selected:    k.selected,
+    dataSource:  'ai_estimate',
+  } as ResearchKeyword
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function KeywordPlannerEmbed({ campaigns, brief, onApply, onSkipPmax, onNext, allDone }: Props) {
+export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, onApply, onSkipPmax, onNext, allDone }: Props) {
   const [activeCampaignId, setActiveCampaignId] = useState<string>(campaigns[0]?.id ?? '')
 
   // Form
@@ -104,9 +121,24 @@ export default function KeywordPlannerEmbed({ campaigns, brief, onApply, onSkipP
   // Budget for forecast
   const [dailyBudgetStr, setDailyBudgetStr] = useState('500')
 
-  // Track which campaigns have had keywords applied + what keywords
-  const [appliedSet,      setAppliedSet]      = useState<Set<string>>(new Set())
-  const [appliedKeywords, setAppliedKeywords] = useState<Record<string, EmbedKeywordResult[]>>({})
+  // Track which campaigns have had keywords applied + what keywords.
+  // Seed from the plan's keywords so already-researched campaigns show as done.
+  const [appliedSet,      setAppliedSet]      = useState<Set<string>>(
+    () => new Set(Object.entries(initialApplied ?? {}).filter(([, v]) => v.length > 0).map(([k]) => k))
+  )
+  const [appliedKeywords, setAppliedKeywords] = useState<Record<string, EmbedKeywordResult[]>>(
+    () => initialApplied ?? {}
+  )
+
+  // Show the active campaign's existing keywords in the workspace (no re-research needed)
+  const loadedForRef = useRef<string | null>(null)
+  useEffect(() => {
+    const applied = appliedKeywords[activeCampaignId]
+    if (applied?.length && loadedForRef.current !== activeCampaignId) {
+      setKeywords(applied.map(embedToResearch))
+      loadedForRef.current = activeCampaignId
+    }
+  }, [activeCampaignId, appliedKeywords])
 
   const hasResults = keywords.length > 0
 

@@ -117,6 +117,7 @@ const adGroupSchema = z.object({
   matchTypes:  z.array(z.string()).optional().default([]),
   ads:         z.array(adCopySchema).optional().default([]),
   audiences:   z.array(z.string()).optional(),
+  displayAd:   z.unknown().optional(),   // RESPONSIVE_DISPLAY copy — prompt puts it at adGroup level
 })
 
 const sitelinkSchema = z.object({

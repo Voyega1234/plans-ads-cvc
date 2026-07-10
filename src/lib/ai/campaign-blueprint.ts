@@ -372,6 +372,11 @@ function buildDisplayAd(brief: Record<string, unknown>, isRemarketing = false): 
         ? `อย่าพลาดโอกาส ${wordCut(productShort, 35)} กับ${bizName} ${usps[1]}`
         : `${wordCut(productShort, 35)} ${usps[1]} โดยทีมงานมืออาชีพ ติดต่อ${goalShort}ได้เลย`),
       d(promo ? promo : `${bizName} ${usps[0]} ลูกค้าไว้วางใจกว่า 10,000 ราย`),
+      d(`ปรึกษาฟรี ไม่มีค่าใช้จ่าย ทีมงานดูแลทุกขั้นตอน ${goalShort}ได้เลยวันนี้`),
+      d(`${bizName} ${usps[2] ?? 'บริการมืออาชีพ'} ราคาโปร่งใส ไม่มีค่าแอบแฝง`),
+      d(isRemarketing
+        ? `กลับมา${goalShort}กับ${bizName} รับข้อเสนอพิเศษสำหรับคุณโดยเฉพาะ`
+        : `เริ่มต้นวันนี้ ${wordCut(productShort, 30)} พร้อมให้บริการ ${goalShort}ง่ายใน 1 นาที`),
     ],
     businessName: bizShort,
     finalUrl: url,
@@ -593,8 +598,15 @@ function normaliseBlueprint(
 
   const allNormCampaigns: CampaignBlueprintJson['campaigns'] = []
 
+  // Single-campaign generation (/api/adcopy/generate): trust the media plan's type over
+  // the AI's — Gemini sometimes labels a PERFORMANCE_MAX plan as SEARCH, which would
+  // skip assetGroup normalisation entirely.
+  const forceSingleType = blueprint.campaigns.length === 1 && mediaPlan.campaignMix.length === 1
+    ? mediaPlan.campaignMix[0].type
+    : null
+
   for (const c of blueprint.campaigns) {
-    const type = c.campaignType ?? ''
+    const type = forceSingleType ?? c.campaignType ?? ''
     const queue = planByType[type] ?? []
     const idx = consumed[type] ?? 0
     const planCamp = queue[idx]
@@ -612,10 +624,18 @@ function normaliseBlueprint(
     const campaignSlug = canonicalName.replace(/\s*\|\s*/g, '_').replace(/\s+/g, '-').toLowerCase().slice(0, 40)
     const utmUrl = makeUtmUrl(campaignSlug)
 
-    // 3. Fix PMax: ensure assetGroups exist
+    // 3. Fix PMax: ensure assetGroups exist — prefer the AI's own RSA copy over the
+    // generic template when the AI answered in Search format by mistake
     let assetGroups = c.assetGroups
     if (type === 'PERFORMANCE_MAX' && (!assetGroups || assetGroups.length === 0)) {
-      assetGroups = [buildPMaxAssetGroup(brief, undefined)]
+      const ag = buildPMaxAssetGroup(brief, undefined)
+      const rsa = (c.adGroups?.[0]?.ads?.[0] as AdCopy | undefined)?.rsa
+      if ((rsa?.headlines?.length ?? 0) >= 3) {
+        ag.headlines = rsa!.headlines.filter(h => h && h.length <= 30).slice(0, 15)
+        const rsaDesc = (rsa!.descriptions ?? []).filter(d => d && d.length <= 90)
+        ag.descriptions = [...rsaDesc, ...ag.descriptions.filter(d => !rsaDesc.includes(d))].slice(0, 5)
+      }
+      assetGroups = [ag]
     }
 
     const isSearch  = type === 'SEARCH'
@@ -625,6 +645,13 @@ function normaliseBlueprint(
       const kws = ag.keywords ?? []
       const targetAdCount = isSearch ? 2 : 1
       const ads: AdCopy[] = []
+      // AI returns RESPONSIVE_DISPLAY copy as adGroup.displayAd (per prompt format);
+      // surface it as ads[0].display so the builder/UI see it. Fall back to a
+      // template display ad so DISPLAY/DEMAND_GEN never come back text-less.
+      const aiDisplayAd = (ag as { displayAd?: DisplayAdCopy }).displayAd
+      const displayAd = (aiDisplayAd && Array.isArray(aiDisplayAd.headlines) && aiDisplayAd.headlines.length > 0)
+        ? aiDisplayAd
+        : isDisplay ? buildDisplayAd(brief, /remarket/i.test(ag.adGroupName)) : undefined
 
       for (let adIdx = 0; adIdx < Math.max(ag.ads?.length ?? 0, targetAdCount); adIdx++) {
         const existingAd = ag.ads?.[adIdx] as AdCopy | undefined
@@ -648,6 +675,10 @@ function normaliseBlueprint(
           }
           ads.push(fallback)
         }
+      }
+
+      if (isDisplay && displayAd && ads.length > 0 && !ads[0].display) {
+        ads[0] = { ...ads[0], display: { ...displayAd, finalUrl: utmUrlForGroup } }
       }
 
       const safeMatchTypes = (ag.matchTypes ?? []).map((mt: string) =>
@@ -675,6 +706,7 @@ function normaliseBlueprint(
 
         allNormCampaigns.push({
           ...c,
+          campaignType:    type,
           campaignName:    cvcName,
           finalUrl:        agUtm,
           budget,
@@ -691,11 +723,34 @@ function normaliseBlueprint(
 
     allNormCampaigns.push({
       ...c,
+      campaignType: type,
       campaignName: canonicalName,
       finalUrl:     utmUrl,
       assetGroups,
       adGroups,
     })
+  }
+
+  // 6. Asset extensions ครบทุกแคมเปญทุก type (กติกาเดียวกับ Launch Today):
+  //    sitelinks ≥4 · callouts ≥6 · structured snippet ≥1 — AI ไม่ให้มา ระบบเติมให้
+  const fallbackSitelinks = buildSitelinks(brief)
+  const fallbackCallouts = [
+    (brief.brandTone as string)?.split(',')[0]?.trim() || 'บริการมืออาชีพ',
+    'ปรึกษาฟรี', 'ราคาโปร่งใส', 'ทีมงานประสบการณ์สูง', 'ดูแลหลังการขาย', 'ติดต่อได้ทุกวัน',
+  ]
+  for (const c of allNormCampaigns) {
+    if ((c.sitelinks ?? []).filter(sl => sl.text).length < 4) {
+      const have = (c.sitelinks ?? []).filter(sl => sl.text)
+      const names = new Set(have.map(sl => sl.text))
+      c.sitelinks = [...have, ...fallbackSitelinks.filter(sl => !names.has(sl.text))].slice(0, 4)
+    }
+    if ((c.callouts ?? []).filter(Boolean).length < 6) {
+      const have = (c.callouts ?? []).filter(Boolean)
+      c.callouts = Array.from(new Set([...have, ...fallbackCallouts])).slice(0, 8)
+    }
+    if ((c.structuredSnippets ?? []).length < 1 || !(c.structuredSnippets?.[0]?.values?.length)) {
+      c.structuredSnippets = buildStructuredSnippets(brief)
+    }
   }
 
   return { ...blueprint, campaigns: allNormCampaigns }
@@ -719,7 +774,7 @@ export async function generateCampaignBlueprint(
       prompt,
       (raw) => validateBlueprint(raw) as CampaignBlueprintJson | null,
       () => mockBlueprint(mediaPlan, keywordAudiencePlan, brief),
-      { temperature: 0.2, maxTokens: 16000 }
+      { temperature: 0.2, maxTokens: 16000, _route: '/api/campaign-blueprints/generate', _feature: 'campaign_blueprints', _subfeature: 'generate' }
     )
     return normaliseBlueprint(result, mediaPlan, brief)
   }
@@ -881,4 +936,3 @@ async function mockBlueprint(
     ],
   }
 }
-

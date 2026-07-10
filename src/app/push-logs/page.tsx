@@ -40,6 +40,11 @@ interface AiCostLog {
   id: string
   route: string
   model: string
+  provider: string
+  project: string
+  feature: string | null
+  subfeature: string | null
+  label: string | null
   inputTokens: number
   outputTokens: number
   totalTokens: number
@@ -56,6 +61,7 @@ interface AiCostSummary {
   outputTokens: number
   estimatedUSD: number
   byRoute: Array<{ route: string; calls: number; totalTokens: number; estimatedUSD: number }>
+  byFunction: Array<{ project: string; provider: string; feature: string; subfeature: string; calls: number; totalTokens: number; estimatedUSD: number }>
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: typeof CheckCircle2 }> = {
@@ -104,6 +110,10 @@ function fmtTokens(n: number) {
 
 function shortRoute(r: string) {
   return r.replace('/api/', '').replace(/\//g, ' › ')
+}
+
+function labelText(project: string | null | undefined, provider: string | null | undefined, feature: string | null | undefined, subfeature: string | null | undefined) {
+  return [project || 'mercy', provider || 'unknown', feature, subfeature].filter(Boolean).join(' / ')
 }
 
 export default function PushLogsPage() {
@@ -430,22 +440,22 @@ export default function PushLogsPage() {
                   </div>
                 </div>
 
-                {/* By route */}
-                {aiSummary.byRoute.length > 0 && (
+                {/* By function label */}
+                {aiSummary.byFunction.length > 0 && (
                   <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-4">
                     <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
                       <BarChart3 className="w-4 h-4 text-gray-400" />
-                      <span className="text-sm font-semibold text-gray-700">Cost by Route</span>
+                      <span className="text-sm font-semibold text-gray-700">Cost by Gemini Function</span>
                     </div>
                     <div className="divide-y divide-gray-50">
-                      {aiSummary.byRoute.slice(0, 10).map((r) => {
+                      {aiSummary.byFunction.slice(0, 10).map((r) => {
                         const pct = aiSummary.estimatedUSD > 0
                           ? (r.estimatedUSD / aiSummary.estimatedUSD) * 100
                           : 0
                         return (
-                          <div key={r.route} className="flex items-center gap-3 px-4 py-2.5">
+                          <div key={`${r.project}:${r.provider}:${r.feature}:${r.subfeature}`} className="flex items-center gap-3 px-4 py-2.5">
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-mono text-gray-600 truncate">{shortRoute(r.route)}</p>
+                              <p className="text-xs font-mono text-gray-600 truncate">{labelText(r.project, r.provider, r.feature, r.subfeature)}</p>
                               <div className="mt-1 h-1 bg-gray-100 rounded-full overflow-hidden">
                                 <div
                                   className="h-full bg-violet-400 rounded-full"
@@ -480,7 +490,8 @@ export default function PushLogsPage() {
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-mono text-gray-600 truncate">{shortRoute(log.route)}</p>
                             <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                              <span className="text-[10px] text-gray-400">{log.model}</span>
+                              <span className="text-[10px] text-violet-500">{labelText(log.project, log.provider, log.feature, log.subfeature)}</span>
+                              <span className="text-[10px] text-gray-400">· {log.model}</span>
                               {log.user?.email && (
                                 <span className="text-[10px] text-gray-400">· {log.user.email}</span>
                               )}

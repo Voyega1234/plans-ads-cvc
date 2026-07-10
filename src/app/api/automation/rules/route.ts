@@ -46,7 +46,7 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const skipAuth = process.env.SKIP_AUTH === 'true'
   const session = skipAuth ? null : await (auth() as Promise<Session | null>)
   const userId = skipAuth ? null : getUserId(session)
@@ -56,5 +56,9 @@ export async function GET() {
     where: userId ? { userId } : {},
     orderBy: { createdAt: 'desc' },
   })
+  // ?withMeta=1 → แนบสถานะโหมด (จำลอง/จริง) — caller เดิมที่รับ array ไม่กระทบ
+  if (new URL(req.url).searchParams.get('withMeta') === '1') {
+    return NextResponse.json({ rules, mutateEnabled: process.env.AUTOMATION_MUTATE === 'true' })
+  }
   return NextResponse.json(rules)
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 import { isMockMode } from '@/lib/google-ads/client'
+import { gaqlDuring } from '@/lib/google-ads/reporting'
 
 const DEV_TOKEN   = process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? ''
 const LOGIN_CID   = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ?? ''
@@ -59,7 +60,7 @@ export async function GET(req: NextRequest) {
       metrics.ctr,
       metrics.average_cpc
     FROM ad_group_ad
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
       AND ad_group_ad.status != 'REMOVED'
       AND campaign.status != 'REMOVED'
       AND ad_group_ad.ad.type IN ('RESPONSIVE_SEARCH_AD', 'EXPANDED_TEXT_AD')

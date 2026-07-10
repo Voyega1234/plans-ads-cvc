@@ -20,6 +20,7 @@ export interface UrlScanResult {
   gtmId?: string
   hasGa4: boolean
   ga4MeasurementId?: string
+  platform?: string   // detected CMS/stack (WordPress, Shopify, Wix, ... ) for install guide
   hasGoogleAdsTag: boolean
   googleAdsConversionId?: string
   forms: FormElement[]
@@ -143,6 +144,19 @@ export async function scanUrl(url: string): Promise<UrlScanResult> {
     if (href) thankYouUrls.push(href)
   })
 
+  // Platform / CMS detection — drives the per-platform install guide
+  const platform =
+    /wp-content|wp-includes|wp-json/.test(html) ? 'WordPress'
+    : /cdn\.shopify\.com|Shopify\.theme|myshopify\.com/.test(html) ? 'Shopify'
+    : /static\.wixstatic\.com|wix-code|_wixCIDX/.test(html) ? 'Wix'
+    : /website-files\.com|data-wf-page|webflow/i.test(html) ? 'Webflow'
+    : /__NEXT_DATA__|\/_next\//.test(html) ? 'Next.js / React'
+    : /makewebeasy|mwe-cdn/i.test(html) ? 'MakeWebEasy'
+    : /lnwshop|lnw\.me/i.test(html) ? 'LnwShop'
+    : /readyplanet|rdpl/i.test(html) ? 'ReadyPlanet'
+    : /googleusercontent|sites\.google\.com/.test(normalizedUrl) ? 'Google Sites'
+    : undefined
+
   // Duplicate GTM detection
   const allGtmIds = Array.from(new Set(html.match(/GTM-[A-Z0-9]+/g) ?? []))
 
@@ -153,6 +167,7 @@ export async function scanUrl(url: string): Promise<UrlScanResult> {
     gtmId,
     hasGa4: !!ga4MeasurementId,
     ga4MeasurementId: ga4MeasurementId ?? undefined,
+    platform,
     hasGoogleAdsTag: !!googleAdsConversionId,
     googleAdsConversionId,
     forms,

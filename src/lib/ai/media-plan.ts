@@ -88,7 +88,7 @@ export async function generateMediaPlan(
       prompt,
       (raw) => validateMediaPlan(raw) as MediaPlanJson | null,
       () => mockMediaPlan(brief, allowedTypes),
-      { temperature: 0.3, tier: 'quality' }
+      { temperature: 0.3, tier: 'quality', _route: '/api/media-plans/generate', _feature: 'media_plans', _subfeature: 'generate' }
     )
   }
 

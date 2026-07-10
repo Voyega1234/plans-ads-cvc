@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -146,8 +146,9 @@ model MediaPlan {
   objective  String
   monthlyBudget Float
   currency   String   @default("THB")
-  planJson   String
-  status     String   @default("draft")
+  planJson     String
+  strategyJson String?
+  status       String   @default("draft")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   brief      Brief    @relation(fields: [briefId], references: [id])
@@ -371,12 +372,17 @@ model CampaignComment {
 }
 
 // ── AI Cost Log ───────────────────────────────────────────────────────────────
-// Tracks AI (Gemini/Anthropic) token usage and estimated cost per API call
+// Tracks AI token usage, labels, and estimated cost per API call
 model AiCostLog {
   id            String   @id @default(cuid())
   userId        String?
   route         String   // API route that called AI e.g. /api/media-plans/generate
   model         String   // e.g. gemini-3.5-flash
+  provider      String   @default("unknown")
+  project       String   @default("mercy")
+  feature       String?
+  subfeature    String?
+  label         String?
   inputTokens   Int      @default(0)
   outputTokens  Int      @default(0)
   totalTokens   Int      @default(0)

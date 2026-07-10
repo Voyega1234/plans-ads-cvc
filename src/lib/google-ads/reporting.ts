@@ -14,6 +14,15 @@ interface CampaignPerformanceRow {
   costPerConversion: number
 }
 
+
+// Supports both GAQL presets (LAST_30_DAYS) and custom ranges encoded as
+// "CUSTOM_YYYY-MM-DD_YYYY-MM-DD" → BETWEEN clause
+export function gaqlDuring(dateRange: string): string {
+  const m = dateRange.match(/^CUSTOM_(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/)
+  if (m) return `segments.date BETWEEN '${m[1]}' AND '${m[2]}'`
+  return `segments.date DURING ${dateRange}`
+}
+
 export async function getCampaignPerformance(
   customerId: string,
   dateRange = 'LAST_30_DAYS',
@@ -57,7 +66,7 @@ export async function getCampaignPerformance(
       metrics.average_cpc,
       metrics.cost_per_conversion
     FROM campaign
-    WHERE segments.date DURING ${dateRange}
+    WHERE ${gaqlDuring(dateRange)}
       AND campaign.status != 'REMOVED'
   `.trim()
 

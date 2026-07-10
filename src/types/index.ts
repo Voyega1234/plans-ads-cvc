@@ -1,5 +1,15 @@
 // ─── Media Plan Types ──────────────────────────────────────────────────────────
 
+export interface CampaignKeyword {
+  keyword: string
+  matchType: 'EXACT' | 'PHRASE' | 'BROAD'
+  avgMonthlySearches: number
+  competition: 'LOW' | 'MEDIUM' | 'HIGH'
+  suggestedCpc: number
+  selected: boolean
+  isNegative?: boolean
+}
+
 export interface CampaignMixItem {
   campaignName: string
   type: 'SEARCH' | 'DISPLAY' | 'VIDEO' | 'PERFORMANCE_MAX' | 'SHOPPING' | 'YOUTUBE' | 'DEMAND_GEN' | 'APP_CAMPAIGN'
@@ -22,6 +32,12 @@ export interface CampaignMixItem {
     languages: string[]
     devices: string[]
   }
+  // Research data from step 4
+  keywords?: CampaignKeyword[]
+  searchThemes?: string[]
+  remarketing?: string[]
+  inMarket?: string[]
+  customIntent?: string[]
 }
 
 export interface MediaPlanForecast {
@@ -130,6 +146,7 @@ export interface PMaxAssetGroup {
     customIntent?: string[]
     remarketing?: string[]
     inMarket?: string[]
+    searchThemes?: string[]
   }
 }
 
@@ -238,6 +255,7 @@ export interface PushCampaignResult {
   error?: string
   adGroupsCreated?: number
   adsCreated?: number
+  warnings?: string[]   // non-fatal issues (sitelinks/audience/ads ที่สร้างไม่ได้บางส่วน)
 }
 
 export interface PushResult {
