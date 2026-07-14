@@ -12,10 +12,10 @@ import { generateVertexContent, isVertexConfigured, vertexText } from './vertex-
 export type AIProvider = 'vertex' | 'anthropic' | 'openai' | 'mock'
 export type AITier = 'quality' | 'standard'
 
-const DEFAULT_QUALITY  = 'gemini-3.5-flash'
-const DEFAULT_STANDARD = 'gemini-3.5-flash'
+const DEFAULT_QUALITY  = 'gemini-3-flash-preview'
+const DEFAULT_STANDARD = 'gemini-3-flash-preview'
 
-// Gemini 3.5 Flash pricing (USD per 1M tokens) — update when Google changes pricing
+// Gemini Flash estimated pricing (USD per 1M tokens) — update when Google changes pricing
 const GEMINI_PRICE_INPUT  = 0.075  // $0.075 per 1M input tokens
 const GEMINI_PRICE_OUTPUT = 0.30   // $0.30 per 1M output tokens
 const AI_PROJECT_LABEL = 'mercy'

@@ -84,7 +84,7 @@ const SERVICES: ServiceDef[] = [
       'Enable Vercel OIDC Federation on the Vercel project',
       'Create GCP Workload Identity Federation provider for the Vercel issuer',
       'Grant the Vercel principal Workload Identity User on the Vertex service account',
-      'AI_MODEL_QUALITY และ AI_MODEL_STANDARD ตั้งเป็น gemini-3.5-flash',
+      'AI_MODEL_QUALITY และ AI_MODEL_STANDARD ตั้งเป็น gemini-3-flash-preview',
       'Set MOCK_AI=false to use real AI',
     ],
   },

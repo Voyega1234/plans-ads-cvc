@@ -226,12 +226,12 @@ turso db shell plans-ads-v1 < /tmp/plans-ads-dump.sql
 | `GCP_SERVICE_ACCOUNT_EMAIL` | Service Account ที่มีสิทธิ์ `roles/aiplatform.user` |
 | `GCP_WORKLOAD_IDENTITY_POOL_ID` | Workload Identity Pool ID |
 | `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | Workload Identity Provider ID |
-| `VERTEX_LOCATION` | `us-central1` หรือ region ที่เปิด Vertex AI |
+| `VERTEX_LOCATION` | `global` หรือ region ที่เปิด Vertex AI |
 | `GCP_AUDIENCE` | optional: audience จาก GCP provider details ถ้าใช้ custom/default audience |
 | `ANTHROPIC_API_KEY` | optional fallback จาก console.anthropic.com |
 | `OPENAI_API_KEY` | optional fallback |
-| `AI_MODEL_QUALITY` | `gemini-3.5-flash` |
-| `AI_MODEL_STANDARD` | `gemini-3.5-flash` |
+| `AI_MODEL_QUALITY` | `gemini-3-flash-preview` |
+| `AI_MODEL_STANDARD` | `gemini-3-flash-preview` |
 | `MOCK_AI` | `false` |
 
 > ไม่ต้องตั้ง `GEMINI_API_KEY` แล้ว ถ้ามีอยู่บน Vercel ให้ลบออก

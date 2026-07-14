@@ -377,7 +377,7 @@ model AiCostLog {
   id            String   @id @default(cuid())
   userId        String?
   route         String   // API route that called AI e.g. /api/media-plans/generate
-  model         String   // e.g. gemini-3.5-flash
+  model         String   // e.g. gemini-3-flash-preview
   provider      String   @default("unknown")
   project       String   @default("mercy")
   feature       String?

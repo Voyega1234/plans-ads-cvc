@@ -6,7 +6,7 @@
  * เปิดใช้เมื่อครบ env ทั้งชุด (ตั้งใน Vercel หลัง connect OIDC กับ GCP):
  *   GCP_PROJECT_ID · GCP_PROJECT_NUMBER · GCP_WORKLOAD_IDENTITY_POOL_ID
  *   GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID · GCP_SERVICE_ACCOUNT_EMAIL
- *   (optional) VERTEX_LOCATION — default us-central1
+ *   (optional) VERTEX_LOCATION — default global
  * ไม่ครบ = fallback ไป provider อื่นหรือ mock
  */
 
@@ -20,7 +20,7 @@ export function isVertexConfigured(): boolean {
   )
 }
 
-export const VERTEX_LOCATION = () => process.env.VERTEX_LOCATION ?? 'us-central1'
+export const VERTEX_LOCATION = () => process.env.VERTEX_LOCATION ?? process.env.GCP_LOCATION ?? 'global'
 export const VERTEX_PROJECT = () => process.env.GCP_PROJECT_ID ?? ''
 export const VERTEX_AUDIENCE = () =>
   process.env.GCP_AUDIENCE ??
@@ -79,7 +79,10 @@ export async function generateVertexContent(opts: {
 }) {
   const token = await getVertexAccessToken()
   const location = VERTEX_LOCATION()
-  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT()}/locations/${location}/publishers/google/models/${opts.model}:generateContent`
+  const endpoint = location === 'global'
+    ? 'https://aiplatform.googleapis.com'
+    : `https://${location}-aiplatform.googleapis.com`
+  const url = `${endpoint}/v1/projects/${VERTEX_PROJECT()}/locations/${location}/publishers/google/models/${opts.model}:generateContent`
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

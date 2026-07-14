@@ -415,7 +415,7 @@ export async function POST(req: NextRequest) {
           return { role: m.role === 'assistant' ? 'model' : 'user', parts }
         })
 
-        const chatModel = process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash'
+        const chatModel = process.env.AI_MODEL_QUALITY ?? 'gemini-3-flash-preview'
         const { generateVertexContent, vertexText } = await import('@/lib/ai/vertex-auth')
         const usageLabels = buildAiUsageLabels({
           route: '/api/chat',
