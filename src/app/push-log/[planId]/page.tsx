@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { PushResult } from '@/types'
 import { Loader, Send, AlertTriangle, RotateCcw, PauseCircle, Trash2, ShieldAlert, X, CheckCircle2 } from 'lucide-react'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 
 interface AdAccount {
   id: string
@@ -147,20 +148,15 @@ export default function PushLogPage() {
                   Google Ads Account <span className="text-red-500">*</span>
                 </label>
                 {adAccounts.length > 0 ? (
-                  <select
+                  <AccountSelect
+                    accounts={adAccounts}
                     value={customerId}
-                    onChange={(e) => setCustomerId(e.target.value)}
+                    onChange={setCustomerId}
+                    placeholder="-- เลือก Account --"
                     className={`w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
                       !customerId ? 'border-red-300' : 'border-gray-300'
                     }`}
-                  >
-                    <option value="">-- เลือก Account --</option>
-                    {adAccounts.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name} ({a.id})
-                      </option>
-                    ))}
-                  </select>
+                  />
                 ) : (
                   <input
                     value={customerId}

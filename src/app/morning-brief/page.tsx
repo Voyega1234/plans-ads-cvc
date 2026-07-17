@@ -1,7 +1,7 @@
 'use client'
 
 import AppShell from '@/components/layout/AppShell'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   AlertTriangle, CheckCircle2, XCircle, ChevronRight,
@@ -190,11 +190,13 @@ export default function MorningBriefPage() {
   const [error, setError]           = useState<string | null>(null)
   const [aiResult, setAiResult]     = useState<AISummaryResult | null>(null)
   const [aiLoading, setAiLoading]   = useState(false)
+  const [aiError, setAiError]       = useState(false)
+  const [acctFilter, setAcctFilter] = useState('')
   const router = useRouter()
 
   const loadAI = async (data: MorningBriefData) => {
     if (!data.accountHealths?.length) return
-    setAiLoading(true)
+    setAiLoading(true); setAiError(false)
     try {
       const res = await fetch('/api/morning-brief/ai-summary', {
         method: 'POST',
@@ -202,13 +204,14 @@ export default function MorningBriefPage() {
         body: JSON.stringify({ accountHealths: data.accountHealths, alerts: data.alerts }),
       })
       if (res.ok) setAiResult(await res.json() as AISummaryResult)
-    } catch { /* silent */ } finally {
+      else setAiError(true)
+    } catch { setAiError(true) } finally {
       setAiLoading(false)
     }
   }
 
   const loadBrief = async () => {
-    setLoading(true); setError(null); setAiResult(null)
+    setLoading(true); setError(null); setAiResult(null); setAiError(false)
     try {
       const res = await fetch('/api/morning-brief')
       if (!res.ok) {
@@ -224,6 +227,13 @@ export default function MorningBriefPage() {
   }
 
   useEffect(() => { loadBrief() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredHealths = useMemo(() => {
+    const healths = brief?.accountHealths ?? []
+    const q = acctFilter.trim().toLowerCase()
+    if (!q) return healths
+    return healths.filter((h) => h.accountName.toLowerCase().includes(q) || h.accountId.includes(q))
+  }, [brief?.accountHealths, acctFilter])
 
   const now  = new Date()
   const date = now.toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
@@ -314,6 +324,13 @@ export default function MorningBriefPage() {
               </div>
               {aiLoading ? (
                 <p className="text-sm text-blue-400 italic">กำลังวิเคราะห์ข้อมูลทุก account...</p>
+              ) : aiError ? (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-red-500">โหลด AI Summary ไม่สำเร็จ</p>
+                  <button onClick={() => brief && loadAI(brief)} className="flex-shrink-0 text-xs text-blue-600 hover:underline flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3" />ลองใหม่
+                  </button>
+                </div>
               ) : aiResult?.summary ? (
                 <p className="text-sm text-gray-700 leading-relaxed">{aiResult.summary}</p>
               ) : (
@@ -324,7 +341,7 @@ export default function MorningBriefPage() {
             {/* Account Health Grid */}
             {brief.accountHealths && brief.accountHealths.length > 0 && (
               <div>
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                     <Users className="w-4 h-4 text-blue-500" />Account Health ({brief.accountHealths.length})
                   </h2>
@@ -337,9 +354,24 @@ export default function MorningBriefPage() {
                     ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {brief.accountHealths.map((h) => <AccountCard key={h.accountId} health={h} />)}
-                </div>
+                {brief.accountHealths.length > 4 && (
+                  <div className="relative mb-3">
+                    <Search className="w-3.5 h-3.5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      value={acctFilter}
+                      onChange={(e) => setAcctFilter(e.target.value)}
+                      placeholder="ค้นหาด้วยชื่อ หรือ CID..."
+                      className="w-full text-sm pl-9 pr-3 py-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300"
+                    />
+                  </div>
+                )}
+                {filteredHealths.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {filteredHealths.map((h) => <AccountCard key={h.accountId} health={h} />)}
+                  </div>
+                ) : (
+                  <p className="text-center text-xs text-gray-400 py-6">ไม่พบ account ที่ตรงกับ &quot;{acctFilter}&quot;</p>
+                )}
               </div>
             )}
 

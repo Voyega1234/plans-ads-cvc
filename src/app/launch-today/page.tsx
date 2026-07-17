@@ -10,6 +10,7 @@ import {
   Users, Download,
 } from 'lucide-react'
 import type { CampaignBlueprintItem } from '@/types'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -2137,16 +2138,13 @@ function AccountBar({ accounts, selected, loading, onSelect }: {
           <span className="flex items-center gap-1.5 text-xs text-red-600"><AlertCircle size={12} /> ไม่พบ account — เชื่อม Google Ads ก่อน</span>
         ) : (
           <>
-            <select
+            <AccountSelect
+              accounts={accounts}
               value={selected?.id ?? ''}
-              onChange={e => onSelect(accounts.find(a => a.id === e.target.value) ?? null)}
+              onChange={id => onSelect(accounts.find(a => a.id === id) ?? null)}
+              placeholder="— เลือก account ปลายทางก่อน —"
               className={`flex-1 min-w-[220px] text-sm border rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-neutral-900/10 ${selected ? 'border-neutral-200' : 'border-amber-400'}`}
-            >
-              <option value="">— เลือก account ปลายทางก่อน —</option>
-              {accounts.map(a => (
-                <option key={a.id} value={a.id}>{a.name} ({a.id}){a.currencyCode ? ` · ${a.currencyCode}` : ''}</option>
-              ))}
-            </select>
+            />
             {selected && (
               <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 shrink-0">
                 <ShieldCheck size={12} /> push เข้า: {selected.name}

@@ -16,6 +16,7 @@ import {
   ClipboardCheck, CheckCheck, UserCheck, Monitor,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 
 interface QAData {
   result: QAResult
@@ -502,21 +503,18 @@ export default function ReviewPage() {
                     ? 'ต้องเลือก account ทุกครั้ง — ป้องกันการ push ไปผิด account ของลูกค้าคนอื่น'
                     : `Campaign จะถูกสร้างใน account: ${accounts.find(a => a.id === customerId)?.name ?? customerId}`}
                 </p>
-                <select
+                <AccountSelect
+                  accounts={accounts}
                   value={customerId}
-                  onChange={(e) => setCustomerId(e.target.value)}
+                  onChange={setCustomerId}
+                  placeholder="— เลือก Account —"
                   className={cn(
                     'text-sm border rounded-lg px-3 py-2 bg-white focus:outline-none w-full max-w-sm',
                     !accountSelected
                       ? 'border-amber-400 focus:border-amber-600 text-gray-500'
                       : 'border-blue-300 focus:border-blue-500 text-gray-800 font-medium'
                   )}
-                >
-                  <option value="">— เลือก Account —</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name} ({a.id})</option>
-                  ))}
-                </select>
+                />
               </div>
               <div className="flex flex-col gap-2">
                 <button onClick={runQA} disabled={running || !accountSelected}

@@ -283,6 +283,11 @@ export async function GET() {
       ])
     }
 
+    // accountHealths ถูก push เข้า array ตามลำดับที่ fetch เสร็จ (Promise.all แบบ parallel) ลำดับจึงสลับไปมาทุกครั้งที่ refresh
+    // เรียงใหม่ตามความรุนแรง (critical > warning > paused > healthy) แล้วตาม spend มากไปน้อย ให้ account ที่ต้องสนใจอยู่บนสุดเสมอ
+    const SEVERITY_ORDER: Record<AccountHealth['status'], number> = { critical: 0, warning: 1, paused: 2, healthy: 3 }
+    accountHealths.sort((a, b) => SEVERITY_ORDER[a.status] - SEVERITY_ORDER[b.status] || b.spend30d - a.spend30d)
+
     alerts.sort((a, b) => ({ critical: 0, warning: 1, ok: 2 }[a.level] - { critical: 0, warning: 1, ok: 2 }[b.level]))
 
     const criticalCount = alerts.filter((a) => a.level === 'critical').length

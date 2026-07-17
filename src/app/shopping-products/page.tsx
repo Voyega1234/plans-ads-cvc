@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import AppShell from '@/components/layout/AppShell'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 import { ShoppingBag, TrendingUp, TrendingDown, ChevronUp, ChevronDown, AlertTriangle, Calendar, X } from 'lucide-react'
 import { cn, formatCurrency, formatConversions } from '@/lib/utils'
 
@@ -255,14 +256,13 @@ export default function ShoppingProductsPage() {
           <div className="flex flex-wrap items-center gap-2">
 
             {/* Account */}
-            <select
+            <AccountSelect
+              accounts={accounts}
               value={selectedAcc}
-              onChange={e => setSelectedAcc(e.target.value)}
+              onChange={setSelectedAcc}
+              emptyLabel="กำลังโหลด..."
               className="text-sm border border-gray-200 rounded-xl px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
-            >
-              {accounts.length === 0 && <option value="">กำลังโหลด...</option>}
-              {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
+            />
 
             {/* Campaign — includes All */}
             <select

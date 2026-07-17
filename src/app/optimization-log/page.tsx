@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback, Fragment } from 'react'
 import AppShell from '@/components/layout/AppShell'
 import { cn } from '@/lib/utils'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 import {
   FileClock, Loader2, AlertTriangle, Sparkles, Copy, CheckCircle2,
   ChevronDown, ChevronUp, RefreshCw, Inbox,
@@ -169,14 +170,13 @@ export default function OptimizationLogPage() {
         {/* Filters */}
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <select
+            <AccountSelect
+              accounts={accounts}
               value={accountId}
-              onChange={e => setAccountId(e.target.value)}
+              onChange={setAccountId}
+              placeholder="— เลือก Google Ads Account —"
               className="text-sm border border-gray-300 rounded-lg px-3 py-2 w-72 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300"
-            >
-              <option value="">— เลือก Google Ads Account —</option>
-              {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({a.id})</option>)}
-            </select>
+            />
             <button
               onClick={load}
               disabled={!accountId || !dateRange || loading}

@@ -22,6 +22,7 @@ const { TrendChart, CampaignBarChart, DonutChart, FunnelBars } = {
 }
 import { formatCurrency, formatNumber, formatConversions, pctChangeColor, metricValueColor } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1664,13 +1665,14 @@ ${ctx}`
           <div className="relative flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-xl shadow-sm min-w-[200px]">
             <Users className="w-4 h-4 text-gray-400 shrink-0" />
             {accountsLoading ? <span className="text-sm text-gray-400 flex-1">Loading...</span> : (
-              <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)}
-                className="flex-1 bg-transparent text-sm text-gray-700 font-medium outline-none appearance-none cursor-pointer">
-                {accounts.length === 0 && <option value="">ไม่พบ account</option>}
-                {accounts.map((a) => <option key={a.id} value={a.id}>{a.descriptiveName}{a.testAccount ? ' (Test)' : ''}</option>)}
-              </select>
+              <AccountSelect
+                accounts={accounts}
+                value={selectedId}
+                onChange={setSelectedId}
+                emptyLabel="ไม่พบ account"
+                className="flex-1 bg-transparent text-sm text-gray-700 font-medium outline-none cursor-pointer"
+              />
             )}
-            <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0 pointer-events-none" />
           </div>
           {/* Date range */}
           <div className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-xl shadow-sm">

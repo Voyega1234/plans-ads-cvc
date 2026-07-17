@@ -9,6 +9,7 @@ import {
   Layers, RefreshCw, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface GoogleAdsAccount { id: string; descriptiveName?: string; name?: string }
@@ -367,18 +368,13 @@ export default function CampaignAdjustmentPage() {
           {/* Account picker */}
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-sm font-semibold text-gray-700 mb-3">1. เลือก Account</p>
-            <select
+            <AccountSelect
+              accounts={accounts}
               value={selectedAccountId}
-              onChange={e => { setSelectedAccountId(e.target.value); setCampaigns([]); setSelectedCampaign(null) }}
+              onChange={id => { setSelectedAccountId(id); setCampaigns([]); setSelectedCampaign(null) }}
+              placeholder="เลือก account"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">เลือก account</option>
-              {accounts.map(a => (
-                <option key={a.id} value={a.id}>
-                  {a.descriptiveName ?? a.name ?? a.id} ({a.id})
-                </option>
-              ))}
-            </select>
+            />
             <button
               onClick={loadCampaigns}
               disabled={!selectedAccountId || loadingCampaigns}
@@ -577,8 +573,8 @@ export default function CampaignAdjustmentPage() {
                                 key={ad.id}
                                 onClick={() => {
                                   setSelectedAd(ad)
-                                  setHeadlines(ad.headlines?.slice(0, 3) ?? ['', '', ''])
-                                  setDescriptions(ad.descriptions?.slice(0, 2) ?? ['', ''])
+                                  setHeadlines(ad.headlines && ad.headlines.length > 0 ? ad.headlines : ['', '', ''])
+                                  setDescriptions(ad.descriptions && ad.descriptions.length > 0 ? ad.descriptions : ['', ''])
                                   setFinalUrl(ad.finalUrls?.[0] ?? '')
                                 }}
                                 className={cn(

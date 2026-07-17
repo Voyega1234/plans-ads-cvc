@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import type { CampaignSummary } from '@/app/api/campaign-edit/campaigns/route'
 import type { AssetGroup } from '@/app/api/campaign-edit/asset-groups/route'
 import type { ProductGroup } from '@/app/api/campaign-edit/shopping-products/route'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const HEADLINE_MAX = 30
@@ -1315,14 +1316,13 @@ function CampaignEditorPage() {
         <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap gap-4 items-end">
           <div className="flex-1 min-w-[200px]">
             <label className="block text-xs font-medium text-gray-500 mb-1.5">Account</label>
-            <select
+            <AccountSelect
+              accounts={accounts}
               value={selectedCustomer}
-              onChange={e => { setSelectedCustomer(e.target.value) }}
+              onChange={id => setSelectedCustomer(id)}
+              placeholder="-- เลือก Account --"
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-            >
-              <option value="">-- เลือก Account --</option>
-              {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({a.id})</option>)}
-            </select>
+            />
           </div>
           <button
             onClick={() => selectedCustomer && loadCampaigns(selectedCustomer)}

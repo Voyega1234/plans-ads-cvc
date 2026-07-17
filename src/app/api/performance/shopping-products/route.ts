@@ -132,7 +132,7 @@ export async function GET(req: NextRequest) {
   try {
     const products = isMockMode()
       ? await getMockProducts(campaignId, days)
-      : await getRealProducts(customerId, campaignId, searchParams).catch(async () => getMockProducts(campaignId, days))
+      : await getRealProducts(customerId, campaignId, searchParams)
 
     const totalCost  = products.reduce((a, p) => a + p.cost, 0)
     const totalConv  = products.reduce((a, p) => a + p.conversions, 0)

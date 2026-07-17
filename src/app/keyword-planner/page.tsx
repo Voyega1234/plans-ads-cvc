@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts'
 import { cn } from '@/lib/utils'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 import type { ResearchKeyword as BaseResearchKeyword } from '@/app/api/keyword-research/generate/route'
 
 // Standalone planner extends the shared type with 'negative' group (local-only)
@@ -940,15 +941,12 @@ function KeywordPlannerContent() {
             <div className="mb-4 flex items-center gap-2">
               <Building2 className="w-4 h-4 text-gray-400 shrink-0" />
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide shrink-0">Google Ads Account</label>
-              <select
+              <AccountSelect
+                accounts={accounts}
                 value={selectedCid}
-                onChange={(e) => setSelectedCid(e.target.value)}
+                onChange={setSelectedCid}
                 className="flex-1 max-w-xs px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400 bg-white"
-              >
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.descriptiveName} ({a.id})</option>
-                ))}
-              </select>
+              />
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

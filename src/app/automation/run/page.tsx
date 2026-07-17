@@ -12,6 +12,7 @@ import {
   Globe, Tag, ShieldAlert, AlertTriangle, X, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 import type { CampaignConflict } from '@/lib/checks/duplicate-checker'
 
 interface StepEvent {
@@ -512,15 +513,12 @@ export default function AutomationRunPage() {
             {accounts.length > 0 && (
               <div className="bg-white rounded-xl border border-gray-200 p-5">
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Google Ads Account</label>
-                <select
+                <AccountSelect
+                  accounts={accounts}
                   value={selectedAccount?.id ?? ''}
-                  onChange={(e) => setSelectedAccount(accounts.find((a) => a.id === e.target.value) ?? null)}
+                  onChange={(id) => setSelectedAccount(accounts.find((a) => a.id === id) ?? null)}
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name} ({a.id})</option>
-                  ))}
-                </select>
+                />
               </div>
             )}
 

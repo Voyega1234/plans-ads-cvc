@@ -9,6 +9,7 @@ import {
   AlertTriangle, Bell, ChevronDown, ChevronUp, ShieldAlert, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 import { conditionSentence, actionSentence, HIGH_IMPACT_TYPES as HI_TYPES } from '@/lib/automation/labels'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -214,17 +215,12 @@ export default function AutomationPage() {
         <div className="flex items-center gap-2 flex-wrap justify-end">
           {/* Account selector */}
           {accounts.length > 0 && (
-            <select
+            <AccountSelect
+              accounts={accounts}
               value={customerId}
-              onChange={(e) => setCustomerId(e.target.value)}
+              onChange={setCustomerId}
               className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 bg-white"
-            >
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.descriptiveName ?? a.id}
-                </option>
-              ))}
-            </select>
+            />
           )}
           {!customerId && (
             <span className="text-xs text-amber-600 font-medium px-2 py-1.5 bg-amber-50 rounded-lg border border-amber-100">

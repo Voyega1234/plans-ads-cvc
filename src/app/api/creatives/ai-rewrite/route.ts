@@ -66,12 +66,14 @@ function mockRewrite(body: RewriteBody): AdCopy {
 function buildPrompt(body: RewriteBody): string {
   const { campaignType, campaignName, currentCopy, businessContext, instruction } = body
 
+  // นับจำนวนเป้าหมายตรงตาม max ที่ Google Ads กำหนดต่อ campaignType (ตรงกับ Zod schema ที่ campaign-adjustments/route.ts ใช้ตอน push จริง)
+  // ต้อง "EXACTLY" ไม่ใช่ช่วง — prompt แบบช่วง (เดิม "3–15 items") ทำให้ AI หยุดที่จำนวนเดิมของ ad แทนที่จะเขียนเพิ่มให้เต็ม
   const charLimits: Record<string, string> = {
-    SEARCH: 'Headlines: max 30 chars each (3–15 items). Descriptions: max 90 chars each (2–4 items). DisplayPath: max 15 chars each.',
-    PERFORMANCE_MAX: 'Headlines: max 30 chars each (3–15). LongHeadlines: max 90 chars (1–5). Descriptions: max 90 chars (2–4). BusinessName: max 25 chars.',
-    DISPLAY: 'Headlines: max 30 chars (1–5). LongHeadline: max 90 chars. Descriptions: max 90 chars (1–5). BusinessName: max 25 chars.',
+    SEARCH: 'Headlines: EXACTLY 15 items, max 30 chars each. Descriptions: EXACTLY 4 items, max 90 chars each. DisplayPath: max 15 chars each.',
+    PERFORMANCE_MAX: 'Headlines: EXACTLY 15 items, max 30 chars each. LongHeadlines: EXACTLY 5 items, max 90 chars each. Descriptions: EXACTLY 4 items, max 90 chars each. BusinessName: max 25 chars.',
+    DISPLAY: 'Headlines: EXACTLY 5 items, max 30 chars each. LongHeadline: exactly 1 item, max 90 chars. Descriptions: EXACTLY 5 items, max 90 chars each. BusinessName: max 25 chars.',
     VIDEO: 'Headline: max 15 chars. CTA: max 10 chars. Description: max 35 chars.',
-    DEMAND_GEN: 'Headlines: max 30 chars (1–5). Descriptions: max 90 chars (1–5).',
+    DEMAND_GEN: 'Headlines: EXACTLY 5 items, max 30 chars each. Descriptions: EXACTLY 5 items, max 90 chars each.',
     APP_CAMPAIGN: 'Headline: max 30 chars. Description: max 90 chars.',
   }
 
@@ -95,6 +97,7 @@ STRICT WRITING RULES:
 6. Headlines should be keyword-rich but read naturally — not keyword-stuffed
 7. Descriptions: state the core benefit in the first half, CTA in the second half
 8. Count characters carefully — a 30-char headline with 31 chars will be rejected by Google
+9. The item counts above (headlines/descriptions/longHeadlines) are EXACT, not a maximum — if the current copy's array has fewer items than required, WRITE NEW additional ones to fill it up to the exact count (never just leave the original short array as-is). If it has more, trim to the exact count.
 
 ${instruction ? `Additional instruction: ${instruction}` : ''}
 
@@ -130,7 +133,7 @@ export async function POST(req: NextRequest) {
       buildPrompt(body),
       validateCopy,
       () => mockRewrite(body),
-      { temperature: 0.7, maxTokens: 65536, tier: 'quality', systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AD_COPY_CONTEXT}`, _route: '/api/creatives/ai-rewrite', _feature: 'creatives', _subfeature: 'ai_rewrite' }
+      { temperature: 0.7, maxTokens: 65536, tier: 'quality', systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AD_COPY_CONTEXT}` }
     )
 
     return NextResponse.json({ copy })

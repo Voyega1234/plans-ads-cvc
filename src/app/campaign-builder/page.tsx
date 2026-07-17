@@ -11,6 +11,7 @@ import {
   Sparkles, RefreshCw, StopCircle,
 } from 'lucide-react'
 import AppShell from '@/components/layout/AppShell'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 import { cn } from '@/lib/utils'
 import { briefSchema, type BriefInput } from '@/lib/validation/brief'
 
@@ -954,21 +955,18 @@ function CampaignBuilderPage() {
                   </button>
                 </div>
               ) : (
-                <select
+                <AccountSelect
+                  accounts={accounts}
                   value={selectedAccount?.id ?? ''}
-                  onChange={(e) => {
-                    const found = accounts.find((a) => a.id === e.target.value)
+                  onChange={(id) => {
+                    const found = accounts.find((a) => a.id === id)
                     if (found) {
                       setSelectedAccount(found)
                       setPrefillDone(false)
                     }
                   }}
                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
+                />
               )}
             </div>
 

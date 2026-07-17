@@ -42,6 +42,7 @@ import KeywordPlannerEmbed from '@/components/keyword-planner/KeywordPlannerEmbe
 import type { EmbedKeywordResult } from '@/components/keyword-planner/KeywordPlannerEmbed'
 import AudienceSignalBuilder from '@/components/media-plan/AudienceSignalBuilder'
 import type { PMaxSignal } from '@/types'
+import { AccountSelect } from '@/components/ui/AccountSelect'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -3215,10 +3216,12 @@ function GtmTrackingPanel({ plan }: { plan: MediaPlanRecord }) {
         {convAccounts.length > 0 && (
           <div>
             <label className="text-[10px] font-semibold text-gray-400 uppercase block mb-1">Account (ดึง Conversion ID อัตโนมัติ)</label>
-            <select value={convAcct} onChange={e => setConvAcct(e.target.value)}
-              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white">
-              {convAccounts.map(a => <option key={a.id} value={a.id}>{a.name} ({a.id})</option>)}
-            </select>
+            <AccountSelect
+              accounts={convAccounts}
+              value={convAcct}
+              onChange={setConvAcct}
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200 bg-white"
+            />
             {loadingConv && <p className="text-[10px] text-gray-400 mt-1 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> กำลังดึง Conversion ID...</p>}
           </div>
         )}
@@ -3619,16 +3622,13 @@ function StepQA({
                   {loadingAccts ? (
                     <div className="flex items-center gap-2 text-xs text-gray-400"><Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลด...</div>
                   ) : (
-                    <select
+                    <AccountSelect
+                      accounts={accounts}
                       value={selectedAcct?.id ?? ''}
-                      onChange={e => setSelectedAcct(accounts.find(a => a.id === e.target.value) ?? null)}
+                      onChange={id => setSelectedAcct(accounts.find(a => a.id === id) ?? null)}
+                      placeholder="— เลือก Account —"
                       className="text-sm border border-gray-300 rounded-lg px-3 py-2 w-72 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300"
-                    >
-                      <option value="">— เลือก Account —</option>
-                      {accounts.map(a => (
-                        <option key={a.id} value={a.id}>{a.name} ({a.id})</option>
-                      ))}
-                    </select>
+                    />
                   )}
                 </div>
               </div>
