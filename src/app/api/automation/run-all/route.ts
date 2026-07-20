@@ -39,6 +39,23 @@ export async function POST(req: NextRequest) {
   return await runForUser(userId, customerId)
 }
 
+/**
+ * GET — สำหรับ cron (เช่น Vercel Cron ที่ยิง GET พร้อม Authorization: Bearer CRON_SECRET
+ * หรือ cron ภายนอกที่ส่ง ?secret= / header x-cron-secret ตรงกับ AUTOMATION_CRON_SECRET)
+ * ใช้รัน schedule rules (เปิด/ปิดแคมเปญตามเวลา) อัตโนมัติ — rule ใช้ scope.customerId ของตัวเอง
+ */
+export async function GET(req: NextRequest) {
+  const url = new URL(req.url)
+  const bearer = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '')
+  const provided = req.headers.get('x-cron-secret') ?? url.searchParams.get('secret') ?? bearer
+  const expected = process.env.AUTOMATION_CRON_SECRET || process.env.CRON_SECRET || ''
+
+  if (!expected || provided !== expected) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  return await runForAllUsers(url.searchParams.get('customerId') ?? undefined)
+}
+
 async function runForUser(userId: string, customerId: string): Promise<NextResponse> {
   const rules = await prisma.automationRule.findMany({
     where: { userId, enabled: true },
@@ -58,6 +75,8 @@ async function runForUser(userId: string, customerId: string): Promise<NextRespo
           lastRunAt:      new Date(),
           lastRunResult:  evalResult.result,
           lastRunMessage: evalResult.message,
+          // schedule rule ที่ทำงานแล้ว — stamp executedAt กันทำซ้ำ
+          ...(evalResult.updatedConditionJson ? { conditionJson: evalResult.updatedConditionJson } : {}),
         },
       })
 

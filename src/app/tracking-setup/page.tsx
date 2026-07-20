@@ -18,6 +18,7 @@ import type { WebsiteType } from "@/lib/tracking-event-library";
 import { WEBSITE_TYPE_LABELS } from "@/lib/tracking-event-library";
 import { buildScanReport } from "@/lib/scan-report-builder";
 import EventLibraryModal from "@/components/tracking/EventLibraryModal";
+import { AccountSelect } from "@/components/ui/AccountSelect";
 
 const TRACKING_TYPE_LABELS: Record<string, string> = {
   WEB_LEAD: "Web Lead",
@@ -1783,14 +1784,14 @@ export default function TrackingSetupPage() {
                       : <button type="button" onClick={loadIntegrations} className="ml-1 text-gray-400 hover:text-blue-500" title="Refresh"><RefreshCw className="h-3 w-3" /></button>
                     }
                   </label>
-                  <select
+                  <AccountSelect
+                    accounts={adAccounts}
                     value={formData.googleAdsAccount}
-                    onChange={(e) => setFormData((p) => ({ ...p, googleAdsAccount: e.target.value }))}
-                    className={cn("w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500", !formData.googleAdsAccount ? "border-red-300 bg-red-50" : "border-gray-200")}
-                  >
-                    <option value="">{loadingIntegrations ? "กำลังโหลด..." : adAccounts.length === 0 ? "ไม่พบ accounts (กด Refresh)" : "เลือก Google Ads Account..."}</option>
-                    {adAccounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.id})</option>)}
-                  </select>
+                    onChange={(id) => setFormData((p) => ({ ...p, googleAdsAccount: id }))}
+                    placeholder={loadingIntegrations ? "กำลังโหลด..." : "เลือก Google Ads Account..."}
+                    emptyLabel="ไม่พบ accounts (กด Refresh)"
+                    className={cn("w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white", !formData.googleAdsAccount ? "border-red-300 bg-red-50" : "border-gray-200")}
+                  />
                   {!formData.googleAdsAccount && !loadingIntegrations && <p className="text-xs text-red-500 mt-1">จำเป็นต้องเลือก Google Ads Account</p>}
                 </div>
 

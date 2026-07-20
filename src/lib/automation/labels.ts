@@ -91,16 +91,61 @@ export const HIGH_IMPACT_TYPES = ['budget_adjust', 'campaign_pause', 'bid_adjust
 
 const fmtNum = (v: number) => v >= 1000 ? v.toLocaleString('th-TH') : String(v)
 
+// โครงสร้างเสริมใน conditionJson/actionJson (เก็บใน JSON string เดิม — ไม่ต้อง migrate DB)
+export interface RuleScope {
+  customerId?: string
+  accountName?: string
+  campaignIds?: string[]
+  campaignNames?: string[]
+}
+export interface RuleSchedule {
+  date?: string        // 'YYYY-MM-DD' (ไม่ระบุ = ทุกวัน)
+  time: string         // 'HH:mm' เวลาที่ให้ทำงาน
+  executedAt?: string  // ISO — กันทำซ้ำหลัง trigger แล้ว (แบบระบุวัน)
+}
+export interface RuleConditionExt {
+  metric?: string; operator?: string; value?: number; window?: string
+  trigger?: 'metric' | 'schedule'
+  schedule?: RuleSchedule
+  scope?: RuleScope
+}
+export interface RuleActionExt {
+  action: string
+  notify?: { emails: string[] }
+}
+
 // แปลง condition JSON → ประโยคไทย "CPA มากกว่า 1,500 บาท ในช่วง 7 วันล่าสุด"
 export function conditionSentence(conditionJson: string): string {
   try {
-    const c = JSON.parse(conditionJson) as { metric: string; operator: string; value: number; window: string }
-    const metric = METRIC_LABELS[c.metric] ?? c.metric
-    const op = OPERATOR_LABELS[c.operator] ?? c.operator
-    const unit = METRIC_UNITS[c.metric] ?? ''
-    const win = WINDOW_LABELS[c.window] ?? c.window
-    return `${metric} ${op} ${fmtNum(c.value)}${unit} ในช่วง ${win}`
+    const c = JSON.parse(conditionJson) as RuleConditionExt
+    if (c.trigger === 'schedule' && c.schedule) {
+      const when = c.schedule.date ? `วันที่ ${c.schedule.date} เวลา ${c.schedule.time} น.` : `ถึงเวลา ${c.schedule.time} น. ของทุกวัน`
+      return when
+    }
+    const metric = METRIC_LABELS[c.metric ?? ''] ?? c.metric ?? ''
+    const op = OPERATOR_LABELS[c.operator ?? ''] ?? c.operator ?? ''
+    const unit = METRIC_UNITS[c.metric ?? ''] ?? ''
+    const win = WINDOW_LABELS[c.window ?? ''] ?? c.window ?? ''
+    return `${metric} ${op} ${fmtNum(c.value ?? 0)}${unit} ในช่วง ${win}`
   } catch { return conditionJson }
+}
+
+// ประโยคขอบเขต — "ทั้ง account" หรือรายชื่อแคมเปญที่เลือก
+export function scopeSentence(conditionJson: string): string {
+  try {
+    const c = JSON.parse(conditionJson) as RuleConditionExt
+    const names = c.scope?.campaignNames ?? []
+    if (names.length > 0) return `เฉพาะแคมเปญ: ${names.join(', ')}`
+    return 'ทุกแคมเปญใน account'
+  } catch { return 'ทุกแคมเปญใน account' }
+}
+
+// อีเมลผู้รับแจ้งเตือนของ rule (ถ้าตั้งไว้)
+export function notifyEmails(actionJson: string): string[] {
+  try {
+    const a = JSON.parse(actionJson) as RuleActionExt
+    return a.notify?.emails ?? []
+  } catch { return [] }
 }
 
 // แปลง action JSON → ประโยคไทย

@@ -29,6 +29,7 @@ import {
   PlusCircle,
   Wand2,
   FileClock,
+  Ban,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -61,6 +62,7 @@ const toolsNav = [
   { href: '/keyword-planner',    label: 'Keyword Planner',   icon: Search },
   { href: '/campaign-editor',    label: 'Campaign Adjustment', icon: Zap },
   { href: '/tracking-setup',     label: 'Tracking Setup',    icon: Activity },
+  { href: '/negative-keywords',  label: 'Negative Keywords', icon: Ban },
   { href: '/shopping-products',  label: 'Shopping Products', icon: ShoppingBag },
   { href: '/reports',            label: 'Reports',           icon: BarChart2 },
   { href: '/optimization-log',   label: 'Optimization Log',  icon: FileClock },

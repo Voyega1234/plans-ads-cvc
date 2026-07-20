@@ -4,16 +4,22 @@
  * New Rule — wizard 2 ขั้น: เลือกสถานการณ์สำเร็จรูป → ปรับประโยคเงื่อนไข → บันทึก
  * ออกแบบให้คนไม่ใช่สาย technical ใช้ได้: ไม่ต้องเข้าใจ metric/operator/type —
  * ทุกอย่างอ่านเป็นประโยคไทย "ถ้า ... ให้ระบบ ..."
+ *
+ * รองรับ:
+ *  - โหมดเงื่อนไข metric (เดิม) และโหมดตั้งเวลา เปิด/ปิดแคมเปญ (ใหม่)
+ *  - เลือกขอบเขตระดับแคมเปญ (ไม่ใช่แค่ทั้ง account)
+ *  - ใส่อีเมลแจ้งเตือน — แจ้งตอนตั้งกฎ + แจ้งทันทีหลัง action ทำงาน
  */
 
-import { useState } from 'react'
-import { Plus, X, Loader2, ArrowLeft, Pencil, AlertTriangle } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Plus, X, Loader2, ArrowLeft, Pencil, AlertTriangle, Clock, Mail } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import {
   METRIC_LABELS, METRIC_UNITS, OPERATOR_LABELS, WINDOW_LABELS,
   ACTION_LABELS, ACTION_TO_TYPE, ACTION_GROUPS, HIGH_IMPACT_TYPES, autoRuleName,
 } from '@/lib/automation/labels'
+import { parseEmailList } from '@/lib/email'
 
 // ── สถานการณ์สำเร็จรูป (จาก playbook ของ Media Buyer) ──
 interface Template {
@@ -21,9 +27,17 @@ interface Template {
   emoji: string
   desc:  string
   form:  { metric: string; operator: string; value: number; window: string; action: string }
+  schedule?: { time: string }
 }
 
 const TEMPLATE_GROUPS: Array<{ group: string; color: string; items: Template[] }> = [
+  {
+    group: '⏰ ตั้งเวลา เปิด-ปิดแคมเปญ', color: 'border-indigo-100 bg-indigo-50/50',
+    items: [
+      { label: 'ปิดแคมเปญตามเวลาที่กำหนด', emoji: '⏸', desc: 'เช่น ปิดตอน 5 ทุ่มทุกวัน หรือระบุวันเดียว (แก้ค่าจริง)', form: { metric: 'cost', operator: '>', value: 0, window: '7d', action: 'pause_campaign' }, schedule: { time: '23:00' } },
+      { label: 'เปิดแคมเปญตามเวลาที่กำหนด', emoji: '▶️', desc: 'เช่น เปิดตอน 8 โมงเช้าทุกวัน หรือระบุวันเดียว (แก้ค่าจริง)', form: { metric: 'cost', operator: '>', value: 0, window: '7d', action: 'enable_campaign' }, schedule: { time: '08:00' } },
+    ],
+  },
   {
     group: '🛑 กันงบเสีย', color: 'border-red-100 bg-red-50/50',
     items: [
@@ -61,7 +75,16 @@ const TEMPLATE_GROUPS: Array<{ group: string; color: string; items: Template[] }
   },
 ]
 
-export default function NewRuleButton() {
+const SCHEDULE_ACTIONS = ['pause_campaign', 'enable_campaign']
+
+interface CampaignOption { campaignId: string; campaignName: string }
+
+export default function NewRuleButton({
+  customerId = '', accountName = '',
+}: {
+  customerId?: string
+  accountName?: string
+}) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [step, setStep] = useState<1 | 2>(1)
@@ -70,25 +93,90 @@ export default function NewRuleButton() {
   const [customName, setCustomName] = useState('')      // ชื่อที่ user แก้เอง ('' = ใช้ auto)
   const [form, setForm] = useState({ metric: 'cpa', operator: '>' as string, value: 1500, window: '7d', action: 'send_alert' })
 
+  // โหมด trigger: ตามเงื่อนไข metric หรือตามเวลา
+  const [trigger, setTrigger] = useState<'metric' | 'schedule'>('metric')
+  const [schedDate, setSchedDate] = useState('')   // '' = ทุกวัน
+  const [schedTime, setSchedTime] = useState('23:00')
+
+  // ขอบเขต: ทั้ง account หรือเลือกแคมเปญ
+  const [scopeMode, setScopeMode] = useState<'account' | 'campaigns'>('account')
+  const [campaigns, setCampaigns] = useState<CampaignOption[]>([])
+  const [campaignsLoading, setCampaignsLoading] = useState(false)
+  const [selectedCampaigns, setSelectedCampaigns] = useState<Set<string>>(new Set())
+
+  // อีเมลแจ้งเตือน
+  const [emailsRaw, setEmailsRaw] = useState('')
+  const emails = parseEmailList(emailsRaw)
+
   const type = ACTION_TO_TYPE[form.action] ?? 'alert'
   const highImpact = HIGH_IMPACT_TYPES.includes(type)
-  const ruleName = customName.trim() || autoRuleName(form.metric, form.operator, form.value, form.window, form.action)
   const unit = METRIC_UNITS[form.metric] ?? ''
+
+  const scheduleName = `${ACTION_LABELS[form.action] ?? form.action} ${schedDate ? `วันที่ ${schedDate} ` : 'ทุกวัน '}เวลา ${schedTime} น.`.slice(0, 90)
+  const ruleName = customName.trim() || (trigger === 'schedule'
+    ? scheduleName
+    : autoRuleName(form.metric, form.operator, form.value, form.window, form.action))
+
+  // โหลดรายชื่อแคมเปญของ account ที่เลือก (สำหรับ scope ระดับแคมเปญ)
+  useEffect(() => {
+    if (!open || !customerId) return
+    setCampaignsLoading(true)
+    fetch(`/api/campaign-edit/campaigns?customerId=${customerId}`)
+      .then(r => r.json())
+      .then((d: { campaigns?: CampaignOption[] }) => setCampaigns(d.campaigns ?? []))
+      .catch(() => setCampaigns([]))
+      .finally(() => setCampaignsLoading(false))
+  }, [open, customerId])
 
   function openModal() {
     setOpen(true); setStep(1); setError(null); setCustomName('')
+    setTrigger('metric'); setSchedDate(''); setSchedTime('23:00')
+    setScopeMode('account'); setSelectedCampaigns(new Set()); setEmailsRaw('')
   }
   function pickTemplate(t: Template) {
-    setForm({ ...t.form }); setCustomName(''); setStep(2)
+    setForm({ ...t.form }); setCustomName('')
+    if (t.schedule) { setTrigger('schedule'); setSchedTime(t.schedule.time) }
+    else setTrigger('metric')
+    setStep(2)
+  }
+  function toggleCampaign(id: string) {
+    setSelectedCampaigns(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   async function handleSave() {
+    if (trigger === 'schedule' && !SCHEDULE_ACTIONS.includes(form.action)) {
+      setError('โหมดตั้งเวลา รองรับเฉพาะ เปิด/ปิดแคมเปญ'); return
+    }
+    if (scopeMode === 'campaigns' && selectedCampaigns.size === 0) {
+      setError('เลือกอย่างน้อย 1 แคมเปญ หรือสลับเป็น "ทุกแคมเปญใน account"'); return
+    }
     setSaving(true); setError(null)
     try {
+      const scope = {
+        ...(customerId ? { customerId, accountName } : {}),
+        ...(scopeMode === 'campaigns' ? {
+          campaignIds: Array.from(selectedCampaigns),
+          campaignNames: campaigns.filter(c => selectedCampaigns.has(c.campaignId)).map(c => c.campaignName),
+        } : {}),
+      }
+      const payload = {
+        name: ruleName,
+        type,
+        trigger,
+        ...form,
+        ...(trigger === 'schedule' ? { schedule: { ...(schedDate ? { date: schedDate } : {}), time: schedTime } } : {}),
+        ...(Object.keys(scope).length ? { scope } : {}),
+        ...(emails.length ? { emails } : {}),
+      }
       const res = await fetch('/api/automation/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: ruleName, type, ...form }),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string }
@@ -173,40 +261,148 @@ export default function NewRuleButton() {
 
             {/* ── STEP 2: ประโยคเงื่อนไข ── */}
             {step === 2 && (
-              <div className="p-6 space-y-5">
+              <div className="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
+                {/* Trigger mode */}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTrigger('metric')}
+                    className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors',
+                      trigger === 'metric' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300')}
+                  >
+                    ตามเงื่อนไข (metric)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setTrigger('schedule'); if (!SCHEDULE_ACTIONS.includes(form.action)) setForm(f => ({ ...f, action: 'pause_campaign' })) }}
+                    className={cn('flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors',
+                      trigger === 'schedule' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300')}
+                  >
+                    <Clock className="w-3.5 h-3.5" /> ตามเวลา (เปิด/ปิดแคมเปญ)
+                  </button>
+                </div>
+
                 {/* Sentence builder */}
                 <div className="bg-gray-50 border border-gray-200 rounded-xl p-5">
                   <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide mb-3">กฎนี้จะทำงานแบบนี้</p>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-3 text-sm text-gray-700 leading-loose">
-                    <span className="font-semibold">ถ้า</span>
-                    <select value={form.metric} onChange={(e) => setForm(f => ({ ...f, metric: e.target.value }))} className={selCls}>
-                      {Object.entries(METRIC_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select>
-                    <select value={form.operator} onChange={(e) => setForm(f => ({ ...f, operator: e.target.value }))} className={selCls}>
-                      {Object.entries(OPERATOR_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select>
-                    <span className="inline-flex items-center gap-1">
+
+                  {trigger === 'metric' ? (
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-3 text-sm text-gray-700 leading-loose">
+                      <span className="font-semibold">ถ้า</span>
+                      <select value={form.metric} onChange={(e) => setForm(f => ({ ...f, metric: e.target.value }))} className={selCls}>
+                        {Object.entries(METRIC_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <select value={form.operator} onChange={(e) => setForm(f => ({ ...f, operator: e.target.value }))} className={selCls}>
+                        {Object.entries(OPERATOR_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <span className="inline-flex items-center gap-1">
+                        <input
+                          type="number"
+                          value={form.value}
+                          onChange={(e) => setForm(f => ({ ...f, value: Number(e.target.value) }))}
+                          className="w-24 px-2 py-1.5 border border-blue-200 bg-blue-50/60 rounded-lg text-sm font-semibold text-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                        />
+                        {unit && <span className="text-gray-500">{unit.trim()}</span>}
+                      </span>
+                      <span className="font-semibold">ในช่วง</span>
+                      <select value={form.window} onChange={(e) => setForm(f => ({ ...f, window: e.target.value }))} className={selCls}>
+                        {Object.entries(WINDOW_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <span className="font-semibold w-full sm:w-auto">ให้ระบบ</span>
+                      <select value={form.action} onChange={(e) => setForm(f => ({ ...f, action: e.target.value }))} className={cn(selCls, 'max-w-full')}>
+                        {ACTION_GROUPS.map(g => (
+                          <optgroup key={g.group} label={g.group}>
+                            {g.actions.map(a => <option key={a} value={a}>{ACTION_LABELS[a]}</option>)}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-3 text-sm text-gray-700 leading-loose">
+                      <span className="font-semibold">เมื่อถึง</span>
                       <input
-                        type="number"
-                        value={form.value}
-                        onChange={(e) => setForm(f => ({ ...f, value: Number(e.target.value) }))}
-                        className="w-24 px-2 py-1.5 border border-blue-200 bg-blue-50/60 rounded-lg text-sm font-semibold text-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                        type="date"
+                        value={schedDate}
+                        onChange={(e) => setSchedDate(e.target.value)}
+                        className={cn(selCls, 'font-normal')}
+                        title="เว้นว่าง = ทำทุกวัน"
                       />
-                      {unit && <span className="text-gray-500">{unit.trim()}</span>}
-                    </span>
-                    <span className="font-semibold">ในช่วง</span>
-                    <select value={form.window} onChange={(e) => setForm(f => ({ ...f, window: e.target.value }))} className={selCls}>
-                      {Object.entries(WINDOW_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select>
-                    <span className="font-semibold w-full sm:w-auto">ให้ระบบ</span>
-                    <select value={form.action} onChange={(e) => setForm(f => ({ ...f, action: e.target.value }))} className={cn(selCls, 'max-w-full')}>
-                      {ACTION_GROUPS.map(g => (
-                        <optgroup key={g.group} label={g.group}>
-                          {g.actions.map(a => <option key={a} value={a}>{ACTION_LABELS[a]}</option>)}
-                        </optgroup>
-                      ))}
-                    </select>
+                      <span className="text-xs text-gray-400">(เว้นว่าง = ทุกวัน)</span>
+                      <span className="font-semibold">เวลา</span>
+                      <input
+                        type="time"
+                        value={schedTime}
+                        onChange={(e) => setSchedTime(e.target.value)}
+                        className={selCls}
+                      />
+                      <span className="font-semibold">ให้ระบบ</span>
+                      <select value={form.action} onChange={(e) => setForm(f => ({ ...f, action: e.target.value }))} className={selCls}>
+                        {SCHEDULE_ACTIONS.map(a => <option key={a} value={a}>{ACTION_LABELS[a]}</option>)}
+                      </select>
+                      <p className="w-full text-[11px] text-gray-400 mt-1">
+                        * เวลาอิงเขตเวลาไทย (Asia/Bangkok) — กฎจะทำงานเมื่อกด Run / Run All หรือเมื่อ cron ของระบบรันหลังถึงเวลาที่ตั้งไว้
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Scope — ระดับ account หรือเลือกแคมเปญ */}
+                <div>
+                  <p className="text-xs font-semibold text-gray-600 mb-2">ขอบเขตของกฎ {accountName || customerId ? <span className="font-normal text-gray-400">— account: {accountName || customerId}</span> : null}</p>
+                  <div className="flex items-center gap-2 mb-2">
+                    <button type="button" onClick={() => setScopeMode('account')}
+                      className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors',
+                        scopeMode === 'account' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300')}>
+                      ทุกแคมเปญใน account
+                    </button>
+                    <button type="button" onClick={() => setScopeMode('campaigns')}
+                      className={cn('px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors',
+                        scopeMode === 'campaigns' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300')}>
+                      เลือกเฉพาะแคมเปญ
+                    </button>
                   </div>
+                  {scopeMode === 'campaigns' && (
+                    <div className="border border-gray-200 rounded-xl max-h-44 overflow-y-auto divide-y divide-gray-50">
+                      {campaignsLoading && (
+                        <div className="flex items-center gap-2 px-3 py-3 text-xs text-gray-400"><Loader2 className="w-3.5 h-3.5 animate-spin"/>กำลังโหลดแคมเปญ...</div>
+                      )}
+                      {!campaignsLoading && campaigns.length === 0 && (
+                        <p className="px-3 py-3 text-xs text-gray-400">{customerId ? 'ไม่พบแคมเปญใน account นี้' : 'เลือก Google Ads account ที่หน้า Automation ก่อน'}</p>
+                      )}
+                      {campaigns.map(c => (
+                        <label key={c.campaignId} className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                          <input
+                            type="checkbox"
+                            checked={selectedCampaigns.has(c.campaignId)}
+                            onChange={() => toggleCampaign(c.campaignId)}
+                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-xs text-gray-700">{c.campaignName}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Email แจ้งเตือน */}
+                <div>
+                  <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 mb-1.5">
+                    <Mail className="w-3.5 h-3.5 text-gray-400" />
+                    อีเมลแจ้งเตือน <span className="font-normal text-gray-400">(ใส่ได้หลายอีเมล คั่นด้วย , — เว้นว่าง = ไม่ส่งอีเมล)</span>
+                  </label>
+                  <input
+                    value={emailsRaw}
+                    onChange={(e) => setEmailsRaw(e.target.value)}
+                    placeholder="เช่น team@company.com, boss@company.com"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  {emailsRaw.trim() && (
+                    <p className="text-[11px] mt-1 text-gray-400">
+                      {emails.length > 0
+                        ? `จะส่งไปที่: ${emails.join(', ')} — แจ้งตอนตั้งกฎ และแจ้งอีกครั้งทันทีหลังกฎทำงาน`
+                        : '⚠️ รูปแบบอีเมลยังไม่ถูกต้อง'}
+                    </p>
+                  )}
                 </div>
 
                 {/* Impact note */}

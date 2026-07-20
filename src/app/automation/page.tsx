@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { AccountSelect } from '@/components/ui/AccountSelect'
-import { conditionSentence, actionSentence, HIGH_IMPACT_TYPES as HI_TYPES } from '@/lib/automation/labels'
+import { conditionSentence, actionSentence, scopeSentence, notifyEmails, HIGH_IMPACT_TYPES as HI_TYPES } from '@/lib/automation/labels'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -238,7 +238,10 @@ export default function AutomationPage() {
             }
             Run All
           </button>
-          <NewRuleButton />
+          <NewRuleButton
+            customerId={customerId}
+            accountName={accounts.find((a) => a.id === customerId)?.descriptiveName ?? ''}
+          />
         </div>
       </div>
 
@@ -304,8 +307,14 @@ export default function AutomationPage() {
 
                       <p className="text-sm font-medium text-gray-900">{rule.name}</p>
                       <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                        <span className="text-gray-400">ถ้า</span> <span className="font-medium">{conditionSentence(rule.conditionJson)}</span>
+                        <span className="text-gray-400">{rule.conditionJson.includes('"trigger":"schedule"') ? 'เมื่อ' : 'ถ้า'}</span> <span className="font-medium">{conditionSentence(rule.conditionJson)}</span>
                         <span className="text-gray-400"> ให้ระบบ</span> <span className="font-medium text-blue-700">{actionSentence(rule.actionJson)}</span>
+                      </p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        ขอบเขต: {scopeSentence(rule.conditionJson)}
+                        {notifyEmails(rule.actionJson).length > 0 && (
+                          <span className="ml-2">📧 {notifyEmails(rule.actionJson).join(', ')}</span>
+                        )}
                       </p>
 
                       {/* Last run info */}

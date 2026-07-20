@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import AppShell from '@/components/layout/AppShell'
-import { RefreshCw, Search, TrendingUp, TrendingDown, AlertTriangle, Plus } from 'lucide-react'
+import { RefreshCw, Search, TrendingUp, TrendingDown, AlertTriangle, Plus, Pencil, X, Save, Loader2, ToggleLeft, ToggleRight } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import type { MonitorCampaign } from '@/app/api/performance/monitor/route'
@@ -100,6 +100,154 @@ function hasCpaAlert(c: MonitorCampaign): boolean {
   return c.cpa > c.targetCpa * 1.2
 }
 
+// ── Bidding helpers ───────────────────────────────────────────────────────────
+
+const CPA_STRATEGIES  = new Set(['TARGET_CPA', 'MAXIMIZE_CONVERSIONS'])
+const ROAS_STRATEGIES = new Set(['TARGET_ROAS', 'MAXIMIZE_CONVERSION_VALUE'])
+
+function canEditBidding(strategy: string): boolean {
+  return CPA_STRATEGIES.has(strategy) || ROAS_STRATEGIES.has(strategy)
+}
+
+function campaignResourceNameOf(c: MonitorCampaign): string {
+  return c.campaignResourceName ?? `customers/${c.customerId.replace(/-/g, '')}/campaigns/${c.campaignId}`
+}
+
+// ── Edit modal (budget + bidding) ─────────────────────────────────────────────
+
+function EditCampaignModal({
+  campaign, onClose, onSaved,
+}: {
+  campaign: MonitorCampaign
+  onClose: () => void
+  onSaved: (patch: Partial<MonitorCampaign>) => void
+}) {
+  const isCpa  = CPA_STRATEGIES.has(campaign.biddingStrategy)
+  const isRoas = ROAS_STRATEGIES.has(campaign.biddingStrategy)
+
+  const [budget, setBudget] = useState(String(campaign.dailyBudget || ''))
+  const [target, setTarget] = useState(
+    isCpa ? String(campaign.targetCpa ?? '') : isRoas ? String(campaign.targetRoas ?? '') : ''
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState('')
+
+  async function save() {
+    setError('')
+    const patch: Partial<MonitorCampaign> = {}
+    const newBudget = parseFloat(budget)
+    const newTarget = parseFloat(target)
+
+    const budgetChanged = !isNaN(newBudget) && newBudget > 0 && newBudget !== campaign.dailyBudget
+    const targetChanged = canEditBidding(campaign.biddingStrategy) && !isNaN(newTarget) && newTarget > 0 &&
+      newTarget !== (isCpa ? campaign.targetCpa ?? 0 : campaign.targetRoas ?? 0)
+
+    if (!budgetChanged && !targetChanged) { setError('ไม่มีค่าที่เปลี่ยนแปลง'); return }
+    if (budgetChanged && !campaign.budgetResourceName) { setError('ไม่พบ budget ของแคมเปญนี้ (ลอง Refresh)'); return }
+
+    setSaving(true)
+    try {
+      if (budgetChanged) {
+        const res = await fetch('/api/campaign-adjustments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'edit_campaign_budget',
+            customerId: campaign.customerId,
+            budgetResourceName: campaign.budgetResourceName,
+            dailyBudgetMicros: Math.round(newBudget * 1_000_000),
+          }),
+        })
+        if (!res.ok) {
+          const d = await res.json() as { error?: string }
+          throw new Error(d.error ?? 'ปรับงบไม่สำเร็จ')
+        }
+        patch.dailyBudget = Math.round(newBudget)
+      }
+      if (targetChanged) {
+        const res = await fetch('/api/campaign-adjustments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'edit_campaign_bidding',
+            customerId: campaign.customerId,
+            campaignResourceName: campaignResourceNameOf(campaign),
+            biddingStrategyType: campaign.biddingStrategy,
+            ...(isCpa
+              ? { targetCpaMicros: Math.round(newTarget * 1_000_000) }
+              : { targetRoas: newTarget }),
+          }),
+        })
+        if (!res.ok) {
+          const d = await res.json() as { error?: string }
+          throw new Error(d.error ?? 'ปรับ bidding ไม่สำเร็จ')
+        }
+        if (isCpa) patch.targetCpa = newTarget
+        else patch.targetRoas = newTarget
+      }
+      onSaved(patch)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'อัปเดตไม่สำเร็จ')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-bold text-gray-900">แก้ไขแคมเปญ</h3>
+            <p className="text-xs text-gray-400 mt-0.5 break-words">{campaign.campaignName}</p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 shrink-0"><X className="w-4 h-4 text-gray-400"/></button>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">งบประมาณรายวัน (บาท)</label>
+          <input
+            type="number" min="1" value={budget}
+            onChange={e => setBudget(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
+        {canEditBidding(campaign.biddingStrategy) ? (
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">
+              {isCpa ? 'Target CPA (บาท)' : 'Target ROAS (เท่า เช่น 4 = 400%)'}
+              <span className="ml-1 text-gray-400 font-normal">— strategy: {campaign.biddingStrategy}</span>
+            </label>
+            <input
+              type="number" min="0" step={isCpa ? '1' : '0.1'} value={target}
+              onChange={e => setTarget(e.target.value)}
+              placeholder={isCpa ? 'เช่น 300' : 'เช่น 4'}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        ) : (
+          <p className="text-[11px] text-gray-400 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+            Strategy &quot;{campaign.biddingStrategy || 'ไม่ทราบ'}&quot; ไม่มี target ให้ปรับจากหน้านี้ (ปรับได้เฉพาะงบ)
+          </p>
+        )}
+
+        {error && <p className="text-xs text-red-600">{error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={save} disabled={saving}
+            className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white text-sm font-medium rounded-lg transition-colors">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin"/> : <Save className="w-4 h-4"/>}
+            อัพเดตใน Google Ads
+          </button>
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">ยกเลิก</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 const DAY_TABS = [
@@ -119,6 +267,50 @@ export default function CampaignMonitorPage() {
   const [sortCol,    setSortCol]    = useState<SortCol>('spend')
   const [sortDir,    setSortDir]    = useState<SortDir>('desc')
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [editCampaign, setEditCampaign] = useState<MonitorCampaign | null>(null)
+  const [togglingKey,  setTogglingKey]  = useState<string | null>(null)
+  const [actionMsg,    setActionMsg]    = useState<{ text: string; ok: boolean } | null>(null)
+
+  function patchCampaign(target: MonitorCampaign, patch: Partial<MonitorCampaign>) {
+    setCampaigns(prev => prev.map(c =>
+      c.customerId === target.customerId && c.campaignId === target.campaignId ? { ...c, ...patch } : c
+    ))
+  }
+
+  function flashMsg(text: string, ok: boolean) {
+    setActionMsg({ text, ok })
+    setTimeout(() => setActionMsg(null), 4000)
+  }
+
+  async function toggleStatus(c: MonitorCampaign) {
+    const newStatus = c.status === 'ENABLED' ? 'PAUSED' : 'ENABLED'
+    const label = newStatus === 'PAUSED' ? 'ปิด' : 'เปิด'
+    if (!confirm(`${label}แคมเปญ "${c.campaignName}" ใน Google Ads?`)) return
+    const key = `${c.customerId}:${c.campaignId}`
+    setTogglingKey(key)
+    try {
+      const res = await fetch('/api/campaign-adjustments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'edit_campaign_status',
+          customerId: c.customerId,
+          campaignResourceName: campaignResourceNameOf(c),
+          status: newStatus,
+        }),
+      })
+      if (!res.ok) {
+        const d = await res.json() as { error?: string }
+        throw new Error(d.error ?? 'เปลี่ยนสถานะไม่สำเร็จ')
+      }
+      patchCampaign(c, { status: newStatus })
+      flashMsg(`${label}แคมเปญ "${c.campaignName}" แล้ว`, true)
+    } catch (err) {
+      flashMsg(err instanceof Error ? err.message : 'เปลี่ยนสถานะไม่สำเร็จ', false)
+    } finally {
+      setTogglingKey(null)
+    }
+  }
 
   const fetchData = useCallback(async (clientList: Account[], d: string) => {
     if (!clientList.length) return
@@ -256,6 +448,13 @@ export default function CampaignMonitorPage() {
           </button>
         </div>
 
+        {actionMsg && (
+          <div className={cn('px-4 py-2.5 rounded-xl border text-sm font-medium',
+            actionMsg.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-600')}>
+            {actionMsg.text}
+          </div>
+        )}
+
         {/* ── KPI Summary ── */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <div className="bg-white rounded-2xl border border-gray-100 px-4 py-4">
@@ -356,12 +555,13 @@ export default function CampaignMonitorPage() {
                   <SortTh col="value"  label="Value"      current={sortCol} dir={sortDir} onSort={handleSort} />
                   <SortTh col="roas"   label="ROAS"       current={sortCol} dir={sortDir} onSort={handleSort} />
                   <SortTh col="status" label="Status"     current={sortCol} dir={sortDir} onSort={handleSort} />
+                  <th className="py-3 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap text-left">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loading && Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} className="border-b border-gray-50">
-                    {Array.from({ length: 13 }).map((_, j) => (
+                    {Array.from({ length: 14 }).map((_, j) => (
                       <td key={j} className="py-4 px-3">
                         <div className="h-4 bg-gray-100 rounded animate-pulse" />
                       </td>
@@ -370,7 +570,7 @@ export default function CampaignMonitorPage() {
                 ))}
                 {!loading && filtered.length === 0 && (
                   <tr>
-                    <td colSpan={13} className="py-12 text-center text-gray-400 text-sm">
+                    <td colSpan={14} className="py-12 text-center text-gray-400 text-sm">
                       ไม่พบข้อมูล campaign
                     </td>
                   </tr>
@@ -467,6 +667,32 @@ export default function CampaignMonitorPage() {
                       <td className="py-4 px-3">
                         <StatusPill status={c.status} />
                       </td>
+                      {/* Actions — ปิด/เปิด, แก้งบ + bidding แล้ว push เข้า Google Ads */}
+                      <td className="py-4 px-3 whitespace-nowrap">
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => toggleStatus(c)}
+                            disabled={togglingKey === `${c.customerId}:${c.campaignId}` || c.status === 'REMOVED'}
+                            className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 disabled:opacity-40 transition-colors"
+                            title={c.status === 'ENABLED' ? 'ปิดแคมเปญ (Pause)' : 'เปิดแคมเปญ (Enable)'}
+                          >
+                            {togglingKey === `${c.customerId}:${c.campaignId}`
+                              ? <Loader2 className="w-4 h-4 animate-spin"/>
+                              : c.status === 'ENABLED'
+                                ? <ToggleRight className="w-5 h-5 text-emerald-500"/>
+                                : <ToggleLeft className="w-5 h-5 text-gray-400"/>
+                            }
+                          </button>
+                          <button
+                            onClick={() => setEditCampaign(c)}
+                            disabled={c.status === 'REMOVED'}
+                            className="p-1.5 rounded-lg text-gray-400 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-40 transition-colors"
+                            title="แก้งบประมาณ / bidding"
+                          >
+                            <Pencil className="w-3.5 h-3.5"/>
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   )
                 })}
@@ -476,6 +702,14 @@ export default function CampaignMonitorPage() {
         </div>
 
       </div>
+
+      {editCampaign && (
+        <EditCampaignModal
+          campaign={editCampaign}
+          onClose={() => setEditCampaign(null)}
+          onSaved={(patch) => { patchCampaign(editCampaign, patch); flashMsg(`อัพเดต "${editCampaign.campaignName}" ใน Google Ads แล้ว`, true) }}
+        />
+      )}
     </AppShell>
   )
 }

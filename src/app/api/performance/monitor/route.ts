@@ -8,6 +8,9 @@ export interface MonitorCampaign {
   campaignId: string
   campaignName: string
   status: string
+  // Resource names ใช้ตอนกดแก้ status/budget/bidding จากหน้า Campaign Monitor (mock ไม่มีค่า)
+  campaignResourceName?: string
+  budgetResourceName?: string
   dailyBudget: number
   biddingStrategy: string
   targetCpa: number | null
@@ -35,8 +38,14 @@ function buildMonitorQuery(dateRange: string) {
       campaign.id,
       campaign.name,
       campaign.status,
+      campaign.resource_name,
       campaign.bidding_strategy_type,
+      campaign.target_cpa.target_cpa_micros,
+      campaign.maximize_conversions.target_cpa_micros,
+      campaign.target_roas.target_roas,
+      campaign.maximize_conversion_value.target_roas,
       campaign_budget.amount_micros,
+      campaign_budget.resource_name,
       metrics.cost_micros,
       metrics.impressions,
       metrics.clicks,
@@ -87,8 +96,15 @@ async function queryMonitor(
   if (!ok) return []
 
   type Row = {
-    campaign: { id: string; name: string; status: string; biddingStrategyType: string }
-    campaignBudget?: { amountMicros: string }
+    campaign: {
+      id: string; name: string; status: string; biddingStrategyType: string
+      resourceName?: string
+      targetCpa?: { targetCpaMicros?: string }
+      maximizeConversions?: { targetCpaMicros?: string }
+      targetRoas?: { targetRoas?: number }
+      maximizeConversionValue?: { targetRoas?: number }
+    }
+    campaignBudget?: { amountMicros: string; resourceName?: string }
     metrics: {
       costMicros: string; impressions: string; clicks: string; conversions: string
       conversionsValue: string; ctr: string; costPerConversion: string; valuePerConversion: string
@@ -105,15 +121,19 @@ async function queryMonitor(
     const value  = Number(r.metrics.conversionsValue ?? 0)
     const clicks = Number(r.metrics.clicks ?? 0)
     const budget = Number(r.campaignBudget?.amountMicros ?? 0) / 1_000_000
+    const targetCpaMicros = Number(r.campaign.targetCpa?.targetCpaMicros ?? r.campaign.maximizeConversions?.targetCpaMicros ?? 0)
+    const targetRoas = Number(r.campaign.targetRoas?.targetRoas ?? r.campaign.maximizeConversionValue?.targetRoas ?? 0)
     return {
       customerId,
       campaignId:      String(r.campaign.id ?? ''),
       campaignName:    r.campaign.name,
       status:          r.campaign.status ?? 'ENABLED',
+      campaignResourceName: r.campaign.resourceName ?? `customers/${cid}/campaigns/${r.campaign.id}`,
+      budgetResourceName:   r.campaignBudget?.resourceName ?? '',
       dailyBudget:     Math.round(budget),
       biddingStrategy: r.campaign.biddingStrategyType ?? '',
-      targetCpa:       null,
-      targetRoas:      null,
+      targetCpa:       targetCpaMicros > 0 ? Math.round(targetCpaMicros / 1_000_000) : null,
+      targetRoas:      targetRoas > 0 ? parseFloat(targetRoas.toFixed(2)) : null,
       cost:            Math.round(cost),
       impressions:     Number(r.metrics.impressions ?? 0),
       clicks,

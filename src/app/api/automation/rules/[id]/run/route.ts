@@ -30,6 +30,8 @@ export async function POST(
       lastRunAt:      new Date(),
       lastRunResult:  evalResult.result,
       lastRunMessage: evalResult.message,
+      // schedule rule ที่ทำงานแล้ว — stamp executedAt กันทำซ้ำ
+      ...(evalResult.updatedConditionJson ? { conditionJson: evalResult.updatedConditionJson } : {}),
     },
   })
 

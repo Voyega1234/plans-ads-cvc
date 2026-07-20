@@ -8,7 +8,7 @@ const LOGIN_CID = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ?? process.env.COMPAN
 export interface CampaignSummary {
   campaignId: string
   campaignName: string
-  type: 'SEARCH' | 'PERFORMANCE_MAX' | 'DISPLAY' | 'VIDEO' | 'SHOPPING' | 'DEMAND_GEN' | 'LOCAL' | 'UNKNOWN'
+  type: 'SEARCH' | 'PERFORMANCE_MAX' | 'DISPLAY' | 'VIDEO' | 'SHOPPING' | 'DEMAND_GEN' | 'APP' | 'LOCAL' | 'UNKNOWN'
   status: 'ENABLED' | 'PAUSED'
   dailyBudgetMicros: number
   campaignResourceName: string
@@ -32,6 +32,8 @@ const CHANNEL_MAP: Record<string, CampaignSummary['type']> = {
   VIDEO: 'VIDEO',
   SHOPPING: 'SHOPPING',
   DEMAND_GEN: 'DEMAND_GEN',
+  // App campaigns ใช้ channel type MULTI_CHANNEL ใน Google Ads API
+  MULTI_CHANNEL: 'APP',
   LOCAL: 'LOCAL',
 }
 

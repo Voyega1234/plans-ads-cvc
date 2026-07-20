@@ -7,7 +7,7 @@ import { FileUpload, UploadedFile } from '@/components/ui/FileUpload'
 import {
   ChevronDown, ChevronRight, Pencil, X, Plus, Sparkles,
   Save, CheckCircle2, AlertCircle, RefreshCw, Loader2,
-  Search, Zap, Monitor, ShoppingBag, Video, Globe, LayoutGrid,
+  Search, Zap, Monitor, ShoppingBag, Video, Globe, LayoutGrid, Smartphone,
   ToggleLeft, ToggleRight, DollarSign, Image as ImageIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -17,21 +17,51 @@ import type { ProductGroup } from '@/app/api/campaign-edit/shopping-products/rou
 import { AccountSelect } from '@/components/ui/AccountSelect'
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
+// ค่า default สำหรับ PMax asset group (สเปค Google: 3-15 H, 1-5 LH, 2-5 D)
 const HEADLINE_MAX = 30
 const DESC_MAX = 90
 const HEADLINE_MIN = 3
 const HEADLINE_MAX_COUNT = 15
 const DESC_MIN = 2
-const DESC_MAX_COUNT = 4
+const PMAX_DESC_MAX_COUNT = 5
+const PMAX_LH_MAX_COUNT = 5
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
+
+type EditableAdType =
+  | 'RSA'
+  | 'RESPONSIVE_DISPLAY'
+  | 'APP'
+  | 'DEMAND_GEN_MULTI_ASSET'
+  | 'DEMAND_GEN_VIDEO'
+  | 'DEMAND_GEN_CAROUSEL'
+
+// สเปคจำนวน/ความยาว text ต่อ ad type — ตามเงื่อนไขจริงของ Google Ads
+interface AdSpec {
+  label: string
+  hMin: number; hMax: number; hLen: number
+  lhMin: number; lhMax: number; lhLen: number
+  dMin: number; dMax: number; dLen: number
+  editable: boolean
+}
+
+const AD_SPECS: Record<EditableAdType | 'PMAX', AdSpec> = {
+  RSA:                    { label: 'Search (RSA)',        hMin: 3, hMax: 15, hLen: 30, lhMin: 0, lhMax: 0, lhLen: 0,  dMin: 2, dMax: 4, dLen: 90, editable: true },
+  RESPONSIVE_DISPLAY:     { label: 'Display (RDA)',       hMin: 1, hMax: 5,  hLen: 30, lhMin: 1, lhMax: 1, lhLen: 90, dMin: 1, dMax: 5, dLen: 90, editable: true },
+  APP:                    { label: 'App',                 hMin: 2, hMax: 5,  hLen: 30, lhMin: 0, lhMax: 0, lhLen: 0,  dMin: 1, dMax: 5, dLen: 90, editable: true },
+  DEMAND_GEN_MULTI_ASSET: { label: 'Demand Gen',          hMin: 1, hMax: 5,  hLen: 40, lhMin: 0, lhMax: 0, lhLen: 0,  dMin: 1, dMax: 5, dLen: 90, editable: true },
+  DEMAND_GEN_VIDEO:       { label: 'Demand Gen Video',    hMin: 1, hMax: 5,  hLen: 40, lhMin: 1, lhMax: 5, lhLen: 90, dMin: 1, dMax: 5, dLen: 90, editable: true },
+  DEMAND_GEN_CAROUSEL:    { label: 'Demand Gen Carousel', hMin: 0, hMax: 0,  hLen: 40, lhMin: 0, lhMax: 0, lhLen: 0,  dMin: 0, dMax: 0, dLen: 90, editable: false },
+  PMAX:                   { label: 'Performance Max',     hMin: 3, hMax: 15, hLen: 30, lhMin: 1, lhMax: 5, lhLen: 90, dMin: 2, dMax: 5, dLen: 90, editable: true },
+}
 
 interface LiveAd {
   adId: string
   adGroupId: string
   adGroupName: string
-  adType: 'RSA' | 'RESPONSIVE_DISPLAY' | 'PMAX_ASSET_GROUP'
+  adType: EditableAdType
   headlines: { text: string; pinned_field?: 'HEADLINE_1' | 'HEADLINE_2' | 'HEADLINE_3' }[]
+  longHeadlines: { text: string }[]
   descriptions: { text: string }[]
   finalUrls: string[]
   status: 'ENABLED' | 'PAUSED'
@@ -42,6 +72,7 @@ interface Account { id: string; name: string; currencyCode?: string }
 
 interface EditState {
   headlines: string[]
+  longHeadlines: string[]
   descriptions: string[]
   finalUrls: string[]
 }
@@ -53,6 +84,7 @@ interface PendingChange {
 
 interface AISuggestResult {
   headlines: string[]
+  longHeadlines?: string[]
   descriptions: string[]
   rationale: string
 }
@@ -103,10 +135,16 @@ function CharInput({
 // ─── AI Suggest Panel ──────────────────────────────────────────────────────────
 
 function AISuggestPanel({
-  onApplyAll, onInsertHeadline, onInsertDescription, onClose, businessName,
+  adType, currentHeadlines, currentLongHeadlines, currentDescriptions,
+  onApplyAll, onInsertHeadline, onInsertLongHeadline, onInsertDescription, onClose, businessName,
 }: {
+  adType: EditableAdType | 'PMAX'
+  currentHeadlines: string[]
+  currentLongHeadlines: string[]
+  currentDescriptions: string[]
   onApplyAll: (result: AISuggestResult) => void
   onInsertHeadline: (text: string) => void
+  onInsertLongHeadline?: (text: string) => void
   onInsertDescription: (text: string) => void
   onClose: () => void
   businessName: string
@@ -115,6 +153,7 @@ function AISuggestPanel({
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AISuggestResult | null>(null)
   const [error, setError] = useState('')
+  const spec = AD_SPECS[adType]
 
   async function generate() {
     if (!instruction.trim()) return
@@ -125,9 +164,10 @@ function AISuggestPanel({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          adType: 'RSA',
-          currentHeadlines: [],
-          currentDescriptions: [],
+          adType,
+          currentHeadlines: currentHeadlines.filter(h => h.trim()),
+          currentLongHeadlines: currentLongHeadlines.filter(h => h.trim()),
+          currentDescriptions: currentDescriptions.filter(d => d.trim()),
           businessContext: { businessName, productService: businessName, brandTone: 'professional', objective: 'conversion' },
           instruction,
           language: 'th',
@@ -155,6 +195,9 @@ function AISuggestPanel({
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <p className="text-[11px] text-gray-400 -mb-2">
+          {spec.label}: AI จะเขียน Headline {spec.hMax} รายการ{spec.lhMax > 0 ? ` + Long Headline ${spec.lhMax} รายการ` : ''} + Description {spec.dMax} รายการ ครบตามสเปค Google
+        </p>
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1.5">บอก AI ว่าต้องการอะไร</label>
           <textarea
@@ -198,6 +241,19 @@ function AISuggestPanel({
                 ))}
               </div>
             </div>
+            {(result.longHeadlines ?? []).length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Long Headlines ({(result.longHeadlines ?? []).length})</p>
+                <div className="space-y-1.5">
+                  {(result.longHeadlines ?? []).map((h, i) => (
+                    <button key={i} onClick={() => onInsertLongHeadline?.(h)} title="คลิกเพื่อแทรก"
+                      className="w-full text-left px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs rounded-lg border border-indigo-200 transition-colors">
+                      {h}<span className="ml-1 text-[10px] text-indigo-400">({h.length})</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Descriptions ({result.descriptions.length})</p>
               <div className="space-y-1.5">
@@ -233,19 +289,22 @@ function AdCard({
   const [editing, setEditing] = useState(false)
   const [editState, setEditState] = useState<EditState>({
     headlines: ad.headlines.map(h => h.text),
+    longHeadlines: ad.longHeadlines.map(h => h.text),
     descriptions: ad.descriptions.map(d => d.text),
     finalUrls: [...ad.finalUrls],
   })
   const [showAI, setShowAI] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveOk, setSaveOk] = useState(false)
-  const [focusedField, setFocusedField] = useState<{ type: 'headline' | 'description'; index: number } | null>(null)
+  const [focusedField, setFocusedField] = useState<{ type: 'headline' | 'longHeadline' | 'description'; index: number } | null>(null)
 
+  const spec = AD_SPECS[ad.adType]
   const isDirty = pendingChange?.adId === ad.adId
 
   function startEdit() {
     setEditState({
       headlines: ad.headlines.map(h => h.text),
+      longHeadlines: ad.longHeadlines.map(h => h.text),
       descriptions: ad.descriptions.map(d => d.text),
       finalUrls: [...ad.finalUrls],
     })
@@ -274,9 +333,38 @@ function AdCard({
     onChangePending({ adId: ad.adId, editState: nextState })
   }
 
+  function updateLongHeadline(i: number, val: string) {
+    const next = [...editState.longHeadlines]
+    next[i] = val
+    const nextState = { ...editState, longHeadlines: next }
+    setEditState(nextState)
+    onChangePending({ adId: ad.adId, editState: nextState })
+  }
+
   function addHeadline() {
-    if (editState.headlines.length >= HEADLINE_MAX_COUNT) return
+    if (editState.headlines.length >= spec.hMax) return
     const nextState = { ...editState, headlines: [...editState.headlines, ''] }
+    setEditState(nextState)
+    onChangePending({ adId: ad.adId, editState: nextState })
+  }
+
+  function addLongHeadline() {
+    if (editState.longHeadlines.length >= spec.lhMax) return
+    const nextState = { ...editState, longHeadlines: [...editState.longHeadlines, ''] }
+    setEditState(nextState)
+    onChangePending({ adId: ad.adId, editState: nextState })
+  }
+
+  function addDescription() {
+    if (editState.descriptions.length >= spec.dMax) return
+    const nextState = { ...editState, descriptions: [...editState.descriptions, ''] }
+    setEditState(nextState)
+    onChangePending({ adId: ad.adId, editState: nextState })
+  }
+
+  function removeLongHeadline(i: number) {
+    const next = editState.longHeadlines.filter((_, idx) => idx !== i)
+    const nextState = { ...editState, longHeadlines: next }
     setEditState(nextState)
     onChangePending({ adId: ad.adId, editState: nextState })
   }
@@ -289,19 +377,25 @@ function AdCard({
   }
 
   const filledHeadlines = editState.headlines.filter(h => h.trim().length > 0)
+  const filledLHs       = editState.longHeadlines.filter(h => h.trim().length > 0)
   const filledDescs     = editState.descriptions.filter(d => d.trim().length > 0)
-  const overLimitH      = editState.headlines.some(h => h.length > HEADLINE_MAX)
-  const overLimitD      = editState.descriptions.some(d => d.length > DESC_MAX)
-  const tooFewH         = filledHeadlines.length < HEADLINE_MIN
-  const tooFewD         = filledDescs.length < DESC_MIN
-  const saveBlocked     = tooFewH || tooFewD || overLimitH || overLimitD
+  const overLimitH      = editState.headlines.some(h => h.length > spec.hLen)
+  const overLimitLH     = editState.longHeadlines.some(h => h.length > spec.lhLen)
+  const overLimitD      = editState.descriptions.some(d => d.length > spec.dLen)
+  const tooFewH         = filledHeadlines.length < spec.hMin
+  const tooFewLH        = spec.lhMin > 0 && filledLHs.length < spec.lhMin
+  const tooFewD         = filledDescs.length < spec.dMin
+  const saveBlocked     = tooFewH || tooFewLH || tooFewD || overLimitH || overLimitLH || overLimitD
 
   const validationError = tooFewH
-    ? `ต้องมี Headlines อย่างน้อย ${HEADLINE_MIN} รายการ (ปัจจุบัน ${filledHeadlines.length})`
+    ? `ต้องมี Headlines อย่างน้อย ${spec.hMin} รายการ (ปัจจุบัน ${filledHeadlines.length})`
+    : tooFewLH
+      ? `ต้องมี Long Headlines อย่างน้อย ${spec.lhMin} รายการ (ปัจจุบัน ${filledLHs.length})`
     : tooFewD
-      ? `ต้องมี Descriptions อย่างน้อย ${DESC_MIN} รายการ (ปัจจุบัน ${filledDescs.length})`
-      : overLimitH ? 'Headline บางรายการยาวเกิน 30 ตัวอักษร'
-      : overLimitD ? 'Description บางรายการยาวเกิน 90 ตัวอักษร'
+      ? `ต้องมี Descriptions อย่างน้อย ${spec.dMin} รายการ (ปัจจุบัน ${filledDescs.length})`
+      : overLimitH ? `Headline บางรายการยาวเกิน ${spec.hLen} ตัวอักษร`
+      : overLimitLH ? `Long Headline บางรายการยาวเกิน ${spec.lhLen} ตัวอักษร`
+      : overLimitD ? `Description บางรายการยาวเกิน ${spec.dLen} ตัวอักษร`
       : ''
 
   async function handleSave() {
@@ -322,8 +416,9 @@ function AdCard({
   function handleApplyAll(result: AISuggestResult) {
     const nextState: EditState = {
       ...editState,
-      headlines: result.headlines.slice(0, HEADLINE_MAX_COUNT),
-      descriptions: result.descriptions.slice(0, DESC_MAX_COUNT),
+      headlines: result.headlines.slice(0, spec.hMax),
+      longHeadlines: (result.longHeadlines ?? []).slice(0, spec.lhMax),
+      descriptions: result.descriptions.slice(0, spec.dMax),
     }
     setEditState(nextState)
     onChangePending({ adId: ad.adId, editState: nextState })
@@ -332,8 +427,18 @@ function AdCard({
   function handleInsertHeadline(text: string) {
     if (focusedField?.type === 'headline') {
       updateHeadline(focusedField.index, text)
-    } else if (editState.headlines.length < HEADLINE_MAX_COUNT) {
+    } else if (editState.headlines.length < spec.hMax) {
       const nextState = { ...editState, headlines: [...editState.headlines, text] }
+      setEditState(nextState)
+      onChangePending({ adId: ad.adId, editState: nextState })
+    }
+  }
+
+  function handleInsertLongHeadline(text: string) {
+    if (focusedField?.type === 'longHeadline') {
+      updateLongHeadline(focusedField.index, text)
+    } else if (editState.longHeadlines.length < spec.lhMax) {
+      const nextState = { ...editState, longHeadlines: [...editState.longHeadlines, text] }
       setEditState(nextState)
       onChangePending({ adId: ad.adId, editState: nextState })
     }
@@ -342,7 +447,7 @@ function AdCard({
   function handleInsertDescription(text: string) {
     if (focusedField?.type === 'description') {
       updateDescription(focusedField.index, text)
-    } else if (editState.descriptions.length < DESC_MAX_COUNT) {
+    } else if (editState.descriptions.length < spec.dMax) {
       const nextState = { ...editState, descriptions: [...editState.descriptions, text] }
       setEditState(nextState)
       onChangePending({ adId: ad.adId, editState: nextState })
@@ -359,6 +464,7 @@ function AdCard({
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <span className="px-2 py-0.5 text-[11px] font-medium bg-gray-100 text-gray-600 rounded-full">{ad.adGroupName}</span>
+            <span className="px-2 py-0.5 text-[11px] font-medium bg-purple-50 text-purple-600 border border-purple-100 rounded-full">{spec.label}</span>
             <span className={cn('px-2 py-0.5 text-[11px] font-semibold rounded-full', ad.status === 'ENABLED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
               {ad.status}
             </span>
@@ -374,10 +480,13 @@ function AdCard({
             </div>
           )}
         </div>
-        {!editing && (
+        {!editing && spec.editable && (
           <button onClick={startEdit} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors flex-shrink-0">
             <Pencil className="w-3 h-3"/>Edit
           </button>
+        )}
+        {!spec.editable && (
+          <span className="text-[11px] text-gray-400 flex-shrink-0">แก้ text ผ่าน API ไม่ได้ — แก้ใน Google Ads UI</span>
         )}
       </div>
 
@@ -393,6 +502,19 @@ function AdCard({
               ))}
             </div>
           </div>
+          {ad.longHeadlines.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Long Headlines</p>
+              <div className="space-y-1">
+                {ad.longHeadlines.map((h, i) => (
+                  <div key={i} className="flex items-start justify-between gap-2 px-3 py-1.5 bg-indigo-50/50 border border-indigo-100 rounded-lg">
+                    <span className="text-xs text-gray-700 flex-1">{h.text}</span>
+                    <span className="text-[10px] text-gray-400 flex-shrink-0">({h.text.length})</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Descriptions</p>
             <div className="space-y-1">
@@ -414,52 +536,89 @@ function AdCard({
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Headlines
-                  <span className={cn('ml-1.5 font-bold tabular-nums', tooFewH ? 'text-red-500' : filledHeadlines.length >= HEADLINE_MIN ? 'text-emerald-600' : 'text-amber-500')}>
-                    {filledHeadlines.length}/{HEADLINE_MAX_COUNT}
+                  <span className={cn('ml-1.5 font-bold tabular-nums', tooFewH ? 'text-red-500' : filledHeadlines.length >= spec.hMin ? 'text-emerald-600' : 'text-amber-500')}>
+                    {filledHeadlines.length}/{spec.hMax}
                   </span>
                 </p>
-                <span className="text-[10px] text-gray-400">ขั้นต่ำ {HEADLINE_MIN} · สูงสุด {HEADLINE_MAX_COUNT} · ≤{HEADLINE_MAX} ตัวอักษร</span>
+                <span className="text-[10px] text-gray-400">ขั้นต่ำ {spec.hMin} · สูงสุด {spec.hMax} · ≤{spec.hLen} ตัวอักษร</span>
               </div>
               <div className="space-y-2">
                 {editState.headlines.map((h, i) => (
                   <div key={i} className="flex items-center gap-2">
                     <div className="flex-1">
-                      <CharInput value={h} onChange={v => updateHeadline(i, v)} maxLen={HEADLINE_MAX} placeholder={`Headline ${i + 1}${i < HEADLINE_MIN ? ' *' : ''}`} className="text-sm"/>
+                      <CharInput value={h} onChange={v => updateHeadline(i, v)} maxLen={spec.hLen} placeholder={`Headline ${i + 1}${i < spec.hMin ? ' *' : ''}`} className="text-sm"/>
                     </div>
                     <button onClick={() => { setFocusedField({ type: 'headline', index: i }); setShowAI(true) }}
                       className="p-1.5 rounded text-gray-400 hover:text-purple-500 hover:bg-purple-50 transition-colors flex-shrink-0" title="AI suggest">
                       <Sparkles className="w-3.5 h-3.5"/>
                     </button>
-                    <button onClick={() => removeHeadline(i)} disabled={filledHeadlines.length <= HEADLINE_MIN && h.trim().length > 0}
+                    <button onClick={() => removeHeadline(i)} disabled={filledHeadlines.length <= spec.hMin && h.trim().length > 0}
                       className="p-1.5 rounded text-gray-300 hover:text-red-400 hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex-shrink-0">
                       <X className="w-3.5 h-3.5"/>
                     </button>
                   </div>
                 ))}
               </div>
-              {tooFewH && <p className="mt-1.5 text-xs text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0"/>ต้องมี Headlines อย่างน้อย {HEADLINE_MIN} รายการ ก่อนบันทึก</p>}
-              {editState.headlines.length < HEADLINE_MAX_COUNT && (
+              {tooFewH && <p className="mt-1.5 text-xs text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0"/>ต้องมี Headlines อย่างน้อย {spec.hMin} รายการ ก่อนบันทึก</p>}
+              {editState.headlines.length < spec.hMax && (
                 <button onClick={addHeadline} className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium">
                   <Plus className="w-3 h-3"/>Add headline
                 </button>
               )}
             </div>
 
+            {spec.lhMax > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    Long Headlines
+                    <span className={cn('ml-1.5 font-bold tabular-nums', tooFewLH ? 'text-red-500' : filledLHs.length >= spec.lhMin ? 'text-emerald-600' : 'text-amber-500')}>
+                      {filledLHs.length}/{spec.lhMax}
+                    </span>
+                  </p>
+                  <span className="text-[10px] text-gray-400">ขั้นต่ำ {spec.lhMin} · สูงสุด {spec.lhMax} · ≤{spec.lhLen} ตัวอักษร</span>
+                </div>
+                <div className="space-y-2">
+                  {editState.longHeadlines.map((h, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="flex-1">
+                        <CharInput value={h} onChange={v => updateLongHeadline(i, v)} maxLen={spec.lhLen} placeholder={`Long Headline ${i + 1}${i < spec.lhMin ? ' *' : ''}`} className="text-sm"/>
+                      </div>
+                      <button onClick={() => { setFocusedField({ type: 'longHeadline', index: i }); setShowAI(true) }}
+                        className="p-1.5 rounded text-gray-400 hover:text-purple-500 hover:bg-purple-50 transition-colors flex-shrink-0" title="AI suggest">
+                        <Sparkles className="w-3.5 h-3.5"/>
+                      </button>
+                      <button onClick={() => removeLongHeadline(i)}
+                        className="p-1.5 rounded text-gray-300 hover:text-red-400 hover:bg-red-50 transition-colors flex-shrink-0">
+                        <X className="w-3.5 h-3.5"/>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {tooFewLH && <p className="mt-1.5 text-xs text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0"/>ต้องมี Long Headlines อย่างน้อย {spec.lhMin} รายการ ก่อนบันทึก</p>}
+                {editState.longHeadlines.length < spec.lhMax && (
+                  <button onClick={addLongHeadline} className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium">
+                    <Plus className="w-3 h-3"/>Add long headline
+                  </button>
+                )}
+              </div>
+            )}
+
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Descriptions
-                  <span className={cn('ml-1.5 font-bold tabular-nums', tooFewD ? 'text-red-500' : filledDescs.length >= DESC_MIN ? 'text-emerald-600' : 'text-amber-500')}>
-                    {filledDescs.length}/{DESC_MAX_COUNT}
+                  <span className={cn('ml-1.5 font-bold tabular-nums', tooFewD ? 'text-red-500' : filledDescs.length >= spec.dMin ? 'text-emerald-600' : 'text-amber-500')}>
+                    {filledDescs.length}/{spec.dMax}
                   </span>
                 </p>
-                <span className="text-[10px] text-gray-400">ขั้นต่ำ {DESC_MIN} · สูงสุด {DESC_MAX_COUNT} · ≤{DESC_MAX} ตัวอักษร</span>
+                <span className="text-[10px] text-gray-400">ขั้นต่ำ {spec.dMin} · สูงสุด {spec.dMax} · ≤{spec.dLen} ตัวอักษร</span>
               </div>
               <div className="space-y-2">
                 {editState.descriptions.map((d, i) => (
                   <div key={i} className="flex items-start gap-2">
                     <div className="flex-1">
-                      <CharInput value={d} onChange={v => updateDescription(i, v)} maxLen={DESC_MAX} placeholder={`Description ${i + 1}${i < DESC_MIN ? ' *' : ''}`}/>
+                      <CharInput value={d} onChange={v => updateDescription(i, v)} maxLen={spec.dLen} placeholder={`Description ${i + 1}${i < spec.dMin ? ' *' : ''}`}/>
                     </div>
                     <button onClick={() => { setFocusedField({ type: 'description', index: i }); setShowAI(true) }}
                       className="p-1.5 rounded text-gray-400 hover:text-purple-500 hover:bg-purple-50 transition-colors flex-shrink-0 mt-1" title="AI suggest">
@@ -468,7 +627,12 @@ function AdCard({
                   </div>
                 ))}
               </div>
-              {tooFewD && <p className="mt-1.5 text-xs text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0"/>ต้องมี Descriptions อย่างน้อย {DESC_MIN} รายการ ก่อนบันทึก</p>}
+              {tooFewD && <p className="mt-1.5 text-xs text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3 flex-shrink-0"/>ต้องมี Descriptions อย่างน้อย {spec.dMin} รายการ ก่อนบันทึก</p>}
+              {editState.descriptions.length < spec.dMax && (
+                <button onClick={addDescription} className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium">
+                  <Plus className="w-3 h-3"/>Add description
+                </button>
+              )}
             </div>
 
             {validationError && (
@@ -493,7 +657,18 @@ function AdCard({
           </div>
           {showAI && (
             <div className="w-80 flex-shrink-0 border-l border-purple-100 bg-purple-50/30">
-              <AISuggestPanel onApplyAll={handleApplyAll} onInsertHeadline={handleInsertHeadline} onInsertDescription={handleInsertDescription} onClose={() => setShowAI(false)} businessName="Campaign"/>
+              <AISuggestPanel
+                adType={ad.adType}
+                currentHeadlines={editState.headlines}
+                currentLongHeadlines={editState.longHeadlines}
+                currentDescriptions={editState.descriptions}
+                onApplyAll={handleApplyAll}
+                onInsertHeadline={handleInsertHeadline}
+                onInsertLongHeadline={handleInsertLongHeadline}
+                onInsertDescription={handleInsertDescription}
+                onClose={() => setShowAI(false)}
+                businessName="Campaign"
+              />
             </div>
           )}
         </div>
@@ -511,6 +686,7 @@ const TYPE_META: Record<CampaignSummary['type'], { label: string; color: string;
   VIDEO: { label: 'Video', color: 'bg-red-100 text-red-700', Icon: Video },
   SHOPPING: { label: 'Shopping', color: 'bg-orange-100 text-orange-700', Icon: ShoppingBag },
   DEMAND_GEN: { label: 'Demand Gen', color: 'bg-pink-100 text-pink-700', Icon: Globe },
+  APP: { label: 'App', color: 'bg-cyan-100 text-cyan-700', Icon: Smartphone },
   LOCAL: { label: 'Local', color: 'bg-green-100 text-green-700', Icon: LayoutGrid },
   UNKNOWN: { label: 'Other', color: 'bg-gray-100 text-gray-600', Icon: LayoutGrid },
 }
@@ -546,6 +722,7 @@ function PMaxAssetGroupCard({
   const [uploadingImage, setUploadingImage] = useState(false)
   const [uploadedAssets, setUploadedAssets] = useState<{ resourceName: string; name: string }[]>([])
   const [showUpload, setShowUpload] = useState(false)
+  const [showAI, setShowAI] = useState(false)
 
   const filledH = headlines.filter(h => h.trim()).length
   const filledD = descriptions.filter(d => d.trim()).length
@@ -553,6 +730,22 @@ function PMaxAssetGroupCard({
   const overD = descriptions.some(d => d.length > DESC_MAX)
   const overBN = businessName.length > 25
   const saveBlocked = filledH < HEADLINE_MIN || filledD < DESC_MIN || overH || overD || overBN
+
+  // AI Suggest — เติม headlines / long headlines / descriptions ครบตามสเปค PMax
+  function handleAIApplyAll(result: AISuggestResult) {
+    setHeadlines(result.headlines.slice(0, HEADLINE_MAX_COUNT))
+    if ((result.longHeadlines ?? []).length > 0) setLongHeadlines((result.longHeadlines ?? []).slice(0, PMAX_LH_MAX_COUNT))
+    setDescriptions(result.descriptions.slice(0, PMAX_DESC_MAX_COUNT))
+  }
+  function handleAIInsertHeadline(text: string) {
+    setHeadlines(prev => prev.length < HEADLINE_MAX_COUNT ? [...prev, text] : prev)
+  }
+  function handleAIInsertLongHeadline(text: string) {
+    setLongHeadlines(prev => prev.length < PMAX_LH_MAX_COUNT ? [...prev, text] : prev)
+  }
+  function handleAIInsertDescription(text: string) {
+    setDescriptions(prev => prev.length < PMAX_DESC_MAX_COUNT ? [...prev, text] : prev)
+  }
 
   async function handleSave() {
     if (saveBlocked) return
@@ -693,7 +886,8 @@ function PMaxAssetGroupCard({
 
       {/* Edit mode */}
       {editing && (
-        <div className="p-4 space-y-4">
+        <div className="flex gap-0">
+        <div className="flex-1 p-4 space-y-4 min-w-0">
           {/* Headlines */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -728,7 +922,7 @@ function PMaxAssetGroupCard({
                 </div>
               ))}
             </div>
-            {longHeadlines.length < 5 && <button onClick={() => addItem(longHeadlines, setLongHeadlines, 5)} className="mt-2 flex items-center gap-1 text-xs text-blue-600 font-medium"><Plus className="w-3 h-3"/>Add long headline</button>}
+            {longHeadlines.length < PMAX_LH_MAX_COUNT && <button onClick={() => addItem(longHeadlines, setLongHeadlines, PMAX_LH_MAX_COUNT)} className="mt-2 flex items-center gap-1 text-xs text-blue-600 font-medium"><Plus className="w-3 h-3"/>Add long headline</button>}
           </div>
 
           {/* Descriptions */}
@@ -736,7 +930,7 @@ function PMaxAssetGroupCard({
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                 Descriptions
-                <span className={cn('ml-1.5 font-bold', filledD < DESC_MIN ? 'text-red-500' : 'text-emerald-600')}>{filledD}/{DESC_MAX_COUNT}</span>
+                <span className={cn('ml-1.5 font-bold', filledD < DESC_MIN ? 'text-red-500' : 'text-emerald-600')}>{filledD}/{PMAX_DESC_MAX_COUNT}</span>
               </p>
               <span className="text-[10px] text-gray-400">≤{DESC_MAX} chars · min {DESC_MIN}</span>
             </div>
@@ -748,7 +942,7 @@ function PMaxAssetGroupCard({
                 </div>
               ))}
             </div>
-            {descriptions.length < DESC_MAX_COUNT && <button onClick={() => addItem(descriptions, setDescriptions, DESC_MAX_COUNT)} className="mt-2 flex items-center gap-1 text-xs text-blue-600 font-medium"><Plus className="w-3 h-3"/>Add description</button>}
+            {descriptions.length < PMAX_DESC_MAX_COUNT && <button onClick={() => addItem(descriptions, setDescriptions, PMAX_DESC_MAX_COUNT)} className="mt-2 flex items-center gap-1 text-xs text-blue-600 font-medium"><Plus className="w-3 h-3"/>Add description</button>}
           </div>
 
           {/* Business name */}
@@ -797,8 +991,30 @@ function PMaxAssetGroupCard({
               {saving ? <Loader2 className="w-4 h-4 animate-spin"/> : <Save className="w-4 h-4"/>}
               {saving ? 'กำลังบันทึก...' : 'บันทึก'}
             </button>
+            <button onClick={() => setShowAI(v => !v)}
+              className={cn('flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg border transition-colors',
+                showAI ? 'bg-purple-100 border-purple-300 text-purple-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-purple-50 hover:border-purple-300 hover:text-purple-600')}>
+              <Sparkles className="w-4 h-4"/>AI Suggest
+            </button>
             <button onClick={() => { setEditing(false); setError('') }} className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">Cancel</button>
           </div>
+        </div>
+        {showAI && (
+          <div className="w-80 flex-shrink-0 border-l border-purple-100 bg-purple-50/30">
+            <AISuggestPanel
+              adType="PMAX"
+              currentHeadlines={headlines}
+              currentLongHeadlines={longHeadlines}
+              currentDescriptions={descriptions}
+              onApplyAll={handleAIApplyAll}
+              onInsertHeadline={handleAIInsertHeadline}
+              onInsertLongHeadline={handleAIInsertLongHeadline}
+              onInsertDescription={handleAIInsertDescription}
+              onClose={() => setShowAI(false)}
+              businessName={businessName || group.name}
+            />
+          </div>
+        )}
         </div>
       )}
     </div>
@@ -946,12 +1162,19 @@ function CampaignEditorPanel({
   }, [campaign.campaignId, campaign.type, customerId])
 
   async function saveAd(adId: string, state: EditState) {
+    const targetAd = ads.find(a => a.adId === adId)
     const res = await fetch(
       `/api/campaign-edit/ads?customerId=${customerId}&adId=${adId}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ headlines: state.headlines, descriptions: state.descriptions, finalUrls: state.finalUrls }),
+        body: JSON.stringify({
+          adType: targetAd?.adType ?? 'RSA',
+          headlines: state.headlines.filter(h => h.trim()),
+          longHeadlines: state.longHeadlines.filter(h => h.trim()),
+          descriptions: state.descriptions.filter(d => d.trim()),
+          finalUrls: state.finalUrls,
+        }),
       }
     )
     if (!res.ok) {
@@ -960,8 +1183,9 @@ function CampaignEditorPanel({
     }
     setAds(prev => prev.map(a => a.adId === adId ? {
       ...a,
-      headlines: state.headlines.map(text => ({ text })),
-      descriptions: state.descriptions.map(text => ({ text })),
+      headlines: state.headlines.filter(h => h.trim()).map(text => ({ text })),
+      longHeadlines: state.longHeadlines.filter(h => h.trim()).map(text => ({ text })),
+      descriptions: state.descriptions.filter(d => d.trim()).map(text => ({ text })),
       finalUrls: state.finalUrls,
     } : a))
   }

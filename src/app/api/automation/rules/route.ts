@@ -4,16 +4,36 @@ import { auth } from '@/lib/auth'
 import { getUserId } from '@/lib/session'
 import { z } from 'zod'
 import type { Session } from 'next-auth'
+import { sendAutomationEmail, automationEmailHtml } from '@/lib/email'
+import { conditionSentence, scopeSentence, ACTION_LABELS } from '@/lib/automation/labels'
 
 const ruleSchema = z.object({
   name: z.string().min(1),
   type: z.enum(['keyword_pause', 'budget_adjust', 'alert', 'bid_adjust', 'campaign_pause', 'label']),
-  metric: z.string().min(1),
-  operator: z.enum(['>', '<', '>=', '<=']),
-  value: z.number(),
+  // โหมดเงื่อนไข metric (เดิม) หรือโหมดตั้งเวลา (ใหม่ — เปิด/ปิดแคมเปญตามวัน-เวลา)
+  trigger: z.enum(['metric', 'schedule']).default('metric'),
+  metric: z.string().optional(),
+  operator: z.enum(['>', '<', '>=', '<=']).optional(),
+  value: z.number().optional(),
   window: z.string().default('7d'),
+  schedule: z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    time: z.string().regex(/^\d{2}:\d{2}$/),
+  }).optional(),
+  // ขอบเขต: เลือกระดับแคมเปญได้ (ไม่ส่ง = ทั้ง account)
+  scope: z.object({
+    customerId: z.string().optional(),
+    accountName: z.string().optional(),
+    campaignIds: z.array(z.string()).optional(),
+    campaignNames: z.array(z.string()).optional(),
+  }).optional(),
+  // อีเมลผู้รับแจ้งเตือน (พิมพ์เพิ่มได้หลายอีเมล)
+  emails: z.array(z.string().email()).max(10).optional(),
   action: z.string().min(1),
-})
+}).refine(
+  (r) => r.trigger === 'schedule' ? !!r.schedule : (!!r.metric && !!r.operator && r.value !== undefined),
+  { message: 'metric rules ต้องมี metric/operator/value — schedule rules ต้องมี schedule.time' }
+)
 
 export async function POST(req: Request) {
   try {
@@ -28,18 +48,53 @@ export async function POST(req: Request) {
     }
     const input = parsed.data
 
+    const conditionJson = JSON.stringify({
+      metric: input.metric,
+      operator: input.operator,
+      value: input.value,
+      window: input.window,
+      trigger: input.trigger,
+      ...(input.schedule ? { schedule: input.schedule } : {}),
+      ...(input.scope ? { scope: input.scope } : {}),
+    })
+    const actionJson = JSON.stringify({
+      action: input.action,
+      ...(input.emails?.length ? { notify: { emails: input.emails } } : {}),
+    })
+
     const rule = await prisma.automationRule.create({
       data: {
         userId,
         name: input.name,
         type: input.type,
-        conditionJson: JSON.stringify({ metric: input.metric, operator: input.operator, value: input.value, window: input.window }),
-        actionJson: JSON.stringify({ action: input.action }),
+        conditionJson,
+        actionJson,
         enabled: true,
       },
     })
 
-    return NextResponse.json(rule, { status: 201 })
+    // แจ้งอีเมลทันทีว่า "ตั้งค่าอะไรไว้" (ถ้าใส่อีเมลไว้) — ไม่ block การบันทึก
+    let emailDetail = ''
+    if (input.emails?.length) {
+      const emailResult = await sendAutomationEmail(
+        input.emails,
+        `[Ads Automation] ตั้งกฎใหม่: ${input.name}`,
+        automationEmailHtml({
+          heading: `ตั้งกฎอัตโนมัติใหม่แล้ว: "${input.name}"`,
+          lines: [
+            { label: 'เงื่อนไข', value: conditionSentence(conditionJson) },
+            { label: 'ขอบเขต', value: scopeSentence(conditionJson) },
+            { label: 'Action', value: ACTION_LABELS[input.action] ?? input.action },
+            { label: 'Account', value: input.scope?.accountName ?? input.scope?.customerId ?? '(เลือกตอนรัน)' },
+            { label: 'แจ้งเตือนไปที่', value: input.emails.join(', ') },
+          ],
+          footer: 'ระบบจะส่งอีเมลแจ้งอีกครั้งทันทีหลังกฎนี้ทำงาน (execute action) จริง',
+        })
+      ).catch(() => ({ sent: false, detail: 'ส่งอีเมลไม่สำเร็จ' }))
+      emailDetail = emailResult.detail
+    }
+
+    return NextResponse.json({ ...rule, emailDetail }, { status: 201 })
   } catch (err) {
     console.error('[automation/rules POST]', err)
     return NextResponse.json({ error: 'บันทึกไม่สำเร็จ' }, { status: 500 })

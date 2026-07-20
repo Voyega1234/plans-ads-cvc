@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Search, Zap, Activity, ShoppingBag, BarChart2, ChevronRight } from 'lucide-react'
+import { Search, Zap, Activity, ShoppingBag, BarChart2, ChevronRight, Ban } from 'lucide-react'
 
 const tools = [
   {
@@ -24,6 +24,13 @@ const tools = [
     label: 'Tracking Setup',
     desc: 'ตั้งค่า Conversion Tracking, GTM, Enhanced Conversions',
     color: 'bg-emerald-50 text-emerald-600 border-emerald-100',
+  },
+  {
+    href: '/negative-keywords',
+    icon: Ban,
+    label: 'Negative Keywords',
+    desc: 'ดึง search terms ของแต่ละแคมเปญ คัดคำที่เปลืองงบ แล้วอัพเดตเป็น negative keyword',
+    color: 'bg-red-50 text-red-600 border-red-100',
   },
   {
     href: '/shopping-products',

@@ -6,6 +6,9 @@
 
 import { getGoogleAdsAccessToken } from './auth'
 import { isMockMode } from './client'
+import { sendAutomationEmail, automationEmailHtml } from '@/lib/email'
+import type { RuleConditionExt, RuleActionExt } from '@/lib/automation/labels'
+import { conditionSentence, scopeSentence, ACTION_LABELS } from '@/lib/automation/labels'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -25,6 +28,8 @@ export interface RuleEvalResult {
   message:   string
   metricVal?: number
   campaigns?: string[]
+  // ถ้า schedule rule ทำงานแล้ว — conditionJson ใหม่ (stamp executedAt) ให้ route persist
+  updatedConditionJson?: string
 }
 
 // ── Date range mapping ─────────────────────────────────────────────────────
@@ -481,15 +486,135 @@ function mockCampaignMetrics(): CampaignMetrics[] {
   ]
 }
 
+// ── Schedule helpers ───────────────────────────────────────────────────────
+
+// เวลาปัจจุบันตามเขตเวลาไทย → { date: 'YYYY-MM-DD', time: 'HH:mm' }
+function nowInBangkok(): { date: string; time: string } {
+  const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok', hour12: false })
+  const [date, hms] = s.split(' ')
+  return { date, time: hms.slice(0, 5) }
+}
+
+// schedule rule ถึงกำหนดหรือยัง (แบบระบุวัน = ครั้งเดียว, ไม่ระบุวัน = ทุกวัน)
+function scheduleDue(schedule: { date?: string; time: string; executedAt?: string }): { due: boolean; reason: string } {
+  const now = nowInBangkok()
+  if (schedule.date) {
+    if (schedule.executedAt) return { due: false, reason: `ทำไปแล้วเมื่อ ${schedule.executedAt}` }
+    const reached = now.date > schedule.date || (now.date === schedule.date && now.time >= schedule.time)
+    return reached
+      ? { due: true, reason: '' }
+      : { due: false, reason: `รอถึงวันที่ ${schedule.date} เวลา ${schedule.time} น. (ตอนนี้ ${now.date} ${now.time})` }
+  }
+  // รายวัน — ทำได้วันละครั้งหลังถึงเวลา
+  const executedDate = schedule.executedAt ? schedule.executedAt.slice(0, 10) : ''
+  if (executedDate === now.date) return { due: false, reason: `วันนี้ทำไปแล้ว (${schedule.executedAt})` }
+  return now.time >= schedule.time
+    ? { due: true, reason: '' }
+    : { due: false, reason: `รอถึงเวลา ${schedule.time} น. (ตอนนี้ ${now.time} น.)` }
+}
+
+// ── Email notification ─────────────────────────────────────────────────────
+
+async function notifyByEmail(
+  rule: { name?: string; conditionJson: string; actionJson: string },
+  actionExt: RuleActionExt,
+  customerId: string,
+  campaigns: string[],
+  actionMsg: string
+): Promise<string> {
+  const emails = actionExt.notify?.emails ?? []
+  if (!emails.length) return ''
+
+  const result = await sendAutomationEmail(
+    emails,
+    `[Ads Automation] ${rule.name ?? 'Rule'} ทำงานแล้ว`,
+    automationEmailHtml({
+      heading: `กฎอัตโนมัติ "${rule.name ?? ''}" ทำงานแล้ว`,
+      lines: [
+        { label: 'เงื่อนไข', value: conditionSentence(rule.conditionJson) },
+        { label: 'ขอบเขต', value: scopeSentence(rule.conditionJson) },
+        { label: 'Action', value: ACTION_LABELS[actionExt.action] ?? actionExt.action },
+        { label: 'Account', value: customerId },
+        { label: 'แคมเปญ', value: campaigns.join(', ') || '-' },
+        { label: 'ผลลัพธ์', value: actionMsg },
+        { label: 'เวลา', value: new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' }) },
+      ],
+      footer: 'อีเมลนี้ส่งอัตโนมัติจากระบบ Automation — ตรวจสอบรายละเอียดได้ที่หน้า Automation Center',
+    })
+  )
+  return result.detail
+}
+
 // ── Main rule evaluator ────────────────────────────────────────────────────
 
 export async function evaluateRule(
-  rule: { id: string; type: string; conditionJson: string; actionJson: string },
+  rule: { id: string; name?: string; type: string; conditionJson: string; actionJson: string },
   customerId: string
 ): Promise<RuleEvalResult> {
-  const condition = JSON.parse(rule.conditionJson) as RuleCondition
-  const { action } = JSON.parse(rule.actionJson) as RuleAction
+  const condition = JSON.parse(rule.conditionJson) as RuleConditionExt
+  const actionExt = JSON.parse(rule.actionJson) as RuleActionExt
+  const action = actionExt.action
 
+  // scope: rule ที่ตั้งระดับแคมเปญจะจำ account ของตัวเองไว้ด้วย
+  const effectiveCustomerId = condition.scope?.customerId || customerId
+  const scopeIds = new Set(condition.scope?.campaignIds ?? [])
+
+  // ── โหมดตั้งเวลา (เปิด/ปิดแคมเปญตามวัน-เวลา) ──
+  if (condition.trigger === 'schedule' && condition.schedule) {
+    const { due, reason } = scheduleDue(condition.schedule)
+    if (!due) {
+      return { result: 'no_match', message: reason, campaigns: [] }
+    }
+
+    let campaigns: CampaignMetrics[]
+    if (isMockMode()) {
+      campaigns = mockCampaignMetrics()
+    } else {
+      try {
+        const token = await getGoogleAdsAccessToken()
+        campaigns = await fetchCampaignMetrics(effectiveCustomerId, 'LAST_7_DAYS', token)
+      } catch (err) {
+        return { result: 'error', message: err instanceof Error ? err.message : String(err) }
+      }
+    }
+
+    const targets = scopeIds.size > 0 ? campaigns.filter((c) => scopeIds.has(c.campaignId)) : campaigns
+    if (!targets.length) {
+      return { result: 'no_match', message: 'ไม่พบแคมเปญตามขอบเขตที่ตั้งไว้', campaigns: [] }
+    }
+
+    let actionMsg: string
+    if (isMockMode()) {
+      actionMsg = `[MOCK] Would execute "${action}" on: ${targets.map((c) => c.campaignName).join(', ')}`
+    } else {
+      try {
+        const token = await getGoogleAdsAccessToken()
+        actionMsg = await executeAction(action, effectiveCustomerId, targets, token, MUTATE_ENABLED)
+      } catch (err) {
+        return {
+          result: 'error',
+          message: err instanceof Error ? err.message : String(err),
+          campaigns: targets.map((c) => c.campaignName),
+        }
+      }
+    }
+
+    // stamp executedAt กันทำซ้ำ + ส่งอีเมลแจ้งทันทีหลังทำ action
+    const updatedCondition: RuleConditionExt = {
+      ...condition,
+      schedule: { ...condition.schedule, executedAt: new Date().toISOString() },
+    }
+    const emailDetail = await notifyByEmail(rule, actionExt, effectiveCustomerId, targets.map((c) => c.campaignName), actionMsg)
+
+    return {
+      result: 'triggered',
+      message: emailDetail ? `${actionMsg} · ${emailDetail}` : actionMsg,
+      campaigns: targets.map((c) => c.campaignName),
+      updatedConditionJson: JSON.stringify(updatedCondition),
+    }
+  }
+
+  // ── โหมดเงื่อนไข metric (เดิม) ──
   let campaigns: CampaignMetrics[]
 
   if (isMockMode()) {
@@ -497,8 +622,8 @@ export async function evaluateRule(
   } else {
     try {
       const token    = await getGoogleAdsAccessToken()
-      const dateRange = windowToGadsRange(condition.window)
-      campaigns       = await fetchCampaignMetrics(customerId, dateRange, token)
+      const dateRange = windowToGadsRange(condition.window ?? '7d')
+      campaigns       = await fetchCampaignMetrics(effectiveCustomerId, dateRange, token)
     } catch (err) {
       return {
         result:  'error',
@@ -507,27 +632,36 @@ export async function evaluateRule(
     }
   }
 
+  // จำกัดขอบเขตตามแคมเปญที่เลือกไว้ (ถ้าไม่เลือก = ทั้ง account)
+  if (scopeIds.size > 0) {
+    campaigns = campaigns.filter((c) => scopeIds.has(c.campaignId))
+  }
+
+  const metric = condition.metric ?? ''
+  const operator = condition.operator ?? '>'
+  const value = condition.value ?? 0
+
   // Aggregate metric across campaigns (sum for counts, avg for rates)
-  const aggMetric = (metric: string): number => {
+  const aggMetric = (m: string): number => {
     if (!campaigns.length) return 0
     const sumMetrics = ['impressions', 'clicks', 'conversions', 'cost']
-    if (sumMetrics.includes(metric)) {
-      return campaigns.reduce((s, c) => s + getMetricValue(c, metric), 0)
+    if (sumMetrics.includes(m)) {
+      return campaigns.reduce((s, c) => s + getMetricValue(c, m), 0)
     }
     // Average for rate metrics
-    return campaigns.reduce((s, c) => s + getMetricValue(c, metric), 0) / campaigns.length
+    return campaigns.reduce((s, c) => s + getMetricValue(c, m), 0) / campaigns.length
   }
 
   // Find campaigns that individually trigger the condition
   const triggered = campaigns.filter((c) =>
-    evaluate(getMetricValue(c, condition.metric), condition.operator, condition.value)
+    evaluate(getMetricValue(c, metric), operator, value)
   )
-  const aggregated = aggMetric(condition.metric)
+  const aggregated = aggMetric(metric)
 
   if (!triggered.length) {
     return {
       result:   'no_match',
-      message:  `${condition.metric} = ${aggregated.toFixed(2)} — condition not met (${condition.operator} ${condition.value})`,
+      message:  `${metric} = ${aggregated.toFixed(2)} — condition not met (${operator} ${value})`,
       metricVal: aggregated,
       campaigns: [],
     }
@@ -540,7 +674,7 @@ export async function evaluateRule(
   } else {
     try {
       const token    = await getGoogleAdsAccessToken()
-      actionMsg      = await executeAction(action, customerId, triggered, token, MUTATE_ENABLED)
+      actionMsg      = await executeAction(action, effectiveCustomerId, triggered, token, MUTATE_ENABLED)
     } catch (err) {
       return {
         result:   'error',
@@ -550,9 +684,12 @@ export async function evaluateRule(
     }
   }
 
+  // แจ้งอีเมลทันทีหลัง action ทำงาน (ถ้า rule ตั้งอีเมลไว้)
+  const emailDetail = await notifyByEmail(rule, actionExt, effectiveCustomerId, triggered.map((c) => c.campaignName), actionMsg)
+
   return {
     result:    'triggered',
-    message:   actionMsg,
+    message:   emailDetail ? `${actionMsg} · ${emailDetail}` : actionMsg,
     metricVal: aggregated,
     campaigns:  triggered.map((c) => c.campaignName),
   }

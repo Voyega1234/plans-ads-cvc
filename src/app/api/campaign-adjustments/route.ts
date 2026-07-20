@@ -32,7 +32,7 @@ async function mutate(customerId: string, ops: unknown[], token: string) {
 // ── Schema ─────────────────────────────────────────────────────────────────────
 const baseSchema = z.object({
   customerId: z.string().min(1),
-  action: z.enum(['add_pmax_asset_group', 'edit_text_ads', 'gdn_adgroup', 'gdn_image', 'edit_campaign_status', 'edit_campaign_budget']),
+  action: z.enum(['add_pmax_asset_group', 'edit_text_ads', 'gdn_adgroup', 'gdn_image', 'edit_campaign_status', 'edit_campaign_budget', 'edit_campaign_bidding']),
 })
 
 const addPMaxSchema = baseSchema.extend({
@@ -95,6 +95,18 @@ const editCampaignBudgetSchema = baseSchema.extend({
   dailyBudgetMicros: z.number().int().positive(),
 })
 
+// ปรับ bidding target ตาม strategy ของแคมเปญ — Target CPA (บาท) หรือ Target ROAS (เท่า)
+const editCampaignBiddingSchema = baseSchema.extend({
+  action: z.literal('edit_campaign_bidding'),
+  campaignResourceName: z.string(),
+  biddingStrategyType: z.enum(['TARGET_CPA', 'MAXIMIZE_CONVERSIONS', 'TARGET_ROAS', 'MAXIMIZE_CONVERSION_VALUE']),
+  targetCpaMicros: z.number().int().positive().optional(),
+  targetRoas: z.number().positive().optional(),
+}).refine(
+  (b) => (['TARGET_CPA', 'MAXIMIZE_CONVERSIONS'].includes(b.biddingStrategyType) ? b.targetCpaMicros !== undefined : b.targetRoas !== undefined),
+  { message: 'targetCpaMicros required for CPA strategies, targetRoas required for ROAS strategies' }
+)
+
 // ── Mock responses ─────────────────────────────────────────────────────────────
 function mockResponse(action: string) {
   return NextResponse.json({
@@ -132,6 +144,33 @@ async function handleEditCampaignBudget(body: z.infer<typeof editCampaignBudgetS
   }]
   const result = await mutate(body.customerId, ops, token)
   return NextResponse.json({ success: true, action: 'edit_campaign_budget', result })
+}
+
+async function handleEditCampaignBidding(body: z.infer<typeof editCampaignBiddingSchema>, token: string) {
+  const isCpa = body.biddingStrategyType === 'TARGET_CPA' || body.biddingStrategyType === 'MAXIMIZE_CONVERSIONS'
+
+  const fieldByStrategy: Record<string, { mask: string; update: Record<string, unknown> }> = {
+    TARGET_CPA:                { mask: 'targetCpa.targetCpaMicros',                 update: { targetCpa: { targetCpaMicros: body.targetCpaMicros } } },
+    MAXIMIZE_CONVERSIONS:      { mask: 'maximizeConversions.targetCpaMicros',       update: { maximizeConversions: { targetCpaMicros: body.targetCpaMicros } } },
+    TARGET_ROAS:               { mask: 'targetRoas.targetRoas',                     update: { targetRoas: { targetRoas: body.targetRoas } } },
+    MAXIMIZE_CONVERSION_VALUE: { mask: 'maximizeConversionValue.targetRoas',        update: { maximizeConversionValue: { targetRoas: body.targetRoas } } },
+  }
+  const f = fieldByStrategy[body.biddingStrategyType]
+  if (!f || (isCpa ? !body.targetCpaMicros : !body.targetRoas)) {
+    return NextResponse.json({ error: 'Invalid bidding payload' }, { status: 400 })
+  }
+
+  const ops = [{
+    campaignOperation: {
+      updateMask: f.mask,
+      update: {
+        resourceName: body.campaignResourceName,
+        ...f.update,
+      },
+    },
+  }]
+  const result = await mutate(body.customerId, ops, token)
+  return NextResponse.json({ success: true, action: 'edit_campaign_bidding', result })
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
@@ -363,6 +402,8 @@ export async function POST(req: NextRequest) {
         return handleEditCampaignStatus(editCampaignStatusSchema.parse(body), token)
       case 'edit_campaign_budget':
         return handleEditCampaignBudget(editCampaignBudgetSchema.parse(body), token)
+      case 'edit_campaign_bidding':
+        return handleEditCampaignBidding(editCampaignBiddingSchema.parse(body), token)
       default:
         return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
     }
