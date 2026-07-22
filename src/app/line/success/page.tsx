@@ -46,7 +46,7 @@ export default async function LineSuccessPage({
           </a>
         )}
 
-        <Link href={`/projects/${lead.projectId}/leads`} className="btn-ghost mt-3 w-full">
+        <Link href={`/line-tracking/projects/${lead.projectId}/leads`} className="btn-ghost mt-3 w-full">
           ดูใน Dashboard →
         </Link>
       </div>

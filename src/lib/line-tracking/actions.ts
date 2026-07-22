@@ -44,23 +44,23 @@ export async function createProjectAction(formData: FormData) {
     defaultConversionValue: Number(formData.get("defaultConversionValue") || 0),
     mainSalesChannel: String(formData.get("mainSalesChannel") || "LINE"),
   });
-  revalidatePath("/projects");
-  redirect(`/projects/${project.id}/setup`);
+  revalidatePath("/line-tracking/projects");
+  redirect(`/line-tracking/projects/${project.id}/setup`);
 }
 
 export async function duplicateProjectAction(formData: FormData) {
   const sourceId = String(formData.get("projectId"));
   const created = await duplicateProject(sourceId);
-  revalidatePath("/projects");
-  redirect(`/projects/${created.id}`);
+  revalidatePath("/line-tracking/projects");
+  redirect(`/line-tracking/projects/${created.id}`);
 }
 
 export async function setProjectStatusAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   const status = String(formData.get("status")) as ProjectStatus;
   await setProjectStatus(projectId, status);
-  revalidatePath(`/projects/${projectId}`);
-  revalidatePath("/projects");
+  revalidatePath(`/line-tracking/projects/${projectId}`);
+  revalidatePath("/line-tracking/projects");
 }
 
 // ---- Connections ----------------------------------------------------------
@@ -74,16 +74,16 @@ export async function saveConnectionAction(formData: FormData) {
     patch[field.key] = String(formData.get(field.key) ?? "");
   }
   await saveConnectionConfig(projectId, type, patch);
-  revalidatePath(`/projects/${projectId}/setup`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/line-tracking/projects/${projectId}/setup`);
+  revalidatePath(`/line-tracking/projects/${projectId}`);
 }
 
 export async function testConnectionAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   const type = String(formData.get("type")) as ConnectionType;
   await testConnection(projectId, type);
-  revalidatePath(`/projects/${projectId}/setup`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/line-tracking/projects/${projectId}/setup`);
+  revalidatePath(`/line-tracking/projects/${projectId}`);
 }
 
 // ---- Conversion rules -----------------------------------------------------
@@ -111,7 +111,7 @@ export async function updateConversionRuleAction(formData: FormData) {
       defaultValue: Number(formData.get("defaultValue") || 0),
     },
   });
-  revalidatePath(`/projects/${projectId}/setup`);
+  revalidatePath(`/line-tracking/projects/${projectId}/setup`);
 }
 
 // ---- Tracking links -------------------------------------------------------
@@ -124,14 +124,14 @@ export async function createTrackingLinkAction(formData: FormData) {
   const custom = String(formData.get("url") || "").trim();
   const url = custom || buildTrackingUrl(platform, project.slug);
   await prisma.trackingLink.create({ data: { projectId, platform, name, url } });
-  revalidatePath(`/projects/${projectId}/tracking-links`);
+  revalidatePath(`/line-tracking/projects/${projectId}/tracking-links`);
 }
 
 export async function deleteTrackingLinkAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   const id = String(formData.get("id"));
   await prisma.trackingLink.delete({ where: { id } });
-  revalidatePath(`/projects/${projectId}/tracking-links`);
+  revalidatePath(`/line-tracking/projects/${projectId}/tracking-links`);
 }
 
 // ---- Short links ----------------------------------------------------------
@@ -158,14 +158,14 @@ export async function createShortLinkAction(formData: FormData) {
 
   const { createShortLink } = await import("@/lib/line-tracking/services/shortLinkService");
   await createShortLink(projectId, name, targetUrl);
-  revalidatePath(`/projects/${projectId}/tracking-links`);
+  revalidatePath(`/line-tracking/projects/${projectId}/tracking-links`);
 }
 
 export async function deleteShortLinkAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   const id = String(formData.get("id"));
   await prisma.shortLink.delete({ where: { id } });
-  revalidatePath(`/projects/${projectId}/tracking-links`);
+  revalidatePath(`/line-tracking/projects/${projectId}/tracking-links`);
 }
 
 // ---- Leads ----------------------------------------------------------------
@@ -177,9 +177,9 @@ export async function changeLeadStatusAction(formData: FormData) {
   await changeLeadStatus(leadId, status, { changedBy: "Agency Admin (dashboard)" });
   // Process the queue immediately so the UI reflects sends right away.
   await processQueue({ projectId });
-  revalidatePath(`/projects/${projectId}/leads`);
-  revalidatePath(`/projects/${projectId}/conversions`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/line-tracking/projects/${projectId}/leads`);
+  revalidatePath(`/line-tracking/projects/${projectId}/conversions`);
+  revalidatePath(`/line-tracking/projects/${projectId}`);
 }
 
 export async function updateLeadContactAction(formData: FormData) {
@@ -194,7 +194,7 @@ export async function updateLeadContactAction(formData: FormData) {
       value: Number(formData.get("value") || 0),
     },
   });
-  revalidatePath(`/projects/${projectId}/leads`);
+  revalidatePath(`/line-tracking/projects/${projectId}/leads`);
 }
 
 // ---- Conversion queue -----------------------------------------------------
@@ -202,22 +202,22 @@ export async function updateLeadContactAction(formData: FormData) {
 export async function processQueueAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   await processQueue({ projectId });
-  revalidatePath(`/projects/${projectId}/conversions`);
-  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/line-tracking/projects/${projectId}/conversions`);
+  revalidatePath(`/line-tracking/projects/${projectId}`);
 }
 
 export async function retryEventAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   const eventId = String(formData.get("eventId"));
   await retryEvent(eventId);
-  revalidatePath(`/projects/${projectId}/conversions`);
+  revalidatePath(`/line-tracking/projects/${projectId}/conversions`);
 }
 
 export async function markSkippedAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   const eventId = String(formData.get("eventId"));
   await markEventSkipped(eventId);
-  revalidatePath(`/projects/${projectId}/conversions`);
+  revalidatePath(`/line-tracking/projects/${projectId}/conversions`);
 }
 
 // ---- Sheet ----------------------------------------------------------------
@@ -225,12 +225,12 @@ export async function markSkippedAction(formData: FormData) {
 export async function sheetPushAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   await pushLeads(projectId);
-  revalidatePath(`/projects/${projectId}/sheet`);
+  revalidatePath(`/line-tracking/projects/${projectId}/sheet`);
 }
 
 export async function sheetPullAction(formData: FormData) {
   const projectId = String(formData.get("projectId"));
   await pullStatuses(projectId);
-  revalidatePath(`/projects/${projectId}/sheet`);
-  revalidatePath(`/projects/${projectId}/leads`);
+  revalidatePath(`/line-tracking/projects/${projectId}/sheet`);
+  revalidatePath(`/line-tracking/projects/${projectId}/leads`);
 }
