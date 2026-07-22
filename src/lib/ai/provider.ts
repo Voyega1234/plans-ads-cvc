@@ -18,6 +18,7 @@ const DEFAULT_STANDARD = 'gemini-3.5-flash'
 // Gemini 3.5 Flash pricing (USD per 1M tokens) — update when Google changes pricing
 const GEMINI_PRICE_INPUT  = 0.075  // $0.075 per 1M input tokens
 const GEMINI_PRICE_OUTPUT = 0.30   // $0.30 per 1M output tokens
+const AI_PROJECT_LABEL = 'mercy'
 
 export function getModel(tier: AITier = 'standard'): string {
   if (tier === 'quality') {
@@ -49,6 +50,51 @@ interface CallAIOptions {
   _route?: string
   _userId?: string
   _mediaPlanId?: string
+  _feature?: string
+  _subfeature?: string
+}
+
+export interface AiUsageLabels {
+  project: string
+  provider: string
+  feature: string
+  subfeature: string
+  label: string
+}
+
+function labelValue(raw: string | undefined, fallback: string) {
+  const value = (raw || fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^[^a-z]+/, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 63)
+  return value || fallback
+}
+
+function routeLabels(route: string) {
+  const parts = route.replace(/^\/api\/?/, '').split('/').filter(Boolean)
+  return {
+    feature: labelValue(parts[0], 'unknown'),
+    subfeature: labelValue(parts.slice(1).join('_') || parts[0], 'unknown'),
+  }
+}
+
+export function buildAiUsageLabels(opts: {
+  route: string
+  model: string
+  provider?: string
+  feature?: string
+  subfeature?: string
+}): AiUsageLabels {
+  const derived = routeLabels(opts.route)
+  const provider = labelValue(opts.provider ?? (opts.model.includes(':') ? opts.model.split(':')[0] : 'unknown'), 'unknown')
+  const feature = labelValue(opts.feature, derived.feature)
+  const subfeature = labelValue(opts.subfeature, derived.subfeature)
+  const label = [AI_PROJECT_LABEL, provider, feature, subfeature].join('_').slice(0, 63)
+
+  return { project: AI_PROJECT_LABEL, provider, feature, subfeature, label }
 }
 
 export async function logAiCost(opts: {
@@ -59,6 +105,9 @@ export async function logAiCost(opts: {
   estimatedUSD: number
   userId?: string
   mediaPlanId?: string
+  provider?: string
+  feature?: string
+  subfeature?: string
 }) {
   try {
     const { prisma } = await import('@/lib/prisma')

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
+import { buildAiUsageLabels } from '@/lib/ai/provider'
 import { prisma } from '@/lib/prisma'
 
 const ADMIN_EMAILS = ['bob@convertcake.com', 'apps@convertcake.com']
@@ -40,10 +41,10 @@ export async function GET(req: NextRequest) {
     byRoute[log.route].totalTokens += log.totalTokens
     byRoute[log.route].estimatedUSD += log.estimatedUSD
 
-    const project = log.project ?? 'mercy'
-    const provider = log.provider ?? (log.model.includes(':') ? log.model.split(':')[0] : 'unknown')
-    const feature = log.feature ?? log.route.replace(/^\/api\/?/, '').split('/')[0] ?? 'unknown'
-    const subfeature = log.subfeature ?? (log.route.replace(/^\/api\/?/, '').split('/').slice(1).join('_') || feature)
+    const { project, provider, feature, subfeature } = buildAiUsageLabels({
+      route: log.route,
+      model: log.model,
+    })
     const key = `${project}:${provider}:${feature}:${subfeature}`
     if (!byFunction[key]) byFunction[key] = { project, provider, feature, subfeature, calls: 0, totalTokens: 0, estimatedUSD: 0 }
     byFunction[key].calls++
