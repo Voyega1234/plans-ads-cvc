@@ -372,17 +372,12 @@ model CampaignComment {
 }
 
 // ── AI Cost Log ───────────────────────────────────────────────────────────────
-// Tracks AI token usage, labels, and estimated cost per API call
+// Tracks AI (Gemini/Anthropic) token usage and estimated cost per API call
 model AiCostLog {
   id            String   @id @default(cuid())
   userId        String?
   route         String   // API route that called AI e.g. /api/media-plans/generate
-  model         String   // e.g. gemini-3-flash-preview
-  provider      String   @default("unknown")
-  project       String   @default("mercy")
-  feature       String?
-  subfeature    String?
-  label         String?
+  model         String   // e.g. gemini-3.5-flash
   inputTokens   Int      @default(0)
   outputTokens  Int      @default(0)
   totalTokens   Int      @default(0)
@@ -390,4 +385,305 @@ model AiCostLog {
   mediaPlanId   String?
   createdAt     DateTime @default(now())
   user          User?    @relation(fields: [userId], references: [id])
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Line Tracking (ported from standalone app) — Ads → Website → LINE Lead → Conversion
+// All tables namespaced with @@map("lt_*"). Only the source "Agency" model was
+// renamed to "LtWorkspace" (collides with the existing Agency model above).
+// Status/type fields are String-constrained in code (src/lib/line-tracking/enums.ts).
+// ════════════════════════════════════════════════════════════════════════════
+
+model LtWorkspace {
+  id               String   @id @default(cuid())
+  name             String
+  sharedConfigJson String   @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  projects         Project[]
+
+  @@map("lt_workspace")
+}
+
+model Project {
+  id                     String  @id @default(cuid())
+  agencyId               String
+  name                   String
+  clientName             String
+  slug                   String  @unique
+  businessType           String
+  websiteUrl             String?
+  currency               String  @default("THB")
+  timezone               String  @default("Asia/Bangkok")
+  defaultConversionValue Float   @default(0)
+  mainSalesChannel       String  @default("LINE")
+  status                 String  @default("DRAFT")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency           LtWorkspace         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  connections      ProjectConnection[]
+  trackingLinks    TrackingLink[]
+  adClicks         AdClick[]
+  lineUsers        LineUser[]
+  leads            Lead[]
+  conversionRules  ConversionRule[]
+  conversionEvents ConversionEvent[]
+  sheetSyncLogs    SheetSyncLog[]
+  webhookLogs      WebhookLog[]
+  shortLinks       ShortLink[]
+  clientAccess     LtClientAccess[]
+
+  @@index([agencyId])
+  @@map("lt_project")
+}
+
+model ShortLink {
+  id        String   @id @default(cuid())
+  projectId String
+  code      String   @unique
+  name      String
+  targetUrl String
+  clicks    Int      @default(0)
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("lt_short_link")
+}
+
+model ProjectConnection {
+  id             String    @id @default(cuid())
+  projectId      String
+  type           String
+  status         String    @default("NOT_CONNECTED")
+  configJson     String    @default("{}")
+  lastTestStatus String?
+  lastTestAt     DateTime?
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, type])
+  @@index([projectId])
+  @@map("lt_project_connection")
+}
+
+model TrackingLink {
+  id        String   @id @default(cuid())
+  projectId String
+  platform  String
+  name      String
+  url       String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("lt_tracking_link")
+}
+
+model AdClick {
+  id         String   @id @default(cuid())
+  projectId  String
+  clickId    String   @unique
+  source     String?
+  medium     String?
+  campaign   String?
+  adset      String?
+  content    String?
+  keyword    String?
+  gclid      String?
+  fbclid     String?
+  ttclid     String?
+  msclkid    String?
+  twclid     String?
+  scclid     String?
+  gaClientId String?
+  channel      String?
+  channelGroup String?
+  lineClickedAt DateTime?
+  landingUrl String?
+  referrer   String?
+  userAgent  String?
+  ipHash     String?
+  createdAt  DateTime @default(now())
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lineUsers LineUser[]
+
+  @@index([projectId])
+  @@map("lt_ad_click")
+}
+
+model LineUser {
+  id            String   @id @default(cuid())
+  projectId     String
+  lineUserId    String
+  displayName   String?
+  pictureUrl    String?
+  firstClickId  String?
+  latestClickId String?
+  friendStatus  String    @default("UNKNOWN")
+  lastMessageAt DateTime?
+  blockedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  latestClick AdClick? @relation(fields: [latestClickId], references: [clickId])
+  leads       Lead[]
+
+  @@unique([projectId, lineUserId])
+  @@index([projectId])
+  @@map("lt_line_user")
+}
+
+model Lead {
+  id              String    @id @default(cuid())
+  projectId       String
+  lineUserId      String?
+  clickId         String?
+  displayName     String?
+  fullName        String?
+  phone           String?
+  source          String?
+  campaign        String?
+  adset           String?
+  content         String?
+  keyword         String?
+  gclid           String?
+  fbclid          String?
+  ttclid          String?
+  msclkid         String?
+  twclid          String?
+  scclid          String?
+  gaClientId      String?
+  channel         String?
+  channelGroup    String?
+  status          String    @default("NEW")
+  value           Float     @default(0)
+  slipAmount      Float?
+  slipCheckedAt   DateTime?
+  currency        String    @default("THB")
+  salesOwner      String?
+  purchaseId      String?
+  purchasedAt     DateTime?
+  conversionState String    @default("NOT_READY")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  project          Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lineUser         LineUser?           @relation(fields: [lineUserId], references: [id])
+  statusHistory    LeadStatusHistory[]
+  conversionEvents ConversionEvent[]
+
+  @@index([projectId])
+  @@index([projectId, status])
+  @@map("lt_lead")
+}
+
+model LeadStatusHistory {
+  id        String   @id @default(cuid())
+  leadId    String
+  oldStatus String?
+  newStatus String
+  changedBy String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@map("lt_lead_status_history")
+}
+
+model ConversionRule {
+  id            String   @id @default(cuid())
+  projectId     String
+  leadStatus    String
+  enabled       Boolean  @default(false)
+  platformsJson String   @default("{}")
+  defaultValue  Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, leadStatus])
+  @@index([projectId])
+  @@map("lt_conversion_rule")
+}
+
+model ConversionEvent {
+  id              String    @id @default(cuid())
+  projectId       String
+  leadId          String
+  platform        String
+  eventName       String
+  eventValue      Float     @default(0)
+  currency        String    @default("THB")
+  status          String    @default("PENDING")
+  requestPayload  String?
+  responsePayload String?
+  retryCount      Int       @default(0)
+  lastError       String?
+  createdAt       DateTime  @default(now())
+  sentAt          DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lead    Lead    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([projectId, status])
+  @@index([leadId])
+  @@map("lt_conversion_event")
+}
+
+model SheetSyncLog {
+  id           String   @id @default(cuid())
+  projectId    String
+  direction    String
+  status       String
+  details      String?
+  errorMessage String?
+  createdAt    DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("lt_sheet_sync_log")
+}
+
+model WebhookLog {
+  id           String   @id @default(cuid())
+  projectId    String
+  source       String
+  payload      String?
+  status       String
+  errorMessage String?
+  createdAt    DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("lt_webhook_log")
+}
+
+model LtClientAccess {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  projectId    String
+  label        String?
+  createdAt    DateTime @default(now())
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  @@index([projectId])
+  @@map("lt_client_access")
 }

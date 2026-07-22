@@ -1,5 +1,5 @@
 /**
- * Central AI provider — Vertex AI via Vercel OIDC primary, Anthropic/OpenAI fallback.
+ * Central AI provider — Gemini primary, Anthropic fallback.
  * All AI functions call callAI() instead of importing SDKs directly.
  *
  * Model tiers (set in .env.local):
@@ -7,18 +7,17 @@
  *   AI_MODEL_STANDARD = standard tasks: campaign builder, keyword research, QA, audience
  */
 
-import { generateVertexContent, isVertexConfigured, vertexText } from './vertex-auth'
+import { isVertexConfigured, getVertexAccessToken, VERTEX_LOCATION, VERTEX_PROJECT } from './vertex-auth'
 
-export type AIProvider = 'vertex' | 'anthropic' | 'openai' | 'mock'
+export type AIProvider = 'vertex' | 'gemini' | 'anthropic' | 'openai' | 'mock'
 export type AITier = 'quality' | 'standard'
 
-const DEFAULT_QUALITY  = 'gemini-3-flash-preview'
-const DEFAULT_STANDARD = 'gemini-3-flash-preview'
+const DEFAULT_QUALITY  = 'gemini-3.5-flash'
+const DEFAULT_STANDARD = 'gemini-3.5-flash'
 
-// Gemini Flash estimated pricing (USD per 1M tokens) — update when Google changes pricing
+// Gemini 3.5 Flash pricing (USD per 1M tokens) — update when Google changes pricing
 const GEMINI_PRICE_INPUT  = 0.075  // $0.075 per 1M input tokens
 const GEMINI_PRICE_OUTPUT = 0.30   // $0.30 per 1M output tokens
-const AI_PROJECT_LABEL = 'mercy'
 
 export function getModel(tier: AITier = 'standard'): string {
   if (tier === 'quality') {
@@ -30,6 +29,7 @@ export function getModel(tier: AITier = 'standard'): string {
 export function getProvider(): AIProvider {
   if (process.env.MOCK_AI === 'true') return 'mock'
   if (isVertexConfigured()) return 'vertex'          // OIDC (Vercel WIF → Vertex AI) — ไม่ต้องมี key
+  if (process.env.GEMINI_API_KEY) return 'gemini'
   if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
   if (process.env.OPENAI_API_KEY) return 'openai'
   return 'mock'
@@ -49,57 +49,6 @@ interface CallAIOptions {
   _route?: string
   _userId?: string
   _mediaPlanId?: string
-  _feature?: string
-  _subfeature?: string
-}
-
-export interface AiUsageLabels {
-  project: string
-  provider: string
-  feature: string
-  subfeature: string
-  label: string
-}
-
-function labelValue(raw: string | undefined, fallback: string) {
-  const value = (raw || fallback)
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '_')
-    .replace(/^[^a-z]+/, '')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 63)
-  return value || fallback
-}
-
-function routeLabels(route: string) {
-  const parts = route.replace(/^\/api\/?/, '').split('/').filter(Boolean)
-  return {
-    feature: labelValue(parts[0], 'unknown'),
-    subfeature: labelValue(parts.slice(1).join('_') || parts[0], 'unknown'),
-  }
-}
-
-export function buildAiUsageLabels(opts: {
-  route: string
-  model: string
-  provider?: string
-  feature?: string
-  subfeature?: string
-}): AiUsageLabels {
-  const derived = routeLabels(opts.route)
-  const provider = labelValue(opts.provider ?? (opts.model.includes(':') ? opts.model.split(':')[0] : 'unknown'), 'unknown')
-  const feature = labelValue(opts.feature, derived.feature)
-  const subfeature = labelValue(opts.subfeature, derived.subfeature)
-  const label = [AI_PROJECT_LABEL, provider, feature, subfeature].join('_').slice(0, 63)
-
-  return {
-    project: AI_PROJECT_LABEL,
-    provider,
-    feature,
-    subfeature,
-    label,
-  }
 }
 
 export async function logAiCost(opts: {
@@ -110,22 +59,13 @@ export async function logAiCost(opts: {
   estimatedUSD: number
   userId?: string
   mediaPlanId?: string
-  provider?: string
-  feature?: string
-  subfeature?: string
 }) {
   try {
     const { prisma } = await import('@/lib/prisma')
-    const labels = buildAiUsageLabels(opts)
     await prisma.aiCostLog.create({
       data: {
         route:        opts.route,
         model:        opts.model,
-        provider:     labels.provider,
-        project:      labels.project,
-        feature:      labels.feature,
-        subfeature:   labels.subfeature,
-        label:        labels.label,
         inputTokens:  opts.inputTokens,
         outputTokens: opts.outputTokens,
         totalTokens:  opts.inputTokens + opts.outputTokens,
@@ -148,43 +88,80 @@ export async function callAI(
   options: CallAIOptions = {}
 ): Promise<string> {
   const { temperature = 0.3, maxTokens = 65536, systemPrompt, tier = 'standard', useGrounding = false,
-    _route = 'unknown', _userId, _mediaPlanId, _feature, _subfeature } = options
+    _route = 'unknown', _userId, _mediaPlanId } = options
   const provider = getProvider()
   const modelName = getModel(tier)
-  const labels = buildAiUsageLabels({
-    route: _route,
-    model: provider === 'vertex' ? `vertex:${modelName}` : modelName,
-    provider,
-    feature: _feature,
-    subfeature: _subfeature,
-  })
 
   const defaultSystem = 'You are an expert Google Ads specialist for the Thai market. Always respond with valid JSON only — no markdown, no code fences, no explanation outside the JSON object.'
 
   if (provider === 'vertex') {
-    const data = await generateVertexContent({
-      model: modelName,
-      systemPrompt: systemPrompt ?? defaultSystem,
-      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-      temperature,
-      maxTokens,
-      useGrounding,
-      responseMimeType: 'application/json',
-      labels: {
-        project: labels.project,
-        provider: labels.provider,
-        feature: labels.feature,
-        subfeature: labels.subfeature,
-      },
+    // Vertex AI ผ่าน OIDC — model id เดียวกับ Gemini API, request/response shape เดียวกัน
+    const token = await getVertexAccessToken()
+    const url = `https://${VERTEX_LOCATION()}-aiplatform.googleapis.com/v1/projects/${VERTEX_PROJECT()}/locations/${VERTEX_LOCATION()}/publishers/google/models/${modelName}:generateContent`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt ?? defaultSystem }] },
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        ...(useGrounding ? { tools: [{ googleSearch: {} }] } : {}),
+        generationConfig: {
+          temperature,
+          maxOutputTokens: maxTokens,
+          ...(useGrounding ? {} : { responseMimeType: 'application/json' }),
+        },
+      }),
     })
+    if (!res.ok) throw new Error(`Vertex AI ${res.status}: ${(await res.text()).slice(0, 300)}`)
+    const data = await res.json() as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
+    }
     const usage = data.usageMetadata
     if (usage) {
       const inp = usage.promptTokenCount ?? 0
       const out = usage.candidatesTokenCount ?? 0
       const usd = (inp / 1_000_000) * GEMINI_PRICE_INPUT + (out / 1_000_000) * GEMINI_PRICE_OUTPUT
-      void logAiCost({ route: _route, model: `vertex:${modelName}`, inputTokens: inp, outputTokens: out, estimatedUSD: usd, userId: _userId, mediaPlanId: _mediaPlanId, provider: labels.provider, feature: labels.feature, subfeature: labels.subfeature })
+      void logAiCost({ route: _route, model: `vertex:${modelName}`, inputTokens: inp, outputTokens: out, estimatedUSD: usd, userId: _userId, mediaPlanId: _mediaPlanId })
     }
-    let text = vertexText(data).trim()
+    let text = (data.candidates?.[0]?.content?.parts ?? []).map(pt => pt.text ?? '').join('').trim()
+    if (text.startsWith('```')) {
+      text = text.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '').trim()
+    }
+    const jsonStart = text.indexOf('{')
+    if (jsonStart > 0) text = text.slice(jsonStart)
+    return text
+  }
+
+  if (provider === 'gemini') {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      systemInstruction: systemPrompt ?? defaultSystem,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(useGrounding ? { tools: [{ googleSearch: {} } as any] } : {}),
+    })
+
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      generationConfig: {
+        temperature,
+        maxOutputTokens: maxTokens,
+        ...(useGrounding ? {} : { responseMimeType: 'application/json' }),
+      },
+    })
+
+    // Capture token usage from Gemini response
+    const usage = result.response.usageMetadata
+    if (usage) {
+      const inp  = usage.promptTokenCount    ?? 0
+      const out  = usage.candidatesTokenCount ?? 0
+      const usd  = (inp / 1_000_000) * GEMINI_PRICE_INPUT + (out / 1_000_000) * GEMINI_PRICE_OUTPUT
+      void logAiCost({ route: _route, model: modelName, inputTokens: inp, outputTokens: out, estimatedUSD: usd, userId: _userId, mediaPlanId: _mediaPlanId })
+    }
+
+    let text = result.response.text().trim()
     if (text.startsWith('```')) {
       text = text.replace(/^```[a-z]*\n?/, '').replace(/\n?```$/, '').trim()
     }
@@ -249,7 +226,7 @@ export async function callAI(
     return response.choices[0]?.message?.content ?? '{}'
   }
 
-  throw new Error('No AI provider available — configure Vercel OIDC for Vertex AI or set a fallback provider')
+  throw new Error('No AI provider available — set GEMINI_API_KEY')
 }
 
 /**
@@ -309,10 +286,13 @@ export async function safeCallAI<T>(
       } catch { /* fall through to mock */ }
     }
 
-    console.warn('[AI] Validation failed, falling back to mock')
-    return mockFn()
+    // Real provider IS configured but the response was invalid. Per the production
+    // rule we NEVER serve mock/fake AI data when live — surface a clear error instead.
+    throw new Error('AI ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง')
   } catch (err) {
-    console.error('[AI] callAI error, falling back to mock:', err instanceof Error ? err.message : err)
-    return mockFn()
+    // No mock fallback in production (real provider). Local dev (no provider) already
+    // returned mockFn() at the top, so this only fires when a real AI call failed.
+    console.error('[AI] real provider call failed (no mock fallback):', err instanceof Error ? err.message : err)
+    throw err instanceof Error ? err : new Error('AI ไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่')
   }
 }

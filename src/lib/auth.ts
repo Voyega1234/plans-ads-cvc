@@ -55,28 +55,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return email.endsWith('@convertcake.com')
     },
     async jwt({ token, user, account }) {
-      // JWT sessions do not use a Prisma adapter, so Google profile IDs are not
-      // guaranteed to exist in the app's User table. Resolve them to our DB ID
-      // before routes write rows with a User foreign key.
-      if (user?.email || (!token.dbUserId && token.email)) {
-        const email = user?.email ?? token.email
-        if (email) {
-          const { prisma } = await import('./prisma')
-          const dbUser = await prisma.user.upsert({
-            where: { email },
-            update: {
-              name:  user?.name ?? undefined,
-              image: user?.image ?? undefined,
-            },
-            create: {
-              email,
-              name:  user?.name ?? null,
-              image: user?.image ?? null,
-            },
-          })
-          token.id = dbUser.id
-          token.dbUserId = dbUser.id
-        }
+      if (user) {
+        token.id = user.id
       }
       // First sign-in — store tokens from Google
       if (account?.provider === 'google') {
@@ -89,6 +69,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (Date.now() / 1000 < (token.expiresAt as number ?? 0) - 60) {
         return token
       }
+      // No Google refresh token (e.g. the local dev-login session) — nothing to refresh.
+      if (!token.refreshToken) return token
       // Token expired — try to refresh
       try {
         const refreshed = await refreshAccessToken(token.refreshToken as string)

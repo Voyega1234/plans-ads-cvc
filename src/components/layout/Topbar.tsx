@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 
 import { Bell, ChevronRight } from 'lucide-react'
 import { usePathname } from 'next/navigation'
@@ -34,20 +35,21 @@ export default function Topbar() {
     <header className="fixed top-0 left-64 right-0 h-14 bg-white border-b border-gray-100 flex items-center px-6 gap-4 z-40">
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1 flex-1 min-w-0">
-        {breadcrumbs.map((crumb, i) => (
-          <span key={crumb.href} className="flex items-center gap-1">
-            {i > 0 && <ChevronRight className="w-3 h-3 text-gray-300 flex-shrink-0" />}
-            <span
-              className={
-                i === breadcrumbs.length - 1
-                  ? 'text-gray-800 font-semibold text-sm'
-                  : 'text-gray-400 text-sm'
-              }
-            >
-              {crumb.label}
+        {breadcrumbs.map((crumb, i) => {
+          const isLast = i === breadcrumbs.length - 1
+          return (
+            <span key={crumb.href} className="flex items-center gap-1">
+              {i > 0 && <ChevronRight className="w-3 h-3 text-gray-300 flex-shrink-0" />}
+              {isLast ? (
+                <span className="text-gray-800 font-semibold text-sm">{crumb.label}</span>
+              ) : (
+                <Link href={crumb.href} className="text-gray-400 text-sm hover:text-gray-700 hover:underline">
+                  {crumb.label}
+                </Link>
+              )}
             </span>
-          </span>
-        ))}
+          )
+        })}
       </nav>
 
       {/* Notification */}

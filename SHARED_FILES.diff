@@ -1,0 +1,637 @@
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index 138c1d9..d71e5bb 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -433,6 +433,7 @@ model Project {
+   sheetSyncLogs    SheetSyncLog[]
+   webhookLogs      WebhookLog[]
+   shortLinks       ShortLink[]
++  clientAccess     LtClientAccess[]
+ 
+   @@index([agencyId])
+   @@map("lt_project")
+@@ -674,3 +675,15 @@ model WebhookLog {
+   @@index([projectId])
+   @@map("lt_webhook_log")
+ }
++
++model LtClientAccess {
++  id           String   @id @default(cuid())
++  username     String   @unique
++  passwordHash String
++  projectId    String
++  label        String?
++  createdAt    DateTime @default(now())
++  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
++  @@index([projectId])
++  @@map("lt_client_access")
++}
+diff --git a/src/app/api/campaign-edit/ai-suggest/route.ts b/src/app/api/campaign-edit/ai-suggest/route.ts
+index 0800c97..4ff5e59 100644
+--- a/src/app/api/campaign-edit/ai-suggest/route.ts
++++ b/src/app/api/campaign-edit/ai-suggest/route.ts
+@@ -1,6 +1,6 @@
+ import { NextRequest, NextResponse } from 'next/server'
+ import { safeCallAI } from '@/lib/ai/provider'
+-import { EXECUTIVE_GROWTH_SKILL, AD_COPY_CONTEXT } from '@/lib/ai/prompts'
++import { COPYWRITING_SKILL, AD_COPY_CONTEXT } from '@/lib/ai/prompts'
+ 
+ // ─── Types ─────────────────────────────────────────────────────────────────────
+ 
+@@ -11,11 +11,18 @@ interface AISuggestRequest {
+   currentDescriptions: string[]
+   businessContext: {
+     businessName: string
+-    productService: string
+-    brandTone: string
+-    objective: string
++    productService?: string
++    brandTone?: string
++    objective?: string
+   }
+   instruction: string
++  // Adjustment brief — what to CHANGE (product/audience/tone are inferred from the existing ads).
++  adjustments?: {
++    promotion?: string   // โปรโมชั่น/ข้อเสนอใหม่
++    emphasis?: string    // เน้น angle ไหน
++    mustInclude?: string // คำที่ต้องมี
++    avoid?: string       // คำ/ข้อความที่ห้ามใช้
++  }
+   language?: string
+ }
+ 
+@@ -106,48 +113,58 @@ function validate(raw: unknown): AISuggestResponse | null {
+ 
+ // ─── Mock fallback ─────────────────────────────────────────────────────────────
+ 
++// Grounded fallback (used only when the AI provider is unavailable): builds from the
++// EXISTING ad copy + the user's adjustment brief instead of generic e-commerce filler,
++// so it stays on-topic for this business.
+ function getMockSuggestions(body: AISuggestRequest, spec: AdTypeSpec): AISuggestResponse {
+-  const name = body.businessContext.businessName || 'สินค้าของเรา'
+-
+-  const headlinePool = [
+-    `${name} ราคาพิเศษ`,
+-    'โปรโมชั่นวันนี้เท่านั้น',
+-    'ลด 30% ทุกชิ้น',
+-    'ส่งฟรีทั่วประเทศ',
+-    'สั่งด่วนรับของเร็ว',
+-    'คุณภาพเยี่ยม ราคาถูก',
+-    'อย่าพลาดโอกาสนี้',
+-    'ลูกค้ากว่า 50K คนไว้ใจ',
+-    'สินค้าแท้ 100%',
+-    'รับประกันคุณภาพ',
+-    'ดีลเด็ดประจำสัปดาห์',
+-    'ช้อปเลยวันนี้',
+-    'ของแท้จากผู้ผลิต',
+-    'บริการหลังการขายดี',
+-    'คุ้มค่าทุกการสั่งซื้อ',
+-  ]
++  const name = body.businessContext.businessName || 'บริการของเรา'
++  const adj = body.adjustments ?? {}
+ 
+-  const longHeadlinePool = [
+-    `${name} — สินค้าคุณภาพราคาโปร สั่งออนไลน์ส่งด่วนทั่วไทย`,
+-    'โปรโมชั่นพิเศษจำนวนจำกัด สั่งซื้อวันนี้รับส่วนลดทันที',
+-    'คุณภาพที่ลูกค้ากว่า 50,000 คนไว้วางใจ พร้อมรับประกันของแท้',
+-    'ส่งฟรีทั่วประเทศ จัดส่งภายใน 1-2 วันทำการ',
+-    'บริการลูกค้าตลอด 24 ชั่วโมง คืนสินค้าได้ใน 30 วัน',
+-  ]
++  const uniq = (arr: string[], n: number, max: number) => {
++    const out: string[] = []
++    for (const raw of arr) {
++      const v = (raw ?? '').trim().slice(0, max)
++      if (v && !out.includes(v)) out.push(v)
++      if (out.length >= n) break
++    }
++    return out
++  }
+ 
+-  const descriptionPool = [
+-    `${name} — สินค้าคุณภาพสูง ราคาคุ้มค่า ส่งฟรีทุกออเดอร์`,
+-    'บริการลูกค้า 24 ชั่วโมง คืนสินค้าได้ภายใน 30 วัน มั่นใจทุกการสั่งซื้อ',
+-    `ใช้โค้ดพิเศษรับส่วนลดเพิ่ม 10% สำหรับออเดอร์แรกกับ ${name}`,
+-    'จัดส่งทั่วประเทศภายใน 1-2 วันทำการ สินค้าคุณภาพพร้อมส่ง',
+-    'สินค้าแท้ 100% รับประกันคุณภาพ พร้อมโปรโมชั่นพิเศษทุกสัปดาห์',
++  // seed from the real ad + the brief; pad with neutral, service-oriented lines (NOT e-commerce)
++  const briefHeads = [adj.promotion, adj.mustInclude].filter(Boolean) as string[]
++  const headSeed = [
++    ...body.currentHeadlines.filter(h => h.trim()),
++    ...briefHeads,
++    name,
++    `ปรึกษา ${name} ฟรี`,
++    'ทีมงานมืออาชีพ',
++    'สอบถามเพิ่มเติมวันนี้',
++    adj.emphasis ? `เด่นเรื่อง${adj.emphasis}` : 'บริการครบวงจร',
++    'ให้คำปรึกษาโดยผู้เชี่ยวชาญ',
++    'ดูแลทุกขั้นตอน',
++    'นัดหมายง่าย สะดวก',
++    'ตอบไว บริการจริงใจ',
++    'ประสบการณ์ตรงกับงานของคุณ',
++    'เริ่มต้นวันนี้',
++  ]
++  const descSeed = [
++    ...body.currentDescriptions.filter(d => d.trim()),
++    adj.promotion ? `${adj.promotion} — ปรึกษา ${name} ได้เลยวันนี้` : `${name} ให้คำปรึกษาโดยผู้เชี่ยวชาญ ดูแลครบทุกขั้นตอน`,
++    'ทีมงานมืออาชีพพร้อมช่วยเหลือ ตอบทุกคำถามอย่างจริงใจ',
++    adj.emphasis ? `เราเน้นเรื่อง${adj.emphasis} เพื่อผลลัพธ์ที่ดีที่สุดสำหรับคุณ` : 'บริการครบวงจร นัดหมายสะดวก ติดต่อได้ทันที',
++    'ประสบการณ์ตรงกับงานของคุณ สอบถามรายละเอียดเพิ่มเติมได้',
++  ]
++  const longSeed = [
++    ...(body.currentLongHeadlines ?? []).filter(h => h.trim()),
++    adj.promotion ? `${name} — ${adj.promotion} ปรึกษาฟรีก่อนตัดสินใจ` : `${name} ให้คำปรึกษาโดยผู้เชี่ยวชาญ ดูแลครบทุกขั้นตอน`,
++    'ทีมงานมืออาชีพพร้อมดูแลคุณทุกขั้นตอน ตั้งแต่เริ่มจนจบ',
+   ]
+ 
+   return {
+-    headlines: headlinePool.slice(0, spec.headlineCount).map(h => h.slice(0, spec.headlineMax)),
+-    longHeadlines: longHeadlinePool.slice(0, spec.longHeadlineCount).map(h => h.slice(0, spec.longHeadlineMax)),
+-    descriptions: descriptionPool.slice(0, spec.descriptionCount).map(d => d.slice(0, spec.descriptionMax)),
+-    rationale: `สร้าง headline ${spec.headlineCount} รายการ${spec.longHeadlineCount ? `, long headline ${spec.longHeadlineCount} รายการ` : ''} และ description ${spec.descriptionCount} รายการ ครบตามสเปคของ ${spec.label} โดยเน้น "${body.instruction || 'ประสิทธิภาพสูง'}"`,
++    headlines: uniq(headSeed, spec.headlineCount, spec.headlineMax),
++    longHeadlines: uniq(longSeed, spec.longHeadlineCount, spec.longHeadlineMax),
++    descriptions: uniq(descSeed, spec.descriptionCount, spec.descriptionMax),
++    rationale: `[ตัวอย่างสำรอง — AI provider ไม่พร้อมใช้งาน] อิงจาก ad เดิม + สิ่งที่ระบุ${adj.promotion ? ` (โปร: ${adj.promotion})` : ''}${adj.emphasis ? `, เน้น ${adj.emphasis}` : ''} · เมื่อเชื่อม Gemini/Vertex บนโปรดักชันจะเขียนคุณภาพเต็มตาม brief`,
+   }
+ }
+ 
+@@ -163,48 +180,62 @@ export async function POST(req: NextRequest) {
+ 
+   const { businessContext, currentHeadlines, currentDescriptions, instruction, language = 'th' } = body
+   const currentLongHeadlines = body.currentLongHeadlines ?? []
++  const adj = body.adjustments ?? {}
+   const spec = specFor(body.adType)
+ 
+   const longHeadlineRules = spec.longHeadlineCount > 0
+     ? `- Long headline: สร้าง EXACTLY ${spec.longHeadlineCount} รายการ แต่ละรายการ ≤${spec.longHeadlineMax} ตัวอักษร\n`
+     : ''
+ 
+-  const prompt = `คุณเป็นผู้เชี่ยวชาญ Google Ads สำหรับตลาดไทย
++  // สิ่งที่ผู้ใช้อยากปรับ (มีเท่าที่กรอกมา) — บริบทธุรกิจ/สินค้า/โทน ให้ AI อ่านจาก ad เดิมเอง
++  const adjustmentLines = [
++    instruction ? `- สิ่งที่อยากปรับ: ${instruction}` : '',
++    adj.promotion ? `- โปรโมชั่น/ข้อเสนอใหม่ที่ต้องใส่: ${adj.promotion}` : '',
++    adj.emphasis ? `- อยากให้เน้น angle: ${adj.emphasis}` : '',
++    adj.mustInclude ? `- คำ/ข้อความที่ต้องมี: ${adj.mustInclude}` : '',
++    adj.avoid ? `- คำ/ข้อความที่ห้ามใช้: ${adj.avoid}` : '',
++  ].filter(Boolean).join('\n')
+ 
+-ประเภทโฆษณา: ${spec.label}
++  const hasCurrent = currentHeadlines.length > 0 || currentDescriptions.length > 0
+ 
+-ข้อมูลธุรกิจ:
+-- ชื่อธุรกิจ: ${businessContext.businessName}
+-- สินค้า/บริการ: ${businessContext.productService}
+-- น้ำเสียงแบรนด์: ${businessContext.brandTone}
+-- เป้าหมาย: ${businessContext.objective}
++  const prompt = `ประเภทโฆษณา: ${spec.label}
++ชื่อธุรกิจ: ${businessContext.businessName || '(อ่านจาก ad เดิม)'}
+ 
+-Ad copy ปัจจุบัน (นำมาปรับปรุง/เขียนเพิ่มให้ครบ):
++## Ad เดิมของแคมเปญนี้ (นี่คือแหล่งข้อมูลหลัก — ต้องอ่านและวิเคราะห์ก่อนเขียน)
+ Headlines: ${currentHeadlines.join(' | ') || '(ยังไม่มี)'}
+ ${spec.longHeadlineCount > 0 ? `Long Headlines: ${currentLongHeadlines.join(' | ') || '(ยังไม่มี)'}\n` : ''}Descriptions: ${currentDescriptions.join(' | ') || '(ยังไม่มี)'}
+ 
+-คำสั่ง: ${instruction}
+-ภาษา: ${language}
++## ขั้นตอนที่ต้องทำ
++1) ${hasCurrent
++    ? 'วิเคราะห์ ad เดิมด้านบนก่อน เพื่อเข้าใจ: สินค้า/บริการ, กลุ่มเป้าหมาย, น้ำเสียง/โทนแบรนด์, จุดขาย และ keyword ที่ใช้อยู่ — ยึดบริบทนี้เป็นหลัก ห้ามเปลี่ยนธุรกิจหรือแต่งจุดขายที่ ad เดิมไม่มี'
++    : 'ยังไม่มี ad เดิม — เขียนจากชื่อธุรกิจและสิ่งที่ผู้ใช้ระบุด้านล่างเท่านั้น ห้ามแต่งข้อมูลที่ไม่ได้ให้มา'}
++2) คงจุดแข็ง/ข้อความที่ดีของ ad เดิมไว้ แล้วปรับ/เพิ่มเฉพาะตามที่ผู้ใช้สั่งด้านล่างนี้:
++${adjustmentLines || '- (ผู้ใช้ไม่ได้ระบุการปรับเฉพาะ — ปรับปรุงคุณภาพการเขียนของ ad เดิมให้คมขึ้น โดยคงบริบทเดิม)'}
++
++## กฎการเขียน (สำคัญที่สุด — ให้ตรงกับข้อมูลจริง)
++- ทุก Headline/Description ต้อง "อิงข้อมูลจริง" จาก ad เดิม + สิ่งที่ผู้ใช้ระบุ — ห้ามใช้ข้อความ generic ลอยๆ (เช่น "คุณภาพเยี่ยม ราคาถูก" ที่ไม่เกี่ยวกับธุรกิจนี้)
++- ห้ามแต่งโปรโมชั่น/ตัวเลข/การเคลม ที่ ad เดิมหรือผู้ใช้ไม่ได้ให้มา
++- ถ้าผู้ใช้ระบุโปร/คำที่ต้องมี → ต้องใส่ให้เห็นชัดในหลาย asset
++- ถ้าผู้ใช้ระบุคำที่ห้ามใช้ → ห้ามปรากฏเลย
+ 
+-กฎที่ต้องปฏิบัติตามเคร่งครัด (สเปคจริงของ Google Ads สำหรับ ${spec.label}):
+-- Headline: สร้าง EXACTLY ${spec.headlineCount} รายการ — ห้ามน้อยกว่านี้ ถ้าของเดิมมีไม่ครบให้เขียนเพิ่มจนครบ แต่ละรายการ ≤${spec.headlineMax} ตัวอักษร (นับทั้งภาษาไทยและอังกฤษ)
+-${longHeadlineRules}- Description: สร้าง EXACTLY ${spec.descriptionCount} รายการ แต่ละรายการ ≤${spec.descriptionMax} ตัวอักษร
+-${spec.extraRule ? `- ${spec.extraRule}\n` : ''}- ห้ามมีข้อความซ้ำกันในรายการเดียวกัน
+-- ห้ามใช้ ! หรือ ? ใน headline มากกว่า 1 ครั้ง
+-- ห้ามใช้ตัวพิมพ์ใหญ่ทั้งหมด
++## สเปคจำนวน/ความยาว (Google Ads — ${spec.label}) ต้องครบเป๊ะ
++- Headline: EXACTLY ${spec.headlineCount} รายการ แต่ละรายการ ≤${spec.headlineMax} ตัวอักษร (นับไทย+อังกฤษตัวต่อตัว)
++${longHeadlineRules}- Description: EXACTLY ${spec.descriptionCount} รายการ แต่ละรายการ ≤${spec.descriptionMax} ตัวอักษร
++${spec.extraRule ? `- ${spec.extraRule}\n` : ''}- ห้ามข้อความซ้ำกัน · ห้าม ! หรือ ? เกิน 1 ครั้งใน headline · ห้ามตัวพิมพ์ใหญ่ทั้งหมด · ห้าม emoji ใน headline
++- ภาษา: ${language}
+ 
+-ตอบเป็น JSON เท่านั้น:
++ตอบเป็น JSON เท่านั้น (ไม่มี markdown):
+ {
+   "headlines": ["...ครบ ${spec.headlineCount} รายการ..."],
+   ${spec.longHeadlineCount > 0 ? `"longHeadlines": ["...ครบ ${spec.longHeadlineCount} รายการ..."],\n  ` : ''}"descriptions": ["...ครบ ${spec.descriptionCount} รายการ..."],
+-  "rationale": "อธิบายกลยุทธ์สั้นๆ"
++  "rationale": "อธิบายสั้นๆ ว่าปรับอะไรจาก ad เดิม และอิงข้อมูลไหน"
+ }`
+ 
+   const result = await safeCallAI<AISuggestResponse>(
+     prompt,
+     validate,
+     () => getMockSuggestions(body, spec),
+-    { temperature: 0.7, maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AD_COPY_CONTEXT}` }
++    { temperature: 0.7, maxTokens: 65536, systemPrompt: `${COPYWRITING_SKILL}\n\n${AD_COPY_CONTEXT}` }
+   )
+ 
+   // Enforce char limits + counts ตามสเปคของ ad type — กันบันทึกค่าเกินเข้า Google Ads
+diff --git a/src/app/campaign-editor/page.tsx b/src/app/campaign-editor/page.tsx
+index 0a090a5..412b4f6 100644
+--- a/src/app/campaign-editor/page.tsx
++++ b/src/app/campaign-editor/page.tsx
+@@ -150,6 +150,10 @@ function AISuggestPanel({
+   businessName: string
+ }) {
+   const [instruction, setInstruction] = useState('')
++  const [promotion, setPromotion] = useState('')
++  const [emphasis, setEmphasis] = useState('')
++  const [mustInclude, setMustInclude] = useState('')
++  const [avoid, setAvoid] = useState('')
+   const [loading, setLoading] = useState(false)
+   const [result, setResult] = useState<AISuggestResult | null>(null)
+   const [error, setError] = useState('')
+@@ -168,8 +172,15 @@ function AISuggestPanel({
+           currentHeadlines: currentHeadlines.filter(h => h.trim()),
+           currentLongHeadlines: currentLongHeadlines.filter(h => h.trim()),
+           currentDescriptions: currentDescriptions.filter(d => d.trim()),
+-          businessContext: { businessName, productService: businessName, brandTone: 'professional', objective: 'conversion' },
++          // สินค้า/กลุ่มเป้าหมาย/โทน ให้ AI อ่านจาก ad เดิมเอง — ส่งแค่ชื่อธุรกิจเท่าที่รู้
++          businessContext: { businessName },
+           instruction,
++          adjustments: {
++            promotion: promotion.trim() || undefined,
++            emphasis: emphasis.trim() || undefined,
++            mustInclude: mustInclude.trim() || undefined,
++            avoid: avoid.trim() || undefined,
++          },
+           language: 'th',
+         }),
+       })
+@@ -198,16 +209,59 @@ function AISuggestPanel({
+         <p className="text-[11px] text-gray-400 -mb-2">
+           {spec.label}: AI จะเขียน Headline {spec.hMax} รายการ{spec.lhMax > 0 ? ` + Long Headline ${spec.lhMax} รายการ` : ''} + Description {spec.dMax} รายการ ครบตามสเปค Google
+         </p>
++        <div className="rounded-lg bg-purple-50/60 border border-purple-100 px-3 py-2 text-[11px] text-purple-700">
++          💡 สินค้า/บริการ · กลุ่มเป้าหมาย · โทนแบรนด์ · keyword — <b>AI อ่านจาก Ad เดิมให้อัตโนมัติ</b> ไม่ต้องกรอกซ้ำ · กรอกแค่ &quot;สิ่งที่อยากปรับ&quot; ด้านล่าง
++        </div>
++
+         <div>
+-          <label className="block text-xs font-medium text-gray-500 mb-1.5">บอก AI ว่าต้องการอะไร</label>
++          <label className="block text-xs font-medium text-gray-500 mb-1.5">อยากปรับอะไร <span className="text-red-400">*</span></label>
+           <textarea
+             value={instruction}
+             onChange={e => setInstruction(e.target.value)}
+-            placeholder="เช่น: เน้นราคา, เพิ่มความเร่งด่วน, เขียนแบบ friendly"
++            placeholder="เช่น: ปรับให้ดูพรีเมียมขึ้น เน้นความน่าเชื่อถือ และเขียนให้ชวนคลิกกว่าเดิม / เพิ่มมุมมองด้านบริการหลังการขาย"
+             rows={3}
+             className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+           />
+         </div>
++
++        <div className="grid grid-cols-1 gap-3">
++          <div>
++            <label className="block text-xs font-medium text-gray-500 mb-1.5">โปรโมชั่น / ข้อเสนอใหม่ <span className="text-gray-300">(ถ้ามี)</span></label>
++            <input
++              value={promotion}
++              onChange={e => setPromotion(e.target.value)}
++              placeholder="เช่น: ลด 20% ถึงสิ้นเดือน / ปรึกษาฟรี / ผ่อน 0% 10 เดือน"
++              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
++            />
++          </div>
++          <div>
++            <label className="block text-xs font-medium text-gray-500 mb-1.5">เน้น angle ไหน <span className="text-gray-300">(ถ้ามี)</span></label>
++            <input
++              value={emphasis}
++              onChange={e => setEmphasis(e.target.value)}
++              placeholder="เช่น: ราคา / ความน่าเชื่อถือ / ความเร่งด่วน / บริการหลังการขาย / จุดขายเฉพาะ"
++              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
++            />
++          </div>
++          <div>
++            <label className="block text-xs font-medium text-gray-500 mb-1.5">คำที่ต้องมี <span className="text-gray-300">(ถ้ามี)</span></label>
++            <input
++              value={mustInclude}
++              onChange={e => setMustInclude(e.target.value)}
++              placeholder="เช่น: ชื่อแบรนด์, คำว่า 'ของแท้', keyword หลักที่ต้องติด"
++              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
++            />
++          </div>
++          <div>
++            <label className="block text-xs font-medium text-gray-500 mb-1.5">คำ / ข้อความที่ห้ามใช้ <span className="text-gray-300">(ถ้ามี)</span></label>
++            <input
++              value={avoid}
++              onChange={e => setAvoid(e.target.value)}
++              placeholder="เช่น: การันตี 100%, ถูกที่สุด, คำเคลมที่ผิดนโยบาย"
++              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
++            />
++          </div>
++        </div>
+         <button
+           onClick={generate}
+           disabled={loading || !instruction.trim()}
+diff --git a/src/app/globals.css b/src/app/globals.css
+index b4c813c..04ba818 100644
+--- a/src/app/globals.css
++++ b/src/app/globals.css
+@@ -97,3 +97,39 @@
+   /* Page setup */
+   @page { margin: 1.5cm; size: A4 portrait; }
+ }
++
++/* ── Line Tracking (ported sub-app) component classes ──────────────────────────
++   Namespaced utility classes used only by /line-tracking pages & components.
++   No existing MercyOS element uses these class names (verified). */
++@layer components {
++  .card {
++    @apply rounded-xl border border-slate-200 bg-white p-5 shadow-sm;
++  }
++  .btn {
++    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:opacity-50;
++  }
++  .btn-primary {
++    @apply btn bg-brand-600 text-white hover:bg-brand-700;
++  }
++  .btn-ghost {
++    @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
++  }
++  .btn-line {
++    @apply btn bg-line-500 text-white hover:bg-line-600;
++  }
++  .input {
++    @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
++  }
++  .label {
++    @apply mb-1 block text-sm font-medium text-slate-600;
++  }
++  .badge {
++    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
++  }
++  .th {
++    @apply px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500;
++  }
++  .td {
++    @apply px-3 py-2 text-sm text-slate-700;
++  }
++}
+diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
+index be63be3..138b8a7 100644
+--- a/src/components/layout/Sidebar.tsx
++++ b/src/components/layout/Sidebar.tsx
+@@ -30,6 +30,7 @@ import {
+   Wand2,
+   FileClock,
+   Ban,
++  MessageCircle,
+ } from 'lucide-react'
+ import { cn } from '@/lib/utils'
+ 
+@@ -66,6 +67,7 @@ const toolsNav = [
+   { href: '/shopping-products',  label: 'Shopping Products', icon: ShoppingBag },
+   { href: '/reports',            label: 'Reports',           icon: BarChart2 },
+   { href: '/optimization-log',   label: 'Optimization Log',  icon: FileClock },
++  { href: '/line-tracking',      label: 'Line Tracking',     icon: MessageCircle },
+ ]
+ 
+ const systemNav = [
+diff --git a/src/components/layout/Topbar.tsx b/src/components/layout/Topbar.tsx
+index b0467d7..ed183f5 100644
+--- a/src/components/layout/Topbar.tsx
++++ b/src/components/layout/Topbar.tsx
+@@ -1,4 +1,5 @@
+ 'use client'
++import Link from 'next/link'
+ 
+ import { Bell, ChevronRight } from 'lucide-react'
+ import { usePathname } from 'next/navigation'
+@@ -34,20 +35,21 @@ export default function Topbar() {
+     <header className="fixed top-0 left-64 right-0 h-14 bg-white border-b border-gray-100 flex items-center px-6 gap-4 z-40">
+       {/* Breadcrumb */}
+       <nav className="flex items-center gap-1 flex-1 min-w-0">
+-        {breadcrumbs.map((crumb, i) => (
+-          <span key={crumb.href} className="flex items-center gap-1">
+-            {i > 0 && <ChevronRight className="w-3 h-3 text-gray-300 flex-shrink-0" />}
+-            <span
+-              className={
+-                i === breadcrumbs.length - 1
+-                  ? 'text-gray-800 font-semibold text-sm'
+-                  : 'text-gray-400 text-sm'
+-              }
+-            >
+-              {crumb.label}
++        {breadcrumbs.map((crumb, i) => {
++          const isLast = i === breadcrumbs.length - 1
++          return (
++            <span key={crumb.href} className="flex items-center gap-1">
++              {i > 0 && <ChevronRight className="w-3 h-3 text-gray-300 flex-shrink-0" />}
++              {isLast ? (
++                <span className="text-gray-800 font-semibold text-sm">{crumb.label}</span>
++              ) : (
++                <Link href={crumb.href} className="text-gray-400 text-sm hover:text-gray-700 hover:underline">
++                  {crumb.label}
++                </Link>
++              )}
+             </span>
+-          </span>
+-        ))}
++          )
++        })}
+       </nav>
+ 
+       {/* Notification */}
+diff --git a/src/lib/ai/provider.ts b/src/lib/ai/provider.ts
+index 6fd87c1..7b0a1e3 100644
+--- a/src/lib/ai/provider.ts
++++ b/src/lib/ai/provider.ts
+@@ -286,10 +286,13 @@ export async function safeCallAI<T>(
+       } catch { /* fall through to mock */ }
+     }
+ 
+-    console.warn('[AI] Validation failed, falling back to mock')
+-    return mockFn()
++    // Real provider IS configured but the response was invalid. Per the production
++    // rule we NEVER serve mock/fake AI data when live — surface a clear error instead.
++    throw new Error('AI ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง')
+   } catch (err) {
+-    console.error('[AI] callAI error, falling back to mock:', err instanceof Error ? err.message : err)
+-    return mockFn()
++    // No mock fallback in production (real provider). Local dev (no provider) already
++    // returned mockFn() at the top, so this only fires when a real AI call failed.
++    console.error('[AI] real provider call failed (no mock fallback):', err instanceof Error ? err.message : err)
++    throw err instanceof Error ? err : new Error('AI ไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่')
+   }
+ }
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index ec5d3c0..69f0902 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -1,5 +1,29 @@
+ import NextAuth from 'next-auth'
+ import Google from 'next-auth/providers/google'
++import Credentials from 'next-auth/providers/credentials'
++
++// LOCAL DEV ONLY — a username/password staff login so the app can be exercised
++// without Google OAuth (which needs a registered localhost redirect). This provider
++// is added ONLY when NODE_ENV !== 'production', so production auth is unchanged and
++// keeps using Google OIDC exclusively. Never enabled in a production build.
++const devProviders =
++  process.env.NODE_ENV !== 'production'
++    ? [
++        Credentials({
++          id: 'dev-login',
++          name: 'Dev Login (local only)',
++          credentials: { email: {} },
++          async authorize(creds) {
++            // LOCAL DEV ONLY — sign in with your team email (no password), the same
++            // @convertcake.com gate production applies to Google login. Never in prod.
++            if (process.env.NODE_ENV === 'production') return null
++            const email = String(creds?.email ?? '').trim().toLowerCase()
++            if (!email.endsWith('@convertcake.com')) return null
++            return { id: 'dev-staff', email, name: email.split('@')[0] }
++          },
++        }),
++      ]
++    : []
+ 
+ async function refreshAccessToken(refreshToken: string) {
+   const res = await fetch('https://oauth2.googleapis.com/token', {
+@@ -25,6 +49,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
+   // JWT sessions live in the cookie — no DB adapter needed. Using the Prisma adapter
+   // here caused sign-in to hang/error (SQLite write lock / OAuthAccountNotLinked vs seed).
+   providers: [
++    ...devProviders,
+     Google({
+       clientId: process.env.GOOGLE_CLIENT_ID ?? '',
+       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+@@ -69,6 +94,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
+       if (Date.now() / 1000 < (token.expiresAt as number ?? 0) - 60) {
+         return token
+       }
++      // No Google refresh token (e.g. the local dev-login session) — nothing to refresh.
++      if (!token.refreshToken) return token
+       // Token expired — try to refresh
+       try {
+         const refreshed = await refreshAccessToken(token.refreshToken as string)
+diff --git a/src/middleware.ts b/src/middleware.ts
+index 8f79ca4..31d7de0 100644
+--- a/src/middleware.ts
++++ b/src/middleware.ts
+@@ -1,20 +1,70 @@
+ import { auth } from '@/lib/auth'
++import { NextResponse } from 'next/server'
++import { LT_CLIENT_COOKIE, verifyClientToken } from '@/lib/line-tracking/clientToken'
+ 
+ // Login is always required to reach the app (no guest access).
+ // SKIP_AUTH only controls per-user data scoping inside API routes (kept shared for the
+ // agency team), NOT whether login is enforced — those two concerns are decoupled here.
+-export default auth((req) => {
++// Line Tracking external endpoints — called by LINE servers, ad-click redirects, the
++// visitor's browser, and the conversion cron. They have no session and can't pass an
++// interactive login, so they are exempt from the login gate. They are NOT open: the
++// LINE webhook verifies the X-Line-Signature HMAC and the cron checks CRON_SECRET.
++const PUBLIC_TRACKING_PREFIXES = [
++  '/go/', '/s/', '/t/', '/line/', '/embed.js',
++  '/api/webhooks/', '/api/track/', '/api/conversions/',
++]
++// Line Tracking client-viewer login/logout — must be reachable with no next-auth
++// session AND no lt_client cookie yet (that's the whole point of a login page).
++const CLIENT_AUTH_PREFIXES = [
++  '/line-tracking/client-login',
++  '/api/line-tracking/client-login',
++  '/api/line-tracking/client-logout',
++]
++function isPublicTracking(pathname: string): boolean {
++  return PUBLIC_TRACKING_PREFIXES.some(p => pathname === p || pathname.startsWith(p))
++}
++function isClientAuthPath(pathname: string): boolean {
++  return CLIENT_AUTH_PREFIXES.some(p => pathname === p || pathname.startsWith(p))
++}
++
++export default auth(async (req) => {
++  const pathname = req.nextUrl.pathname
+   const isLoggedIn = !!req.auth
+-  const isAuthPage = req.nextUrl.pathname.startsWith('/auth')
+-  const isAuthApi = req.nextUrl.pathname.startsWith('/api/auth')
++  const isAuthPage = pathname.startsWith('/auth')
++  const isAuthApi = pathname.startsWith('/api/auth')
++  const isPublic = isPublicTracking(pathname)
++  const isClientAuth = isClientAuthPath(pathname)
+ 
+-  if (!isLoggedIn && !isAuthPage && !isAuthApi) {
+-    // For page navigations, redirect to the sign-in page; for API/data calls return 401
+-    if (req.nextUrl.pathname.startsWith('/api/')) {
+-      return Response.json({ error: 'Unauthorized — login required' }, { status: 401 })
++  // Forward the pathname to server components (used by the Line Tracking layout to
++  // recognize the client-login page without gating it behind a session).
++  const headers = new Headers(req.headers)
++  headers.set('x-lt-pathname', pathname)
++  const withPathname = () => NextResponse.next({ request: { headers } })
++
++  if (isLoggedIn || isAuthPage || isAuthApi || isPublic || isClientAuth) {
++    return withPathname()
++  }
++
++  // No staff (next-auth) session. Check for a Line Tracking client-viewer cookie —
++  // a separate, contained cookie mechanism (see src/lib/line-tracking/clientAuth.ts).
++  // Staff (next-auth) behavior above is completely unaffected by this branch.
++  const clientToken = req.cookies.get(LT_CLIENT_COOKIE)?.value
++  const clientSession = clientToken ? await verifyClientToken(clientToken) : null
++
++  if (clientSession) {
++    const allowedPrefix = `/line-tracking/projects/${clientSession.projectId}`
++    const isAllowed = isPublic || isClientAuth || pathname === allowedPrefix || pathname.startsWith(`${allowedPrefix}/`)
++    if (isAllowed) {
++      return withPathname()
+     }
+-    return Response.redirect(new URL('/auth/signin', req.nextUrl))
++    return Response.redirect(new URL(allowedPrefix, req.nextUrl))
++  }
++
++  // Neither next-auth session nor a valid client cookie.
++  if (pathname.startsWith('/api/')) {
++    return Response.json({ error: 'Unauthorized — login required' }, { status: 401 })
+   }
++  return Response.redirect(new URL('/auth/signin', req.nextUrl))
+ })
+ 
+ export const config = {
+diff --git a/tailwind.config.ts b/tailwind.config.ts
+index e6bc435..18b9b11 100644
+--- a/tailwind.config.ts
++++ b/tailwind.config.ts
+@@ -20,6 +20,17 @@ const config: Config = {
+           blue: "#3b82f6",
+           green: "#10b981",
+           purple: "#8b5cf6",
++          // numeric shades used by the ported Line Tracking UI
++          50: "#eef7ff",
++          100: "#d9edff",
++          500: "#2f7ef4",
++          600: "#1f66d6",
++          700: "#1a52ac",
++        },
++        // LINE brand green, used by Line Tracking buttons/badges
++        line: {
++          500: "#06c755",
++          600: "#05a648",
+         }
+       },
+       borderRadius: {
+diff --git a/vercel.json b/vercel.json
+index 622955b..30c0548 100644
+--- a/vercel.json
++++ b/vercel.json
+@@ -10,6 +10,10 @@
+     "src/app/api/media-plans/generate/route.ts":   { "maxDuration": 120 },
+     "src/app/api/keyword-audience/generate/route.ts": { "maxDuration": 120 },
+     "src/app/api/templates/research/route.ts": { "maxDuration": 120 },
+-    "src/app/api/adcopy/generate/route.ts": { "maxDuration": 120 }
+-  }
++    "src/app/api/adcopy/generate/route.ts": { "maxDuration": 120 },
++    "src/app/api/conversions/process/route.ts": { "maxDuration": 300 }
++  },
++  "crons": [
++    { "path": "/api/conversions/process", "schedule": "*/10 * * * *" }
++  ]
+ }

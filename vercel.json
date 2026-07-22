@@ -10,6 +10,10 @@
     "src/app/api/media-plans/generate/route.ts":   { "maxDuration": 120 },
     "src/app/api/keyword-audience/generate/route.ts": { "maxDuration": 120 },
     "src/app/api/templates/research/route.ts": { "maxDuration": 120 },
-    "src/app/api/adcopy/generate/route.ts": { "maxDuration": 120 }
-  }
+    "src/app/api/adcopy/generate/route.ts": { "maxDuration": 120 },
+    "src/app/api/conversions/process/route.ts": { "maxDuration": 300 }
+  },
+  "crons": [
+    { "path": "/api/conversions/process", "schedule": "*/10 * * * *" }
+  ]
 }

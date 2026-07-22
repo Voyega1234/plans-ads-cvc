@@ -150,6 +150,10 @@ function AISuggestPanel({
   businessName: string
 }) {
   const [instruction, setInstruction] = useState('')
+  const [promotion, setPromotion] = useState('')
+  const [emphasis, setEmphasis] = useState('')
+  const [mustInclude, setMustInclude] = useState('')
+  const [avoid, setAvoid] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AISuggestResult | null>(null)
   const [error, setError] = useState('')
@@ -168,8 +172,15 @@ function AISuggestPanel({
           currentHeadlines: currentHeadlines.filter(h => h.trim()),
           currentLongHeadlines: currentLongHeadlines.filter(h => h.trim()),
           currentDescriptions: currentDescriptions.filter(d => d.trim()),
-          businessContext: { businessName, productService: businessName, brandTone: 'professional', objective: 'conversion' },
+          // สินค้า/กลุ่มเป้าหมาย/โทน ให้ AI อ่านจาก ad เดิมเอง — ส่งแค่ชื่อธุรกิจเท่าที่รู้
+          businessContext: { businessName },
           instruction,
+          adjustments: {
+            promotion: promotion.trim() || undefined,
+            emphasis: emphasis.trim() || undefined,
+            mustInclude: mustInclude.trim() || undefined,
+            avoid: avoid.trim() || undefined,
+          },
           language: 'th',
         }),
       })
@@ -198,15 +209,58 @@ function AISuggestPanel({
         <p className="text-[11px] text-gray-400 -mb-2">
           {spec.label}: AI จะเขียน Headline {spec.hMax} รายการ{spec.lhMax > 0 ? ` + Long Headline ${spec.lhMax} รายการ` : ''} + Description {spec.dMax} รายการ ครบตามสเปค Google
         </p>
+        <div className="rounded-lg bg-purple-50/60 border border-purple-100 px-3 py-2 text-[11px] text-purple-700">
+          💡 สินค้า/บริการ · กลุ่มเป้าหมาย · โทนแบรนด์ · keyword — <b>AI อ่านจาก Ad เดิมให้อัตโนมัติ</b> ไม่ต้องกรอกซ้ำ · กรอกแค่ &quot;สิ่งที่อยากปรับ&quot; ด้านล่าง
+        </div>
+
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1.5">บอก AI ว่าต้องการอะไร</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">อยากปรับอะไร <span className="text-red-400">*</span></label>
           <textarea
             value={instruction}
             onChange={e => setInstruction(e.target.value)}
-            placeholder="เช่น: เน้นราคา, เพิ่มความเร่งด่วน, เขียนแบบ friendly"
+            placeholder="เช่น: ปรับให้ดูพรีเมียมขึ้น เน้นความน่าเชื่อถือ และเขียนให้ชวนคลิกกว่าเดิม / เพิ่มมุมมองด้านบริการหลังการขาย"
             rows={3}
             className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
           />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">โปรโมชั่น / ข้อเสนอใหม่ <span className="text-gray-300">(ถ้ามี)</span></label>
+            <input
+              value={promotion}
+              onChange={e => setPromotion(e.target.value)}
+              placeholder="เช่น: ลด 20% ถึงสิ้นเดือน / ปรึกษาฟรี / ผ่อน 0% 10 เดือน"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">เน้น angle ไหน <span className="text-gray-300">(ถ้ามี)</span></label>
+            <input
+              value={emphasis}
+              onChange={e => setEmphasis(e.target.value)}
+              placeholder="เช่น: ราคา / ความน่าเชื่อถือ / ความเร่งด่วน / บริการหลังการขาย / จุดขายเฉพาะ"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">คำที่ต้องมี <span className="text-gray-300">(ถ้ามี)</span></label>
+            <input
+              value={mustInclude}
+              onChange={e => setMustInclude(e.target.value)}
+              placeholder="เช่น: ชื่อแบรนด์, คำว่า 'ของแท้', keyword หลักที่ต้องติด"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1.5">คำ / ข้อความที่ห้ามใช้ <span className="text-gray-300">(ถ้ามี)</span></label>
+            <input
+              value={avoid}
+              onChange={e => setAvoid(e.target.value)}
+              placeholder="เช่น: การันตี 100%, ถูกที่สุด, คำเคลมที่ผิดนโยบาย"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+            />
+          </div>
         </div>
         <button
           onClick={generate}

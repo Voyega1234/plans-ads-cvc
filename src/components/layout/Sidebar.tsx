@@ -30,6 +30,7 @@ import {
   Wand2,
   FileClock,
   Ban,
+  MessageCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -66,6 +67,7 @@ const toolsNav = [
   { href: '/shopping-products',  label: 'Shopping Products', icon: ShoppingBag },
   { href: '/reports',            label: 'Reports',           icon: BarChart2 },
   { href: '/optimization-log',   label: 'Optimization Log',  icon: FileClock },
+  { href: '/line-tracking',      label: 'Line Tracking',     icon: MessageCircle },
 ]
 
 const systemNav = [

@@ -20,6 +20,17 @@ const config: Config = {
           blue: "#3b82f6",
           green: "#10b981",
           purple: "#8b5cf6",
+          // numeric shades used by the ported Line Tracking UI
+          50: "#eef7ff",
+          100: "#d9edff",
+          500: "#2f7ef4",
+          600: "#1f66d6",
+          700: "#1a52ac",
+        },
+        // LINE brand green, used by Line Tracking buttons/badges
+        line: {
+          500: "#06c755",
+          600: "#05a648",
         }
       },
       borderRadius: {
