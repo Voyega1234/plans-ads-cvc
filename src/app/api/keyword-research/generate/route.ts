@@ -5,7 +5,7 @@ import { auth } from '@/lib/auth'
 import { z } from 'zod'
 import type { PlannerKeyword } from '@/app/api/keyword-research/planner/route'
 import { EXECUTIVE_GROWTH_SKILL, KEYWORD_RESEARCH_CONTEXT } from '@/lib/ai/prompts'
-import { logAiCost } from '@/lib/ai/provider'
+import { callAI } from '@/lib/ai/provider'
 
 const schema = z.object({
   businessName:   z.string().min(1),
@@ -255,28 +255,17 @@ Negative Keywords — สร้าง 8-12 คำที่ไม่ควรโ�
   "negativeKeywords":["คำที่ไม่ต้องการ 1"]
 }`
 
-  const { GoogleGenerativeAI } = await import('@google/generative-ai')
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-  // Google Search grounding: lets Gemini look up real competitors + search trends for this industry
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const geminiModel = genAI.getGenerativeModel({
-    model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
-    systemInstruction: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_RESEARCH_CONTEXT}`,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tools: [{ googleSearch: {} } as any],
+  // Central provider: uses Vertex AI via OIDC (no direct GEMINI_API_KEY dependency),
+  // same path as ad copy. Google Search grounding looks up real competitors + trends.
+  // callAI logs cost internally and returns response text sliced to the first JSON object.
+  const text = await callAI(prompt, {
+    systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_RESEARCH_CONTEXT}`,
+    tier: 'quality',
+    useGrounding: true,
+    temperature: 0.3,
+    maxTokens: 65536,
+    _route: '/api/keyword-research/generate',
   })
-  // Grounding requires no responseMimeType — extract JSON manually from response
-  const genResult = await geminiModel.generateContent({
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.3, maxOutputTokens: 65536 },
-  })
-  const usage = genResult.response.usageMetadata
-  if (usage) {
-    const inp = usage.promptTokenCount ?? 0
-    const out = usage.candidatesTokenCount ?? 0
-    void logAiCost({ route: '/api/keyword-research/generate', model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash', inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30 })
-  }
-  const text = genResult.response.text()
   // Extract JSON — try full match first, then try to find keywords array directly
   let parsed: { keywords?: unknown[]; negativeKeywords?: unknown[] } | null = null
   const fullMatch = text.match(/\{[\s\S]*\}/)

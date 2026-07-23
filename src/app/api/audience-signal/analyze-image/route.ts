@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isRealAI, logAiCost } from '@/lib/ai/provider'
+import { isRealAI, logAiCost, getProvider } from '@/lib/ai/provider'
 import { z } from 'zod'
 import { EXECUTIVE_GROWTH_SKILL, AUDIENCE_SIGNAL_CONTEXT } from '@/lib/ai/prompts'
 
@@ -64,6 +64,46 @@ keywords: ให้ครบ 20 search terms ภาษาไทย/อังก�
 themes: ให้ครบ 10 search themes ที่เกี่ยวข้องกับธุรกิจและรูปนี้
 inMarket: เลือกจาก Google In-Market segments ที่ตรงที่สุดให้มากที่สุด เช่น "Retail > Apparel & Accessories", "Real Estate > Residential Properties", "Financial Services > Personal Loans", "Travel > International Travel", "Automotive > New Vehicles", "Home & Garden > Home Improvement", "Beauty & Personal Care", "Health & Fitness", "Education > Online Courses", "Business Services > B2B Services"`
 
+    const imgModel = process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash'
+
+    // Vertex AI via OIDC — same multimodal request shape as the Gemini SDK, but no
+    // direct GEMINI_API_KEY dependency (mirrors src/app/api/chat/route.ts).
+    if (getProvider() === 'vertex') {
+      const { getVertexAccessToken, VERTEX_LOCATION, VERTEX_PROJECT } = await import('@/lib/ai/vertex-auth')
+      const token = await getVertexAccessToken()
+      const vLoc  = VERTEX_LOCATION()
+      const vHost = vLoc === 'global' ? 'aiplatform.googleapis.com' : `${vLoc}-aiplatform.googleapis.com`
+      const vRes = await fetch(`https://${vHost}/v1/projects/${VERTEX_PROJECT()}/locations/${vLoc}/publishers/google/models/${imgModel}:generateContent`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: `${EXECUTIVE_GROWTH_SKILL}\n\n${AUDIENCE_SIGNAL_CONTEXT}` }] },
+          contents: [{
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType: input.mediaType, data: input.imageBase64 } },
+              { text: prompt },
+            ],
+          }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 65536, responseMimeType: 'application/json' },
+        }),
+      })
+      if (!vRes.ok) throw new Error(`Vertex AI ${vRes.status}: ${(await vRes.text()).slice(0, 300)}`)
+      const vData = await vRes.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } }
+      const vu = vData.usageMetadata
+      if (vu) void logAiCost({ route: '/api/audience-signal/analyze-image', model: `vertex:${imgModel}`, inputTokens: vu.promptTokenCount ?? 0, outputTokens: vu.candidatesTokenCount ?? 0, estimatedUSD: ((vu.promptTokenCount ?? 0) / 1e6) * 0.075 + ((vu.candidatesTokenCount ?? 0) / 1e6) * 0.30 })
+      const vText  = (vData.candidates?.[0]?.content?.parts ?? []).map(pt => pt.text ?? '').join('')
+      const vMatch = vText.match(/\{[\s\S]*\}/)
+      if (!vMatch) throw new Error('No JSON in response')
+      const vResult = JSON.parse(vMatch[0]) as { keywords?: string[]; themes?: string[]; inMarket?: string[] }
+      return NextResponse.json({
+        keywords: Array.isArray(vResult.keywords) ? vResult.keywords.slice(0, 20) : [],
+        themes:   Array.isArray(vResult.themes)   ? vResult.themes.slice(0, 10)  : [],
+        inMarket: Array.isArray(vResult.inMarket) ? vResult.inMarket              : [],
+      })
+    }
+
+    // Fallback: direct Gemini (only when Vertex/OIDC is not configured)
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
     const geminiModel = genAI.getGenerativeModel({

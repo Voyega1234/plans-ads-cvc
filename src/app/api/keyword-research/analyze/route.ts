@@ -3,7 +3,7 @@ import { isVertexConfigured } from '@/lib/ai/vertex-auth'
 import { auth } from '@/lib/auth'
 import type { ResearchKeyword as BaseResearchKeyword, KeywordAnalysis } from '@/app/api/keyword-research/generate/route'
 import { EXECUTIVE_GROWTH_SKILL, KEYWORD_ANALYSIS_CONTEXT } from '@/lib/ai/prompts'
-import { logAiCost } from '@/lib/ai/provider'
+import { callAI } from '@/lib/ai/provider'
 // Analyze route accepts keywords that may include 'negative' group from standalone planner
 type ResearchKeyword = Omit<BaseResearchKeyword, 'group'> & { group: BaseResearchKeyword['group'] | 'negative' }
 
@@ -202,27 +202,17 @@ ${kwSummary}
 }`
 
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-    // Google Search grounding: Gemini looks up real competitor landscape + market demand signals
-    const geminiModel = genAI.getGenerativeModel({
-      model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
-      systemInstruction: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_ANALYSIS_CONTEXT}`,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      tools: [{ googleSearch: {} } as any],
+    // Central provider: Vertex AI via OIDC (no direct GEMINI_API_KEY). Google Search
+    // grounding looks up real competitor landscape + market demand. callAI logs cost
+    // internally and returns response text sliced to the first JSON object.
+    const text = await callAI(prompt, {
+      systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_ANALYSIS_CONTEXT}`,
+      tier: 'quality',
+      useGrounding: true,
+      temperature: 0.3,
+      maxTokens: 65536,
+      _route: '/api/keyword-research/analyze',
     })
-    // Grounding cannot coexist with responseMimeType — extract JSON manually
-    const genResult = await geminiModel.generateContent({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 65536 },
-    })
-    const usage = genResult.response.usageMetadata
-    if (usage) {
-      const inp = usage.promptTokenCount ?? 0
-      const out = usage.candidatesTokenCount ?? 0
-      void logAiCost({ route: '/api/keyword-research/analyze', model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash', inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30 })
-    }
-    const text  = genResult.response.text()
     const clean = text.replace(/```(?:json)?/g, '').replace(/```/g, '').trim()
     // Find outermost JSON object
     const start = clean.indexOf('{')
