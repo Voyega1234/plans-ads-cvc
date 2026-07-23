@@ -81,9 +81,6 @@ ${alertCtx || 'ไม่มี alerts'}
       tier: 'quality',
       useGrounding: true,  // Real-time market events that may affect account performance today
       systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${ACCOUNT_TYPE_REPORTING_SKILL}\n\n${MORNING_BRIEF_CONTEXT}`,
-      _route: '/api/morning-brief/ai-summary',
-      _feature: 'morning_brief',
-      _subfeature: 'ai_summary',
     })
 
     const text  = raw.replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim()

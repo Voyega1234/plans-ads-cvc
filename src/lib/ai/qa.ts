@@ -20,7 +20,7 @@ export async function runCampaignQA(
       prompt,
       (raw) => validateQAResult(raw) as QAResult | null,
       () => mockQA(blueprint, brief),
-      { temperature: 0.1, _route: '/api/qa/run', _feature: 'qa', _subfeature: 'run' }
+      { temperature: 0.1 }
     )
   }
 
@@ -394,3 +394,4 @@ async function mockQA(
     readyToPush,
   }
 }
+

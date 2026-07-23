@@ -15,9 +15,11 @@ export default async function SheetPage({ params }: { params: Promise<{ projectI
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) notFound();
 
-  const config = await getConnectionConfig<SheetConfig>(project.id, "GOOGLE_SHEET");
+  const [config, logs] = await Promise.all([
+    getConnectionConfig<SheetConfig>(project.id, "GOOGLE_SHEET"),
+    listSyncLogs(project.id),
+  ]);
   const real = isRealMode("GOOGLE_SHEET", config as Record<string, unknown>);
-  const logs = await listSyncLogs(project.id);
   const lastSync = logs[0];
 
   return (

@@ -120,7 +120,7 @@ ${desc}
       return ok ? { items: r.items, note: r.note ?? '' } : null
     },
     () => ({ items: [], note: 'ไม่พบความเสี่ยงด้าน policy ที่ชัดเจนจากข้อมูลที่ตรวจได้ (mock) แต่ควรตรวจซ้ำเมื่อมีการเปลี่ยน copy, landing page หรือ asset ใหม่' }),
-    { tier: 'standard', _route: '/api/qa/policy-check', _feature: 'qa', _subfeature: 'policy_check' }
+    { tier: 'standard' }
   )
 }
 

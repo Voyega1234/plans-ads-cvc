@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { buildAiUsageLabels, getModel, isRealAI, logAiCost } from '@/lib/ai/provider'
-import { generateVertexContent, vertexText } from '@/lib/ai/vertex-auth'
+import { isRealAI, logAiCost } from '@/lib/ai/provider'
 import { z } from 'zod'
 import { EXECUTIVE_GROWTH_SKILL, AUDIENCE_SIGNAL_CONTEXT } from '@/lib/ai/prompts'
 
@@ -65,17 +64,13 @@ keywords: ให้ครบ 20 search terms ภาษาไทย/อังก�
 themes: ให้ครบ 10 search themes ที่เกี่ยวข้องกับธุรกิจและรูปนี้
 inMarket: เลือกจาก Google In-Market segments ที่ตรงที่สุดให้มากที่สุด เช่น "Retail > Apparel & Accessories", "Real Estate > Residential Properties", "Financial Services > Personal Loans", "Travel > International Travel", "Automotive > New Vehicles", "Home & Garden > Home Improvement", "Beauty & Personal Care", "Health & Fitness", "Education > Online Courses", "Business Services > B2B Services"`
 
-    const modelName = getModel('quality')
-    const usageLabels = buildAiUsageLabels({
-      route: '/api/audience-signal/analyze-image',
-      model: `vertex:${modelName}`,
-      provider: 'vertex',
-      feature: 'audience_signal',
-      subfeature: 'analyze_image',
+    const { GoogleGenerativeAI } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+    const geminiModel = genAI.getGenerativeModel({
+      model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
+      systemInstruction: `${EXECUTIVE_GROWTH_SKILL}\n\n${AUDIENCE_SIGNAL_CONTEXT}`,
     })
-    const genResult = await generateVertexContent({
-      model: modelName,
-      systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AUDIENCE_SIGNAL_CONTEXT}`,
+    const genResult = await geminiModel.generateContent({
       contents: [{
         role: 'user',
         parts: [
@@ -83,23 +78,15 @@ inMarket: เลือกจาก Google In-Market segments ที่ตรง�
           { text: prompt },
         ],
       }],
-      temperature: 0.3,
-      maxTokens: 65536,
-      responseMimeType: 'application/json',
-      labels: {
-        project: usageLabels.project,
-        provider: usageLabels.provider,
-        feature: usageLabels.feature,
-        subfeature: usageLabels.subfeature,
-      },
+      generationConfig: { temperature: 0.3, maxOutputTokens: 65536, responseMimeType: 'application/json' },
     })
-    const usage = genResult.usageMetadata
+    const usage = genResult.response.usageMetadata
     if (usage) {
       const inp = usage.promptTokenCount ?? 0
       const out = usage.candidatesTokenCount ?? 0
-      void logAiCost({ route: '/api/audience-signal/analyze-image', model: `vertex:${modelName}`, inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30, provider: usageLabels.provider, feature: usageLabels.feature, subfeature: usageLabels.subfeature })
+      void logAiCost({ route: '/api/audience-signal/analyze-image', model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash', inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30 })
     }
-    const text = vertexText(genResult)
+    const text = genResult.response.text()
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) throw new Error('No JSON in response')
 

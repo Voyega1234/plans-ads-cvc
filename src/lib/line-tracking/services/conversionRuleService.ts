@@ -13,19 +13,20 @@ import { stringifyJson } from "@/lib/line-tracking/json";
  * Existing rules are left untouched (upsert update: {}).
  */
 export async function seedDefaultRules(projectId: string, defaultValue = 0) {
-  for (const status of LEAD_STATUS) {
-    await prisma.conversionRule.upsert({
-      where: { projectId_leadStatus: { projectId, leadStatus: status } },
-      create: {
-        projectId,
-        leadStatus: status,
-        enabled: STATUS_ENABLED_DEFAULT[status],
-        platformsJson: stringifyJson(defaultPlatformsForStatus(status)),
-        defaultValue,
-      },
-      update: {},
-    });
-  }
+  // One round-trip instead of one upsert per lead status (7 sequential queries on a
+  // remote Postgres). `skipDuplicates` relies on the projectId+leadStatus unique
+  // constraint and reproduces the old `update: {}` exactly — rows that already exist
+  // are left untouched, missing rows are created with the same defaults.
+  await prisma.conversionRule.createMany({
+    data: LEAD_STATUS.map((status) => ({
+      projectId,
+      leadStatus: status,
+      enabled: STATUS_ENABLED_DEFAULT[status],
+      platformsJson: stringifyJson(defaultPlatformsForStatus(status)),
+      defaultValue,
+    })),
+    skipDuplicates: true,
+  });
 }
 
 /**
@@ -34,6 +35,9 @@ export async function seedDefaultRules(projectId: string, defaultValue = 0) {
  */
 export async function syncRulePlatforms(projectId: string) {
   const rules = await prisma.conversionRule.findMany({ where: { projectId } });
+  // Work out every needed update first, then issue them concurrently — the updates
+  // are independent rows, so paying their latency one after another was pure waste.
+  const updates: { id: string; platformsJson: string }[] = [];
   for (const rule of rules) {
     const current = JSON.parse(rule.platformsJson || "{}") as Record<
       string,
@@ -48,12 +52,17 @@ export async function syncRulePlatforms(projectId: string) {
       }
     }
     if (changed) {
-      await prisma.conversionRule.update({
-        where: { id: rule.id },
-        data: { platformsJson: stringifyJson(current) },
-      });
+      updates.push({ id: rule.id, platformsJson: stringifyJson(current) });
     }
   }
+  await Promise.all(
+    updates.map((u) =>
+      prisma.conversionRule.update({
+        where: { id: u.id },
+        data: { platformsJson: u.platformsJson },
+      })
+    )
+  );
 }
 
 export function getRuleForStatus(projectId: string, leadStatus: LeadStatus) {

@@ -774,7 +774,7 @@ export async function generateCampaignBlueprint(
       prompt,
       (raw) => validateBlueprint(raw) as CampaignBlueprintJson | null,
       () => mockBlueprint(mediaPlan, keywordAudiencePlan, brief),
-      { temperature: 0.2, maxTokens: 16000, _route: '/api/campaign-blueprints/generate', _feature: 'campaign_blueprints', _subfeature: 'generate' }
+      { temperature: 0.2, maxTokens: 16000 }
     )
     return normaliseBlueprint(result, mediaPlan, brief)
   }
@@ -936,3 +936,4 @@ async function mockBlueprint(
     ],
   }
 }
+

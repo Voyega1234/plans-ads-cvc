@@ -30,9 +30,12 @@ function LineStage({ lineUser }: { lineUser: { friendStatus: string; lastMessage
 
 export default async function LeadsPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  // project lookup + leads run concurrently (leads keys off the same projectId).
+  const [project, leads] = await Promise.all([
+    prisma.project.findUnique({ where: { id: projectId } }),
+    listLeads(projectId),
+  ]);
   if (!project) notFound();
-  const leads = await listLeads(project.id);
 
   return (
     <div className="space-y-6">

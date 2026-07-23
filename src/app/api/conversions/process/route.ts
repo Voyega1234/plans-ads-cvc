@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processQueue } from "@/lib/line-tracking/services/conversionQueueService";
-import { isAuthorized } from "@/lib/line-tracking/cron";
+import { checkCronAuth } from "@/lib/line-tracking/cron";
 
 /**
  * Process the conversion queue. Optional ?projectId=... to scope to one project.
@@ -8,8 +8,17 @@ import { isAuthorized } from "@/lib/line-tracking/cron";
  * Retries failed events up to MAX_RETRY (handled inside processQueue).
  */
 export async function POST(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const auth = checkCronAuth(req);
+  if (!auth.ok) {
+    // 503, not 401, when the secret was never configured: that is a broken
+    // deploy (the cron cannot run either), and it needs to look different from
+    // a rejected caller so the smoke test can tell them apart.
+    return auth.reason === "unconfigured"
+      ? NextResponse.json(
+          { error: "CRON_SECRET is not configured on this deployment" },
+          { status: 503 }
+        )
+      : NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const projectId = new URL(req.url).searchParams.get("projectId") ?? undefined;
   try {

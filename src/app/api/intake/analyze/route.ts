@@ -200,7 +200,7 @@ export async function POST(req: NextRequest) {
           return parsed as IntakeAnalysis
         },
         () => buildFallbackAnalysis(brief, taskType),
-        { temperature: 0.2, tier: 'standard', _route: '/api/intake/analyze', _feature: 'intake', _subfeature: 'analyze' }
+        { temperature: 0.2, tier: 'standard' }
       )
       return NextResponse.json(result)
     }

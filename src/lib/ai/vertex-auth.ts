@@ -32,7 +32,7 @@ export async function getVertexAccessToken(): Promise<string> {
   if (cache && Date.now() < cache.expiresAt) return cache.token
 
   const { ExternalAccountClient } = await import('google-auth-library')
-  const { getVercelOidcToken } = await import('@vercel/functions/oidc')
+  const { getVercelOidcToken } = await import('@vercel/oidc')
 
   const client = ExternalAccountClient.fromJSON({
     type: 'external_account',

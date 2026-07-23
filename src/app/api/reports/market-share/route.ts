@@ -183,7 +183,7 @@ export async function GET(req: NextRequest) {
           `คุณคือ Performance Marketer เขียนสรุป Visibility Share สำหรับรายงานลูกค้า (ภาษาไทย 1 ย่อหน้า ≤120 คำ)
 ข้อมูล: Search IS ${pct(search?.impressionShare)} · Lost by Budget ${pct(search?.lostBudget)} · Lost by Rank ${pct(search?.lostRank)} · Top ${pct(search?.topShare)} · Abs.Top ${pct(search?.absTopShare)} · Display IS ${pct(display?.impressionShare)}${prev?.search ? ` · ช่วงก่อนหน้า Search IS ${pct(prev.search.impressionShare)}` : ''}
 กติกา: ใช้คำว่า "Visibility Share/โอกาสแสดงผล" ห้ามอ้างว่าเป็นส่วนแบ่งตลาดจริง · บอกว่าเสียโอกาสจาก Budget หรือ Rank มากกว่า พร้อมคำแนะนำที่ตรงสาเหตุ · ห้ามประดิษฐ์ตัวเลข · ตอบเฉพาะเนื้อความ ไม่ต้องมีหัวข้อ`,
-          { tier: 'standard', _route: '/api/reports/market-share', _feature: 'reports', _subfeature: 'market_share' }
+          { tier: 'standard' }
         )
         const cleaned = extractPlainText(raw)
         if (cleaned && cleaned.length > 40) aiSummary = cleaned

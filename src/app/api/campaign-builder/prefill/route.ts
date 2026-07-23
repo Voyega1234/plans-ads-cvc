@@ -117,7 +117,7 @@ ${context}
           aiRationale:    'ดึงข้อมูลจาก brief ล่าสุดของ account นี้',
         }
       },
-      { maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${CAMPAIGN_PREFILL_CONTEXT}`, _route: '/api/campaign-builder/prefill', _feature: 'campaign_builder', _subfeature: 'prefill' }
+      { maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${CAMPAIGN_PREFILL_CONTEXT}` }
     )
 
     return NextResponse.json({ prefill: result, context: contextParts })

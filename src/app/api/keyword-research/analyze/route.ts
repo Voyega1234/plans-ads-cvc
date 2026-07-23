@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { generateVertexContent, isVertexConfigured, vertexText } from '@/lib/ai/vertex-auth'
+import { isVertexConfigured } from '@/lib/ai/vertex-auth'
 import { auth } from '@/lib/auth'
 import type { ResearchKeyword as BaseResearchKeyword, KeywordAnalysis } from '@/app/api/keyword-research/generate/route'
 import { EXECUTIVE_GROWTH_SKILL, KEYWORD_ANALYSIS_CONTEXT } from '@/lib/ai/prompts'
-import { buildAiUsageLabels, getModel, logAiCost } from '@/lib/ai/provider'
+import { logAiCost } from '@/lib/ai/provider'
 // Analyze route accepts keywords that may include 'negative' group from standalone planner
 type ResearchKeyword = Omit<BaseResearchKeyword, 'group'> & { group: BaseResearchKeyword['group'] | 'negative' }
 
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'ต้องระบุ keywords' }, { status: 400 })
   }
 
-  if (!isVertexConfigured() && !process.env.ANTHROPIC_API_KEY) {
+  if (!isVertexConfigured() && !process.env.GEMINI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(buildFallbackAnalysis(keywords, businessName, productService, competitors), { status: 200 })
   }
 
@@ -202,36 +202,27 @@ ${kwSummary}
 }`
 
   try {
-    const modelName = getModel('quality')
-    const usageLabels = buildAiUsageLabels({
-      route: '/api/keyword-research/analyze',
-      model: `vertex:${modelName}`,
-      provider: 'vertex',
-      feature: 'keyword_research',
-      subfeature: 'analyze',
+    const { GoogleGenerativeAI } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+    // Google Search grounding: Gemini looks up real competitor landscape + market demand signals
+    const geminiModel = genAI.getGenerativeModel({
+      model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash',
+      systemInstruction: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_ANALYSIS_CONTEXT}`,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      tools: [{ googleSearch: {} } as any],
     })
     // Grounding cannot coexist with responseMimeType — extract JSON manually
-    const genResult = await generateVertexContent({
-      model: modelName,
-      systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${KEYWORD_ANALYSIS_CONTEXT}`,
+    const genResult = await geminiModel.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      temperature: 0.3,
-      maxTokens: 65536,
-      useGrounding: true,
-      labels: {
-        project: usageLabels.project,
-        provider: usageLabels.provider,
-        feature: usageLabels.feature,
-        subfeature: usageLabels.subfeature,
-      },
+      generationConfig: { temperature: 0.3, maxOutputTokens: 65536 },
     })
-    const usage = genResult.usageMetadata
+    const usage = genResult.response.usageMetadata
     if (usage) {
       const inp = usage.promptTokenCount ?? 0
       const out = usage.candidatesTokenCount ?? 0
-      void logAiCost({ route: '/api/keyword-research/analyze', model: `vertex:${modelName}`, inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30, provider: usageLabels.provider, feature: usageLabels.feature, subfeature: usageLabels.subfeature })
+      void logAiCost({ route: '/api/keyword-research/analyze', model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash', inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30 })
     }
-    const text  = vertexText(genResult)
+    const text  = genResult.response.text()
     const clean = text.replace(/```(?:json)?/g, '').replace(/```/g, '').trim()
     // Find outermost JSON object
     const start = clean.indexOf('{')

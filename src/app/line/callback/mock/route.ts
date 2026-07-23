@@ -5,6 +5,7 @@ import {
   upsertLineUser,
   generateMockLineUserId,
   randomMockDisplayName,
+  isMockLineEnabled,
 } from "@/lib/line-tracking/services/lineService";
 import { upsertLeadFromClick } from "@/lib/line-tracking/services/leadService";
 import { pushLeads } from "@/lib/line-tracking/services/sheetService";
@@ -16,7 +17,20 @@ import { isConnectorReal } from "@/lib/line-tracking/services/connectionStore";
  * ad click, creates a Lead, best-effort pushes to the Sheet, then redirects
  * to the success page.
  */
+// The guard below returns before this handler reads anything from the request,
+// which is enough for Next to treat the route as static and prerender that 404
+// at build time. Force per-request evaluation so the flag is read from the live
+// environment rather than from whatever was set on the build machine.
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
+  // Hard stop before touching anything. This route is public (middleware lets
+  // /line/ through without auth), so without this guard anyone who knows the
+  // URL could mint leads and fire conversions against the live account.
+  if (!isMockLineEnabled()) {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
   const { searchParams } = new URL(req.url);
   const slug = searchParams.get("project");
   const clickId = searchParams.get("click_id") ?? undefined;

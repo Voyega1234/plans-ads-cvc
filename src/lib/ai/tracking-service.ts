@@ -370,9 +370,6 @@ ${scanSummary}
   return safeCallAI(prompt, validator, mockFn, {
     systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${TRACKING_CONTEXT}\n\nตอบเป็น JSON array เท่านั้น ห้ามมี markdown หรือ text อื่น`,
     maxTokens: 65536,
-    _route: '/api/tracking/generate-tracking-plan',
-    _feature: 'tracking',
-    _subfeature: 'generate_tracking_plan',
   });
 }
 

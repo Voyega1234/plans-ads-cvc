@@ -14,14 +14,17 @@ export default async function TrackingLinksPage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    include: { trackingLinks: { orderBy: { createdAt: "desc" } } },
-  });
+  // project (with its tracking links) + short links run concurrently.
+  const [project, shortLinks] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id: projectId },
+      include: { trackingLinks: { orderBy: { createdAt: "desc" } } },
+    }),
+    listShortLinks(projectId),
+  ]);
   if (!project) notFound();
 
   const templates = allChannelTemplates(project.slug);
-  const shortLinks = await listShortLinks(project.id);
 
   return (
     <div className="space-y-6">

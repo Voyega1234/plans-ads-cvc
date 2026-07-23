@@ -82,7 +82,6 @@ export async function POST(req: NextRequest) {
 
     const plan = await prisma.mediaPlan.create({
       data: {
-        ...(userId && userId !== 'system' ? { userId } : {}),   // ต้องผูก userId ไม่งั้น push/list กรอง userId แล้วหา plan ไม่เจอบน prod
         briefId:      brief.id,
         title:        `Media Plan - ${businessName} - ${new Date().toLocaleDateString('th-TH', { month: 'long', year: 'numeric' })}`,
         objective:    'LEADS',

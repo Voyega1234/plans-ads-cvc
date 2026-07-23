@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
           return parsed as LaunchStrategy
         },
         () => buildFallback(combined, businessType),
-        { temperature: 0.25, tier: 'quality', _route: '/api/intake/launch-strategy', _feature: 'intake', _subfeature: 'launch_strategy' }
+        { temperature: 0.25, tier: 'quality' }
       )
       return NextResponse.json(result)
     }

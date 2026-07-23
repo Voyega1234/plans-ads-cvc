@@ -2,8 +2,6 @@ import { NextResponse } from 'next/server'
 import { isVertexConfigured } from '@/lib/ai/vertex-auth'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 
-export const dynamic = 'force-dynamic'
-
 // Server-side only — never exposes key values, only boolean status
 export async function GET() {
   // ── Google Ads: live connectivity probe ───────────────────────────────────
@@ -49,9 +47,9 @@ export async function GET() {
     } catch { gtmLive = false }
   }
 
-  // ── AI (Vertex via Vercel OIDC primary, optional fallback providers) ──────
-  const aiConfigured = !!(isVertexConfigured() || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)
-  const aiMock = process.env.MOCK_AI === 'true'
+  // ── AI (Gemini primary, Anthropic fallback) ───────────────────────────────
+  const anthropicKey = !!(isVertexConfigured() || process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY)
+  const anthropicMock = process.env.MOCK_AI === 'true'
 
   // ── Sheets / Drive ────────────────────────────────────────────────────────
   const sheetsLive = !!(process.env.GOOGLE_SHEETS_CLIENT_EMAIL && process.env.GOOGLE_SHEETS_PRIVATE_KEY)
@@ -59,7 +57,7 @@ export async function GET() {
 
   return NextResponse.json({
     google_ads: { configured: adsMock || adsLive, mock: adsMock, live: adsLive },
-    vertex:     { configured: aiConfigured, mock: aiMock, live: aiConfigured && !aiMock },
+    anthropic:  { configured: anthropicKey, mock: anthropicMock, live: anthropicKey && !anthropicMock },
     ga4:        { configured: ga4Configured, mock: false, live: ga4Live },
     gtm:        { configured: gtmConfigured, mock: false, live: gtmLive },
     google_sheets: { configured: sheetsLive, mock: false, live: sheetsLive },

@@ -231,7 +231,7 @@ export async function POST(req: NextRequest) {
           return parsed as MediaPlanStrategy
         },
         () => buildFallbackStrategy(brief, intakeAnswers, businessType),
-        { temperature: 0.3, tier: 'quality', _route: '/api/intake/generate-plan', _feature: 'intake', _subfeature: 'generate_plan' }
+        { temperature: 0.3, tier: 'quality' }
       )
       return NextResponse.json(result)
     }

@@ -190,6 +190,19 @@ export async function upsertLineUser(params: {
   });
 }
 
+/**
+ * Is the fake "Simulate LINE Add" flow allowed to run?
+ *
+ * OFF unless someone explicitly sets ALLOW_MOCK_LINE=true — so production, where
+ * nobody sets it, can never produce fake data. This matters more than a normal
+ * feature flag because one click of that flow writes a Lead into the real
+ * database, fires real conversion events to GA4/Ads, and pushes a row into the
+ * client's Google Sheet. Treat turning this on as a dev-machine-only action.
+ */
+export function isMockLineEnabled(): boolean {
+  return process.env.ALLOW_MOCK_LINE === "true";
+}
+
 /** Generate a fake LINE userId for the MVP mock Add-friend flow. */
 export function generateMockLineUserId(): string {
   return `Umock${randomUUID().replace(/-/g, "").slice(0, 24)}`;

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { parseJson } from "@/lib/line-tracking/json";
 import { CONNECTOR_META } from "@/lib/line-tracking/connectors";
-import { getEffectiveConfig } from "./connectionStore";
 import { CONNECTION_TYPES, CONNECTION_LABEL } from "@/lib/line-tracking/enums";
 import type { ConnectionType } from "@/lib/line-tracking/enums";
 
@@ -34,18 +34,27 @@ export interface ConnectorReadiness {
  * Drives the "แจ้งว่าขาดข้อมูลอะไร" panel on the setup page.
  */
 export async function getProjectReadiness(projectId: string): Promise<ConnectorReadiness[]> {
-  // recent leads (last 90 days) with their click ids — one query, reused per platform
+  // recent leads (last 90 days) with their click ids — one query, reused per platform.
+  // Connector configs used to be fetched one findUnique per type (N+1 over a remote DB);
+  // now all rows come back in a single findMany, keyed by type in memory. Configs are
+  // isolated per project (no inherited secrets), so this equals the old per-type reads.
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-  const recent = await prisma.lead.findMany({
-    where: { projectId, createdAt: { gte: since } },
-    select: { gclid: true, msclkid: true, fbclid: true, ttclid: true, twclid: true, scclid: true },
-  });
+  const [recent, connections] = await Promise.all([
+    prisma.lead.findMany({
+      where: { projectId, createdAt: { gte: since } },
+      select: { gclid: true, msclkid: true, fbclid: true, ttclid: true, twclid: true, scclid: true },
+    }),
+    prisma.projectConnection.findMany({ where: { projectId } }),
+  ]);
   const recentLeads = recent.length;
+  const configByType = new Map<string, Record<string, unknown>>(
+    connections.map((c) => [c.type, parseJson<Record<string, unknown>>(c.configJson, {})])
+  );
 
   const out: ConnectorReadiness[] = [];
   for (const type of CONNECTION_TYPES) {
     const meta = CONNECTOR_META[type];
-    const config = (await getEffectiveConfig<Record<string, unknown>>(projectId, type)) ?? {};
+    const config = configByType.get(type) ?? {};
     const missingCredentials = meta.realKeys.filter((k) => {
       const v = config[k];
       return v === undefined || v === null || v === "";

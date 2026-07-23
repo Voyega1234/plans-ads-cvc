@@ -17,7 +17,7 @@ interface IntegrationStatus {
 
 interface IntegrationStatuses {
   google_ads:    IntegrationStatus
-  vertex:        IntegrationStatus
+  anthropic:     IntegrationStatus
   ga4:           IntegrationStatus
   gtm:           IntegrationStatus
   google_sheets: IntegrationStatus
@@ -43,12 +43,12 @@ const integrationMeta: Array<{
     setupNote: 'ตั้งค่า GOOGLE_ADS_* ใน .env.local',
   },
   {
-    provider: 'vertex',
-    name: 'AI — Vertex Gemini via Vercel OIDC',
+    provider: 'anthropic',
+    name: 'AI — Gemini 3.5 Flash',
     logo: 'AI',
     logoColor: 'bg-violet-500',
     description: 'สร้าง Media Plan, Keyword Strategy, Blueprint, Morning Brief และ AI Media Buyer recommendations',
-    setupNote: 'ตั้งค่า GCP_* สำหรับ Vercel OIDC · ปิด MOCK_AI=true',
+    setupNote: 'ตั้งค่า GEMINI_API_KEY ใน .env.local · ปิด MOCK_AI=true',
   },
   {
     provider: 'ga4',

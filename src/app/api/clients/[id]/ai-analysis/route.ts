@@ -161,9 +161,6 @@ ${isAllPaused
       tier: 'quality',
       useGrounding: true,  // Real-time industry context + competitor benchmarks via Google Search
       systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${ACCOUNT_TYPE_REPORTING_SKILL}\n\nYou are a Google Ads expert analyst. Reply with valid JSON only — no markdown fences, no extra text.`,
-      _route: '/api/clients/[id]/ai-analysis',
-      _feature: 'clients',
-      _subfeature: 'ai_analysis',
     })
     console.log('[ai-analysis] AI responded, raw length:', raw.length)
     console.log('[ai-analysis] raw tail:', raw.slice(-200))

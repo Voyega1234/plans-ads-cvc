@@ -9,9 +9,10 @@ import ClientAccessManager from "@/components/line-tracking/ClientAccessManager"
 import { ConnectionCard } from "@/components/line-tracking/ConnectionCard";
 import { ConversionRuleRow } from "@/components/line-tracking/ConversionRuleRow";
 import { CopyButton } from "@/components/line-tracking/CopyButton";
+import { DeleteProjectCard } from "@/components/line-tracking/DeleteProjectCard";
 import { Progress, StatusBadge } from "@/components/line-tracking/ui";
 import { setProjectStatusAction } from "@/lib/line-tracking/actions";
-import { buildTrackingUrl } from "@/lib/line-tracking/services/trackingService";
+import { buildTrackingUrl, getTrackingBaseUrl } from "@/lib/line-tracking/services/trackingService";
 import type { ConnectionType } from "@/lib/line-tracking/enums";
 import { AD_CONNECTION_TYPES, LEAD_STATUS, LEAD_STATUS_LABEL } from "@/lib/line-tracking/enums";
 import type { LeadStatus } from "@/lib/line-tracking/enums";
@@ -53,13 +54,29 @@ export default async function SetupWizard({
 
   const step = (STEPS.find((s) => s.key === query.step)?.key ?? "info") as StepKey;
   const progress = setupProgress(project.connections);
-  const readiness = await getProjectReadiness(project.id);
-  const notReady = readiness.filter((r) => !r.ready);
   // Only allowlisted staff (apps/bob/varn@convertcake.com) may create client logins.
-  const staffSession = await getAuthSession();
+  const [readiness, staffSession, embedClicks, leadCount] = await Promise.all([
+    getProjectReadiness(project.id),
+    getAuthSession(),
+    prisma.adClick.count({ where: { projectId: project.id } }),
+    prisma.lead.count({ where: { projectId: project.id } }),
+  ]);
+  const notReady = readiness.filter((r) => !r.ready);
   const canManage = canManageClients(staffSession?.user?.email);
   const stepIndex = STEPS.findIndex((s) => s.key === step);
   const base = `/line-tracking/projects/${project.id}/setup`;
+
+  // ── Onboarding gate: embed code + LINE OA มาก่อน, media channel ทำทีหลังได้ ──
+  // "embedInstalled" ตรวจจากทราฟฟิกจริง — มี AdClick เข้ามา = โค้ดวางบนเว็บและยิงถึง /api/track แล้ว
+  // (ไม่ต้องเพิ่มคอลัมน์ใน DB / ไม่ต้อง migrate). แต่ละโปรเจกต์ใช้ snippet เดียวกัน ต่างแค่ data-project=slug
+  const lineReady = project.connections.find((c) => c.type === "LINE")?.status === "CONNECTED";
+  const embedInstalled = embedClicks > 0;
+  const embedSnippet = `<script src="${getTrackingBaseUrl()}/embed.js" data-project="${project.slug}"></script>`;
+  const mediaTypes: ConnectionType[] = [...AD_CONNECTION_TYPES, "GA4", "GOOGLE_SHEET"];
+  const mediaConnected = project.connections.filter(
+    (c) => mediaTypes.includes(c.type as ConnectionType) && c.status === "CONNECTED"
+  ).length;
+  const requiredDone = (embedInstalled ? 1 : 0) + (lineReady ? 1 : 0);
 
   return (
     <div className="space-y-6">
@@ -71,6 +88,88 @@ export default async function SetupWizard({
         <div className="w-full sm:w-48">
           <Progress percent={progress.percent} />
           <div className="mt-1 text-right text-xs text-slate-400">{progress.percent}% connected</div>
+        </div>
+      </div>
+
+      {/* ── Onboarding checklist: ทำ 2 ข้อนี้ก่อนเริ่ม (embed + LINE OA), media ทีหลัง ── */}
+      <div className="card border-2 border-brand-500/30 bg-brand-500/5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-semibold text-slate-800">🚀 เริ่มโปรเจกต์: ทำ 2 ข้อนี้ให้เสร็จก่อน</h2>
+          <span className={`badge ${requiredDone === 2 ? "bg-emerald-500 text-white" : "bg-amber-400 text-white"}`}>
+            {requiredDone}/2 พร้อม
+          </span>
+        </div>
+        <p className="mb-4 text-xs text-slate-500">
+          ติดตั้งโค้ด Tracking บนเว็บ + เชื่อม LINE OA ให้เสร็จก่อน แล้ว media channel (Google/Meta/TikTok/GA4/Sheet) ค่อยทยอยทำทีหลังได้
+        </p>
+
+        <div className="space-y-3">
+          {/* 1. Embed code (จำเป็น) */}
+          <div className={`rounded-lg border p-3 ${embedInstalled ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-white"}`}>
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 text-lg">{embedInstalled ? "✅" : "1️⃣"}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-slate-800">วางโค้ด Tracking บนเว็บไซต์ลูกค้า</span>
+                  <span className="badge bg-rose-100 text-rose-600">จำเป็น</span>
+                  {embedInstalled
+                    ? <span className="text-xs text-emerald-700">· ตรวจพบ click จริงแล้ว {embedClicks.toLocaleString()} ครั้ง</span>
+                    : <span className="text-xs text-amber-600">· ยังไม่พบ traffic — วางโค้ดแล้วเปิดเว็บผ่านลิงก์ที่มี ?utm_source=… เพื่อทดสอบ</span>}
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  วางสคริปต์นี้ใน &lt;head&gt; ของเว็บ{project.websiteUrl ? ` (${project.websiteUrl})` : "ลูกค้า"} — ผูกกับโปรเจกต์นี้ผ่าน <code>data-project=&quot;{project.slug}&quot;</code> (snippet ตัวเดียวใช้ได้ทุกโปรเจกต์ ต่างแค่ slug)
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="block flex-1 break-all rounded-lg bg-slate-900 p-2.5 text-[11px] text-slate-100">{embedSnippet}</code>
+                  <CopyButton text={embedSnippet} label="Copy" />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                  <Link href={`/line-tracking/projects/${project.id}/tracking-links`} className="text-brand-600 hover:underline">จัดการลิงก์ + ปุ่ม Add LINE →</Link>
+                  <Link href="/line-tracking/guide" className="text-slate-500 hover:underline">📖 คู่มือติดตั้งแบบละเอียด →</Link>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. LINE OA (จำเป็น) */}
+          <div className={`rounded-lg border p-3 ${lineReady ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-white"}`}>
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 text-lg">{lineReady ? "✅" : "2️⃣"}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-slate-800">เชื่อม LINE OA</span>
+                  <span className="badge bg-rose-100 text-rose-600">จำเป็น</span>
+                  {lineReady
+                    ? <span className="text-xs text-emerald-700">· เชื่อมแล้ว (Test ผ่าน)</span>
+                    : <span className="text-xs text-amber-600">· ยังไม่เชื่อม — ใส่ Messaging Access Token แล้วกด Test</span>}
+                </div>
+                <p className="mt-1 text-xs text-slate-500">ต้องมี LINE OA ก่อน ระบบถึงจะรับ Lead และยิง conversion ได้</p>
+                <div className="mt-2">
+                  <Link href={`${base}?step=line`} className="btn-primary text-xs">{lineReady ? "ดูการตั้งค่า LINE" : "ตั้งค่า LINE OA →"}</Link>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 3. Media channels (ทำทีหลังได้) */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 text-lg">⏭️</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-slate-700">เชื่อม Media Channels</span>
+                  <span className="badge bg-slate-200 text-slate-600">ทำทีหลังได้</span>
+                  <span className="text-xs text-slate-500">· เชื่อมแล้ว {mediaConnected}/{mediaTypes.length}</span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">Google / Meta / TikTok Ads, GA4, Google Sheet — ค่อยทยอยเชื่อมได้หลังเริ่มโปรเจกต์</p>
+                <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                  <Link href={`${base}?step=ads`} className="text-brand-600 hover:underline">ตั้งค่า Ads Platforms →</Link>
+                  <Link href={`${base}?step=ga4`} className="text-brand-600 hover:underline">GA4 →</Link>
+                  <Link href={`${base}?step=sheet`} className="text-brand-600 hover:underline">Google Sheet →</Link>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -163,6 +262,43 @@ export default async function SetupWizard({
               <Info label="Main channel" value={project.mainSalesChannel} />
               <Info label="Status" value={project.status} />
             </dl>
+
+            {/* ── โค้ดฝังเว็บเฉพาะโปรเจกต์นี้ ────────────────────────────────
+                slug ถูกสร้างอัตโนมัติตอนสร้างโปรเจกต์ (unique ต่อโปรเจกต์)
+                จึงไม่ต้องแก้อะไรด้วยมือ — copy ไปวางได้เลย */}
+            <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-semibold text-slate-900">🌐 โค้ดฝังเว็บของโปรเจกต์นี้</h3>
+                <span className={`badge ${embedInstalled ? "bg-line-500 text-white" : "bg-amber-100 text-amber-700"}`}>
+                  {embedInstalled ? "✓ ติดตั้งแล้ว" : "ยังไม่ได้ติดตั้ง"}
+                </span>
+                <CopyButton text={embedSnippet} label="Copy script" />
+              </div>
+              <p className="mb-2 text-xs text-slate-500">
+                วางในส่วน <code>&lt;head&gt;</code> หรือก่อน <code>&lt;/body&gt;</code> ของเว็บไซต์ลูกค้า
+                {project.websiteUrl ? ` (${project.websiteUrl})` : ""} — โค้ดนี้ผูกกับ slug{" "}
+                <code>{project.slug}</code> ของโปรเจกต์นี้โดยเฉพาะ
+              </p>
+              <code className="block break-all rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
+                {embedSnippet}
+              </code>
+              <p className="mt-2 text-xs text-slate-400">
+                ต้องมีปุ่มแอด LINE บนหน้าเว็บด้วย —{" "}
+                <a className="text-brand-600 underline" href="/line-tracking/guide">
+                  ดูคู่มือติดตั้งแบบเต็ม
+                </a>
+              </p>
+            </div>
+
+            {/* Danger zone — เฉพาะผู้ดูแล (apps/bob/varn@convertcake.com) เท่านั้น */}
+            {canManage && (
+              <DeleteProjectCard
+                projectId={project.id}
+                slug={project.slug}
+                projectName={project.name}
+                leadCount={leadCount}
+              />
+            )}
           </div>
         )}
 

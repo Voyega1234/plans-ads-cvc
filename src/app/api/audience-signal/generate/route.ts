@@ -128,7 +128,7 @@ householdIncome options: Top 10%, 11-20%, 21-30%, 31-40%, 41-50%, Lower 50%, Unk
         return parsed
       },
       () => MOCK_SIGNAL,
-      { maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AUDIENCE_SIGNAL_CONTEXT}`, _route: '/api/audience-signal/generate', _feature: 'audience_signal', _subfeature: 'generate' },
+      { maxTokens: 65536, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${AUDIENCE_SIGNAL_CONTEXT}` },
     )
 
     return NextResponse.json({ signal })

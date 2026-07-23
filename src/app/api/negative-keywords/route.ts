@@ -25,8 +25,12 @@ export interface CampaignSearchTerms {
   terms: SearchTermRow[]
 }
 
+export type NegativeMatchType = 'BROAD' | 'PHRASE' | 'EXACT'
+
 export interface NegativeSuggestion {
-  term: string
+  searchTerm: string          // search term เดิม (คีย์ของแถวในตาราง)
+  negative: string            // คำ/วลีเฉพาะที่ควร negative (ไม่ใช่ทั้งประโยค)
+  matchType: NegativeMatchType
   reason: string
 }
 
@@ -86,22 +90,42 @@ function getMockData(): CampaignSearchTerms[] {
   ]
 }
 
-// ─── GET — ดึง search terms ของทุกแคมเปญใน account (30 วันล่าสุด) ────────────────
+// จำนวนวันย้อนหลังที่อนุญาต แล้วแปลงเป็นช่วงวันที่ (เขตเวลาไทย) สำหรับ GAQL BETWEEN
+const ALLOWED_DAYS = [7, 14, 30, 60, 90] as const
+function clampDays(raw: string | null): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return 30
+  // เลือกค่าที่ใกล้ที่สุดในลิสต์ที่อนุญาต (กัน range เกิน 90 วันของ search_term_view)
+  return ALLOWED_DAYS.reduce((best, d) => Math.abs(d - n) < Math.abs(best - n) ? d : best, 30)
+}
+function bangkokDateRange(days: number): { start: string; end: string } {
+  // ใช้เวลาปัจจุบันแบบไทย (UTC+7) เพื่อคำนวณช่วงวันที่
+  const nowBkk = new Date(Date.now() + 7 * 60 * 60 * 1000)
+  const end = new Date(nowBkk)
+  const start = new Date(nowBkk)
+  start.setUTCDate(start.getUTCDate() - (days - 1))
+  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+  return { start: fmt(start), end: fmt(end) }
+}
+
+// ─── GET — ดึง search terms ของทุกแคมเปญใน account (เลือกจำนวนวันได้) ─────────────
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const customerId = searchParams.get('customerId') ?? ''
+  const days = clampDays(searchParams.get('days'))
   if (!customerId) {
     return NextResponse.json({ error: 'customerId is required' }, { status: 400 })
   }
 
   if (isMockMode()) {
-    return NextResponse.json({ campaigns: getMockData() })
+    return NextResponse.json({ campaigns: getMockData(), days })
   }
 
   try {
     const token = await getGoogleAdsAccessToken()
     const cid = customerId.replace(/-/g, '')
+    const { start, end } = bangkokDateRange(days)
 
     type TermRow = {
       campaign?: { id?: string; name?: string; resourceName?: string }
@@ -114,7 +138,7 @@ export async function GET(req: NextRequest) {
         search_term_view.search_term,
         metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions
        FROM search_term_view
-       WHERE segments.date DURING LAST_30_DAYS AND campaign.status != 'REMOVED'
+       WHERE segments.date BETWEEN '${start}' AND '${end}' AND campaign.status != 'REMOVED'
        ORDER BY metrics.cost_micros DESC
        LIMIT 2000`,
       token
@@ -168,7 +192,7 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    return NextResponse.json({ campaigns: Array.from(map.values()) })
+    return NextResponse.json({ campaigns: Array.from(map.values()), days })
   } catch (err) {
     console.error('[negative-keywords GET]', err)
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Unknown error' }, { status: 500 })
@@ -189,22 +213,51 @@ const suggestSchema = z.object({
   })),
 })
 
+const keywordItem = z.object({
+  text: z.string().min(1).max(80),
+  matchType: z.enum(['BROAD', 'PHRASE', 'EXACT']).default('PHRASE'),
+})
+
 const applySchema = z.object({
   action: z.literal('apply'),
   customerId: z.string().min(1),
-  campaignResourceName: z.string().min(1),
-  keywords: z.array(z.string().min(1)).min(1).max(200),
+  // scope: campaign = เพิ่ม negative ระดับแคมเปญ | account = สร้าง/เพิ่ม shared negative keyword list ระดับ account
+  scope: z.enum(['campaign', 'account']).default('campaign'),
+  campaignResourceName: z.string().optional(),       // ใช้เมื่อ scope=campaign
+  campaignResourceNames: z.array(z.string()).optional(), // ใช้เมื่อ scope=account (แคมเปญที่จะ attach list เข้าไป)
+  listName: z.string().max(120).optional(),          // ชื่อ negative list (scope=account)
+  // แต่ละรายการคือ "คำ/วลีที่จะ negative" (แก้ไขได้จาก UI) + match type ที่เลือกเอง
+  keywords: z.array(keywordItem).min(1).max(200),
 })
 
+function dedupeKeywords(keywords: z.infer<typeof keywordItem>[]): z.infer<typeof keywordItem>[] {
+  const seen = new Set<string>()
+  return keywords.filter(k => {
+    const key = `${k.text.toLowerCase()}::${k.matchType}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const MATCH_TYPES: NegativeMatchType[] = ['BROAD', 'PHRASE', 'EXACT']
+function normalizeMatchType(v: unknown): NegativeMatchType {
+  const up = typeof v === 'string' ? v.toUpperCase() : ''
+  return (MATCH_TYPES as string[]).includes(up) ? (up as NegativeMatchType) : 'PHRASE'
+}
+
 // Heuristic ของ media buyer: คลิกแล้วไม่มี conversion และเปลืองงบ = candidate
+// ไม่มี AI จึงไม่รู้ว่าควรตัด "คำไหน" — ตั้ง default เป็นทั้ง term (phrase) ให้ผู้ใช้แก้เหลือเฉพาะคำเองจาก UI
 function heuristicSuggest(terms: z.infer<typeof suggestSchema>['terms']): NegativeSuggestion[] {
   return terms
     .filter(t => t.conversions === 0 && (t.clicks >= 3 || t.cost >= 100))
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 30)
     .map(t => ({
-      term: t.searchTerm,
-      reason: `${t.clicks} clicks / ฿${t.cost.toLocaleString()} โดยไม่มี conversion ใน 30 วัน`,
+      searchTerm: t.searchTerm,
+      negative: t.searchTerm,
+      matchType: 'PHRASE' as NegativeMatchType,
+      reason: `${t.clicks} clicks / ฿${t.cost.toLocaleString()} โดยไม่มี conversion ใน 30 วัน (แก้ให้เหลือเฉพาะคำที่ต้องการได้)`,
     }))
 }
 
@@ -216,9 +269,15 @@ function validateSuggestions(raw: unknown): NegativeSuggestion[] | null {
   for (const s of obj.suggestions as unknown[]) {
     if (typeof s !== 'object' || s === null) continue
     const o = s as Record<string, unknown>
-    if (typeof o.term === 'string' && o.term.trim()) {
-      out.push({ term: o.term, reason: typeof o.reason === 'string' ? o.reason : '' })
-    }
+    const searchTerm = typeof o.searchTerm === 'string' ? o.searchTerm.trim() : ''
+    const negative = typeof o.negative === 'string' ? o.negative.trim() : ''
+    if (!searchTerm || !negative) continue
+    out.push({
+      searchTerm,
+      negative,
+      matchType: normalizeMatchType(o.matchType),
+      reason: typeof o.reason === 'string' ? o.reason : '',
+    })
   }
   return out.length > 0 ? out : null
 }
@@ -240,15 +299,24 @@ async function handleSuggest(body: z.infer<typeof suggestSchema>) {
 Search terms จริงจาก 30 วันล่าสุด:
 ${termList}
 
+สิ่งที่ต้องทำ: สำหรับ search term ที่ควร negative ให้เลือก "เฉพาะคำ/วลีที่เป็นปัญหา" ออกมา — ห้าม negative ทั้งประโยค
+ตัวอย่าง: "ปรึกษาวีซ่าฟรี" ไม่ควร negative ทั้งประโยค ให้ negative แค่คำว่า "ฟรี" (phrase)
+เพราะถ้า negative ทั้งประโยคจะบล็อกได้แค่ประโยคนั้น แต่ถ้า negative แค่คำว่า "ฟรี" จะกันคำค้นที่มี "ฟรี" ได้ทั้งหมด
+
 เกณฑ์การคัด (เลือกเฉพาะที่ควรเป็น negative จริงๆ):
 1. เจตนาไม่ตรงกับการซื้อ เช่น หางาน, ทำเอง/DIY, ฟรี, ความหมายอื่นของคำ
 2. ใช้งบไปพอสมควรแต่ไม่มี conversion เลย
 3. อย่าตัดคำที่มี conversion หรือเป็น search term ที่เกี่ยวข้องกับสินค้าโดยตรง (เช่น รีวิว, เปรียบเทียบ อาจยังอยู่ในเส้นทางการซื้อ)
 
-ตอบเป็น JSON เท่านั้น:
+การเลือก matchType ของแต่ละคำ:
+- PHRASE (แนะนำเป็นค่าเริ่มต้น): กันทุกคำค้นที่มีวลีนี้อยู่ เช่น "ฟรี"
+- EXACT: กันเฉพาะคำค้นที่ตรงเป๊ะ ใช้เมื่อไม่อยากกันคำอื่นที่มีคำนี้
+- BROAD: กว้างสุด ใช้เมื่อต้องการกันทุก variation ของคำ
+
+ตอบเป็น JSON เท่านั้น (negative = เฉพาะคำที่จะตัด ต้องเป็นคำที่ปรากฏอยู่ใน searchTerm นั้น):
 {
   "suggestions": [
-    { "term": "search term เดิมเป๊ะๆ", "reason": "เหตุผลสั้นๆ ภาษาไทย" }
+    { "searchTerm": "search term เดิมเป๊ะๆ", "negative": "คำ/วลีที่จะตัด", "matchType": "PHRASE", "reason": "เหตุผลสั้นๆ ภาษาไทย" }
   ]
 }`
 
@@ -259,45 +327,115 @@ ${termList}
     { temperature: 0.2, maxTokens: 8192 }
   )
 
-  // กัน AI ตอบ term ที่ไม่มีอยู่จริงในลิสต์
+  // กัน AI ตอบ searchTerm ที่ไม่มีอยู่จริงในลิสต์
   const validTerms = new Set(candidates.map(t => t.searchTerm))
-  return NextResponse.json({ suggestions: suggestions.filter(s => validTerms.has(s.term)) })
+  return NextResponse.json({ suggestions: suggestions.filter(s => validTerms.has(s.searchTerm)) })
+}
+
+async function adsMutate(cid: string, token: string, payload: unknown) {
+  const res = await fetch(
+    `https://googleads.googleapis.com/v21/customers/${cid}/googleAds:mutate`,
+    { method: 'POST', headers: adsHeaders(token), body: JSON.stringify(payload) }
+  )
+  const raw = await res.text()
+  if (!res.ok) {
+    throw new Error(`Google Ads mutate failed (${res.status}): ${raw.slice(0, 2000)}`)
+  }
+  return raw ? JSON.parse(raw) : {}
+}
+
+// scope=campaign — เพิ่ม negative keyword ระดับแคมเปญเดียว
+async function applyCampaign(cid: string, token: string, campaign: string, kws: z.infer<typeof keywordItem>[]) {
+  const ops = kws.map(k => ({
+    campaignCriterionOperation: {
+      create: { campaign, negative: true, keyword: { text: k.text, matchType: k.matchType } },
+    },
+  }))
+  const result = await adsMutate(cid, token, { mutateOperations: ops })
+  return NextResponse.json({ success: true, scope: 'campaign', added: ops.length, result })
+}
+
+// scope=account — สร้าง shared negative keyword list (SharedSet) + ใส่คำ + attach เข้าแคมเปญ
+async function applyAccount(
+  cid: string, token: string, listName: string, campaigns: string[], kws: z.infer<typeof keywordItem>[]
+) {
+  // 1) สร้าง SharedSet + SharedCriterion ในคำสั่งเดียว โดยใช้ temp resource name (-1)
+  const tempSet = `customers/${cid}/sharedSets/-1`
+  const createOps: unknown[] = [
+    { sharedSetOperation: { create: { name: listName, type: 'NEGATIVE_KEYWORDS' } } },
+    ...kws.map(k => ({
+      sharedCriterionOperation: {
+        create: { sharedSet: tempSet, keyword: { text: k.text, matchType: k.matchType } },
+      },
+    })),
+  ]
+  const createRes = await adsMutate(cid, token, { mutateOperations: createOps })
+  const results = (createRes as { mutateOperationResponses?: Array<Record<string, { resourceName?: string }>> }).mutateOperationResponses ?? []
+  const sharedSetResource = results[0]?.sharedSetResult?.resourceName
+  if (!sharedSetResource) {
+    throw new Error('สร้าง negative list ไม่สำเร็จ (ไม่ได้ resourceName ของ SharedSet)')
+  }
+
+  // 2) attach list เข้าแคมเปญที่เลือก — ใช้ partialFailure เพราะบางแคมเปญ (Display/Video/PMax) จะ attach ไม่ได้
+  let attached = 0
+  let attachErrors: string[] = []
+  if (campaigns.length > 0) {
+    const attachOps = campaigns.map(campaign => ({
+      campaignSharedSetOperation: { create: { campaign, sharedSet: sharedSetResource } },
+    }))
+    const attachRes = await adsMutate(cid, token, { mutateOperations: attachOps, partialFailure: true }) as {
+      mutateOperationResponses?: Array<Record<string, { resourceName?: string }>>
+      partialFailureError?: { message?: string }
+    }
+    const resList = attachRes.mutateOperationResponses ?? []
+    attached = resList.filter(r => r.campaignSharedSetResult?.resourceName).length
+    if (attachRes.partialFailureError?.message) attachErrors = [attachRes.partialFailureError.message.slice(0, 500)]
+  }
+
+  return NextResponse.json({
+    success: true,
+    scope: 'account',
+    added: kws.length,
+    listName,
+    sharedSet: sharedSetResource,
+    attachedCampaigns: attached,
+    attachErrors,
+    message: `สร้าง negative list "${listName}" (${kws.length} คำ) และ attach เข้า ${attached}/${campaigns.length} แคมเปญ`,
+  })
 }
 
 async function handleApply(body: z.infer<typeof applySchema>) {
+  const kws = dedupeKeywords(body.keywords)
+
   if (isMockMode()) {
+    if (body.scope === 'account') {
+      const name = body.listName?.trim() || `Negative List (auto)`
+      const n = body.campaignResourceNames?.length ?? 0
+      return NextResponse.json({
+        success: true, mock: true, scope: 'account', added: kws.length,
+        listName: name, attachedCampaigns: n, attachErrors: [],
+        message: `[Mock] สร้าง negative list "${name}" (${kws.length} คำ) attach เข้า ${n} แคมเปญ`,
+      })
+    }
     return NextResponse.json({
-      success: true, mock: true,
-      added: body.keywords.length,
-      message: `[Mock] เพิ่ม ${body.keywords.length} negative keywords (phrase match) แล้ว`,
+      success: true, mock: true, scope: 'campaign', added: kws.length,
+      message: `[Mock] เพิ่ม ${kws.length} negative keywords ระดับแคมเปญแล้ว`,
     })
   }
 
   const token = await getGoogleAdsAccessToken()
   const cid = body.customerId.replace(/-/g, '')
 
-  // สร้างเป็น campaign-level negative keyword แบบ PHRASE match ตาม requirement
-  const ops = body.keywords.map(text => ({
-    campaignCriterionOperation: {
-      create: {
-        campaign: body.campaignResourceName,
-        negative: true,
-        keyword: { text, matchType: 'PHRASE' },
-      },
-    },
-  }))
-
-  const res = await fetch(
-    `https://googleads.googleapis.com/v21/customers/${cid}/googleAds:mutate`,
-    { method: 'POST', headers: adsHeaders(token), body: JSON.stringify({ mutateOperations: ops }) }
-  )
-  if (!res.ok) {
-    const txt = await res.text()
-    throw new Error(`Google Ads mutate failed (${res.status}): ${txt.slice(0, 2000)}`)
+  if (body.scope === 'account') {
+    const listName = body.listName?.trim() || `Negative List ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`
+    const campaigns = body.campaignResourceNames ?? []
+    return await applyAccount(cid, token, listName, campaigns, kws)
   }
 
-  const result = await res.json()
-  return NextResponse.json({ success: true, added: body.keywords.length, result })
+  if (!body.campaignResourceName) {
+    return NextResponse.json({ error: 'campaignResourceName is required for scope=campaign' }, { status: 400 })
+  }
+  return await applyCampaign(cid, token, body.campaignResourceName, kws)
 }
 
 export async function POST(req: NextRequest) {

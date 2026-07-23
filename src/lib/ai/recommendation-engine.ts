@@ -37,9 +37,6 @@ export async function generateRecommendations(
         maxTokens: 65536,
         tier: 'quality',
         systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${ACCOUNT_TYPE_REPORTING_SKILL}`,
-        _route: '/api/performance/recommendations',
-        _feature: 'performance',
-        _subfeature: 'recommendations',
       })
       const text = raw.replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim()
       const start = text.indexOf('{')

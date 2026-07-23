@@ -63,8 +63,12 @@ export async function createProject(input: CreateProjectInput) {
     })),
   });
 
-  await seedDefaultRules(project.id, project.defaultConversionValue);
-  await ensureDefaultTrackingLinks(project.id, project.slug);
+  // Independent of each other (different tables) — run concurrently instead of
+  // waiting for the rules to finish before the links even start.
+  await Promise.all([
+    seedDefaultRules(project.id, project.defaultConversionValue),
+    ensureDefaultTrackingLinks(project.id, project.slug),
+  ]);
 
   return project;
 }
@@ -87,24 +91,28 @@ export async function duplicateProject(sourceId: string) {
     mainSalesChannel: source.mainSalesChannel,
   });
 
-  // Copy connector configs (secrets carried over so the copy is usable).
-  for (const conn of source.connections) {
-    await prisma.projectConnection.update({
-      where: { projectId_type: { projectId: created.id, type: conn.type } },
-      data: { configJson: conn.configJson, status: conn.status },
-    });
-  }
-  // Copy conversion rule toggles (platformsJson carries all platform settings).
-  for (const rule of source.conversionRules) {
-    await prisma.conversionRule.update({
-      where: { projectId_leadStatus: { projectId: created.id, leadStatus: rule.leadStatus } },
-      data: {
-        enabled: rule.enabled,
-        platformsJson: rule.platformsJson,
-        defaultValue: rule.defaultValue,
-      },
-    });
-  }
+  // Copy connector configs (secrets carried over so the copy is usable) and the
+  // conversion rule toggles. Every row is independent, so these all go out at once
+  // instead of ~9 connections + 7 rules paid as sequential round-trips.
+  await Promise.all([
+    ...source.connections.map((conn) =>
+      prisma.projectConnection.update({
+        where: { projectId_type: { projectId: created.id, type: conn.type } },
+        data: { configJson: conn.configJson, status: conn.status },
+      })
+    ),
+    ...source.conversionRules.map((rule) =>
+      prisma.conversionRule.update({
+        where: { projectId_leadStatus: { projectId: created.id, leadStatus: rule.leadStatus } },
+        data: {
+          enabled: rule.enabled,
+          platformsJson: rule.platformsJson,
+          defaultValue: rule.defaultValue,
+        },
+      })
+    ),
+  ]);
+
   return created;
 }
 
@@ -319,16 +327,20 @@ export async function getFunnel(
 
 /** Agency-wide: leads + purchases per project (for a bar chart). */
 export async function getAgencyLeadsByProject() {
-  const projects = await prisma.project.findMany({ select: { id: true, name: true } });
-  const out: { name: string; leads: number; purchases: number }[] = [];
-  for (const p of projects) {
-    const [leads, purchases] = await Promise.all([
-      prisma.lead.count({ where: { projectId: p.id } }),
-      prisma.lead.count({ where: { projectId: p.id, status: { in: ["WON", "PAID"] } } }),
-    ]);
-    out.push({ name: p.name, leads, purchases });
-  }
-  return out.sort((a, b) => b.leads - a.leads);
+  // Was an N+1 loop (1 + 2×projects queries, sequential over a remote DB). Now 3 fixed
+  // queries: all projects + leads-per-project + purchases-per-project via groupBy, merged
+  // in memory. Output is identical — projects with 0 leads are kept (groupBy omits them,
+  // so we start from the full project list and default missing counts to 0).
+  const [projects, leadsByProject, purchasesByProject] = await Promise.all([
+    prisma.project.findMany({ select: { id: true, name: true } }),
+    prisma.lead.groupBy({ by: ["projectId"], _count: true }),
+    prisma.lead.groupBy({ by: ["projectId"], where: { status: { in: ["WON", "PAID"] } }, _count: true }),
+  ]);
+  const leadMap = new Map(leadsByProject.map((r) => [r.projectId, r._count]));
+  const purchaseMap = new Map(purchasesByProject.map((r) => [r.projectId, r._count]));
+  return projects
+    .map((p) => ({ name: p.name, leads: leadMap.get(p.id) ?? 0, purchases: purchaseMap.get(p.id) ?? 0 }))
+    .sort((a, b) => b.leads - a.leads);
 }
 
 /** Agency-wide lead status distribution (donut). */
@@ -371,8 +383,11 @@ export async function getPeriodComparison(projectId: string, days: number) {
     return { leads, purchases, revenue: rev._sum.value ?? 0 };
   };
 
-  const current = await metrics(curFrom, now);
-  const previous = await metrics(prevFrom, curFrom);
+  // The two windows are independent — run them concurrently (was 2 sequential waves).
+  const [current, previous] = await Promise.all([
+    metrics(curFrom, now),
+    metrics(prevFrom, curFrom),
+  ]);
   const pct = (c: number, p: number) => (p === 0 ? (c > 0 ? 100 : 0) : ((c - p) / p) * 100);
 
   return {

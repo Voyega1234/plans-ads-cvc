@@ -49,10 +49,11 @@ export default async function ProjectOverview({
   const isStaff = !!session?.user?.id;
 
   // Auto period-over-period comparison (last N days vs the N days before).
-  const cmp = await getPeriodComparison(project.id, days);
-
-  const [stats, channels, statusDist, funnel, lineLife, recentLeads, recentEvents] =
+  // Folded into the Promise.all below so it runs concurrently with the rest
+  // instead of serializing an extra round-trip batch before them.
+  const [cmp, stats, channels, statusDist, funnel, lineLife, recentLeads, recentEvents] =
     await Promise.all([
+      getPeriodComparison(project.id, days),
       getProjectStats(project.id),
       getChannelBreakdown(project.id),
       getStatusDistribution(project.id),

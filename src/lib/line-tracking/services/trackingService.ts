@@ -66,20 +66,24 @@ export async function ensureDefaultTrackingLinks(projectId: string, slug: string
     { platform: "META", name: "Meta Ads (default)" },
     { platform: "TIKTOK", name: "TikTok Ads (default)" },
   ];
-  for (const d of defaults) {
-    const exists = await prisma.trackingLink.findFirst({
-      where: { projectId, platform: d.platform, name: d.name },
+  // Was 3 × (findFirst + create) issued one after another. Now: one lookup for all
+  // three, then one insert for whichever are missing — same rows, same skip-if-exists
+  // behaviour, 2 round-trips instead of up to 6.
+  const existing = await prisma.trackingLink.findMany({
+    where: { projectId, name: { in: defaults.map((d) => d.name) } },
+    select: { platform: true, name: true },
+  });
+  const have = new Set(existing.map((e) => `${e.platform}|${e.name}`));
+  const missing = defaults.filter((d) => !have.has(`${d.platform}|${d.name}`));
+  if (missing.length) {
+    await prisma.trackingLink.createMany({
+      data: missing.map((d) => ({
+        projectId,
+        platform: d.platform,
+        name: d.name,
+        url: buildTrackingUrl(d.platform, slug),
+      })),
     });
-    if (!exists) {
-      await prisma.trackingLink.create({
-        data: {
-          projectId,
-          platform: d.platform,
-          name: d.name,
-          url: buildTrackingUrl(d.platform, slug),
-        },
-      });
-    }
   }
 }
 

@@ -24,7 +24,7 @@ interface ServiceStatus {
 interface IntegrationsStatus {
   google_oauth?: ServiceStatus
   google_ads?: ServiceStatus
-  vertex?: ServiceStatus
+  anthropic?: ServiceStatus
   ga4?: ServiceStatus
   gtm?: ServiceStatus
   google_sheets?: ServiceStatus
@@ -76,15 +76,14 @@ const SERVICES: ServiceDef[] = [
     ],
   },
   {
-    key: 'vertex',
-    name: 'AI — Vertex Gemini via Vercel OIDC',
+    key: 'anthropic',
+    name: 'AI — Gemini 3.5 Flash',
     icon: '🤖',
-    envVars: ['GCP_PROJECT_ID', 'GCP_PROJECT_NUMBER', 'GCP_SERVICE_ACCOUNT_EMAIL', 'GCP_WORKLOAD_IDENTITY_POOL_ID', 'GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID', 'VERTEX_LOCATION', 'AI_MODEL_QUALITY', 'AI_MODEL_STANDARD', 'MOCK_AI'],
+    envVars: ['GEMINI_API_KEY', 'AI_MODEL_QUALITY', 'AI_MODEL_STANDARD', 'MOCK_AI'],
     setupSteps: [
-      'Enable Vercel OIDC Federation on the Vercel project',
-      'Create GCP Workload Identity Federation provider for the Vercel issuer',
-      'Grant the Vercel principal Workload Identity User on the Vertex service account',
-      'AI_MODEL_QUALITY และ AI_MODEL_STANDARD ตั้งเป็น gemini-3-flash-preview',
+      'ขอ API key ฟรีได้ที่ https://aistudio.google.com/apikey',
+      'Paste the key into GEMINI_API_KEY',
+      'AI_MODEL_QUALITY และ AI_MODEL_STANDARD ตั้งเป็น gemini-3.5-flash',
       'Set MOCK_AI=false to use real AI',
     ],
   },

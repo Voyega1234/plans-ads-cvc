@@ -12,20 +12,18 @@ import { callAI, isRealAI } from '@/lib/ai/provider'
 
 // AI มักตอบ free-text/JSON ปนกัน — แกะเป็นเนื้อความเสมอ (อย่าบังคับ JSON แล้ว fallback ทิ้ง)
 function unwrapText(raw: string): string {
-  const text = (raw ?? '').trim().replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trim()
-  if (text.startsWith('{')) {
+  let t = (raw ?? '').trim().replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trim()
+  if (t.startsWith('{')) {
     try {
-      const obj = JSON.parse(text) as Record<string, unknown>
+      const obj = JSON.parse(t) as Record<string, unknown>
       const firstStr = Object.values(obj).find(v => typeof v === 'string' && v.length > 20)
       if (typeof firstStr === 'string') return firstStr.trim()
-    } catch {
-      const match = text.match(/"[a-zA-Z_]+"\s*:\s*"([\s\S]*?)"\s*[,}]/)
-      if (match && match[1].length > 20) {
-        return match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').trim()
-      }
+    } catch { /* JSON เพี้ยน (เช่นมี newline จริงใน string) — ดึงค่า key แรกด้วย regex ไม่สน key ชื่ออะไร */
+      const m = t.match(/"[a-zA-Z_]+"\s*:\s*"([\s\S]*?)"\s*[,}]/)
+      if (m && m[1].length > 20) return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').trim()
     }
   }
-  return text
+  return t
 }
 
 interface LogEntryLite {
@@ -47,13 +45,13 @@ const entryLine = (e: LogEntryLite) =>
 // (บัญชีจริงมี bulk operation เช่น สร้าง asset ×1,900 ที่กลบการปรับสำคัญ)
 function buildDigest(entries: LogEntryLite[]): string {
   const n = (e: LogEntryLite) => e.count ?? 1
-  const total = entries.reduce((sum, e) => sum + n(e), 0)
+  const total = entries.reduce((s, e) => s + n(e), 0)
   const byType = new Map<string, number>()
   const byCampaign = new Map<string, number>()
   const actors = new Map<string, number>()
   for (const e of entries) {
-    const type = `${e.resourceType} ${e.operation}`
-    byType.set(type, (byType.get(type) ?? 0) + n(e))
+    const t = `${e.resourceType} ${e.operation}`
+    byType.set(t, (byType.get(t) ?? 0) + n(e))
     if (e.campaign) byCampaign.set(e.campaign, (byCampaign.get(e.campaign) ?? 0) + n(e))
     actors.set(e.changedBy, (actors.get(e.changedBy) ?? 0) + n(e))
   }
@@ -62,9 +60,9 @@ function buildDigest(entries: LogEntryLite[]): string {
   const meds = entries.filter(e => e.impact === 'MEDIUM' && e.resourceType !== 'ASSET').slice(0, 10)
   return [
     `รวมทั้งหมด ${total} การเปลี่ยนแปลง`,
-    `ประเภท: ${top(byType, 8).map(([type, count]) => `${type} ×${count}`).join(', ')}`,
-    `แคมเปญที่ถูกปรับมากสุด: ${top(byCampaign, 5).map(([name, count]) => `${name} (${count})`).join(', ') || '—'}`,
-    `ผู้ปรับ: ${top(actors, 4).map(([name, count]) => `${name} (${count})`).join(', ')}`,
+    `ประเภท: ${top(byType, 8).map(([t, c]) => `${t} ×${c}`).join(', ')}`,
+    `แคมเปญที่ถูกปรับมากสุด: ${top(byCampaign, 5).map(([t, c]) => `${t} (${c})`).join(', ') || '—'}`,
+    `ผู้ปรับ: ${top(actors, 4).map(([t, c]) => `${t} (${c})`).join(', ')}`,
     highs.length ? `\nรายการ HIGH impact (สำคัญสุด):\n${highs.map(entryLine).join('\n')}` : '',
     meds.length ? `\nรายการ MEDIUM ที่น่าสนใจ:\n${meds.map(entryLine).join('\n')}` : '',
   ].filter(Boolean).join('\n')
@@ -88,7 +86,7 @@ export async function POST(req: NextRequest) {
 ${entryLine(e)}
 
 เขียนคำอธิบายภาษาไทย 1 ย่อหน้า (3-5 ประโยค) ครอบคลุม: ปรับอะไร · เหตุผลที่ทีมมักปรับแบบนี้ · โอกาสที่จะดีขึ้น · ความเสี่ยง/สิ่งที่ต้องติดตาม · น้ำเสียงมืออาชีพ เข้าใจง่าย ไม่ใช้ศัพท์เทคนิคเกินจำเป็น ห้ามการันตีผลลัพธ์ · ตอบเฉพาะเนื้อความ ไม่ต้องมีหัวข้อหรือ JSON`,
-          { tier: 'standard', _route: '/api/optimization-log/ai', _feature: 'optimization_log', _subfeature: 'explain' }
+          { tier: 'standard', _route: '/api/optimization-log/ai' }
         )
         const text = unwrapText(raw)
         return NextResponse.json({ text: text.length > 30 ? text : fallback })
@@ -102,7 +100,7 @@ ${entryLine(e)}
       const rangeLabel = (body.rangeLabel as string) ?? ''
       if (entries.length === 0) return NextResponse.json({ error: 'entries required' }, { status: 400 })
       const digest = buildDigest(entries)
-      const fallback = `⚠ AI ไม่พร้อมใช้งานขณะนี้ (เช็คการตั้งค่า AI provider) — สรุปอัตโนมัติ: ในช่วง${rangeLabel} มีการเปลี่ยนแปลงรวม ${entries.reduce((sum, e) => sum + (e.count ?? 1), 0)} รายการ ควรติดตาม CPA และ Conversion ต่อเนื่องใน 7-14 วันข้างหน้า`
+      const fallback = `⚠ AI ไม่พร้อมใช้งานขณะนี้ (เช็คการตั้งค่า AI provider) — สรุปอัตโนมัติ: ในช่วง${rangeLabel} มีการเปลี่ยนแปลงรวม ${entries.reduce((s, e) => s + (e.count ?? 1), 0)} รายการ ควรติดตาม CPA และ Conversion ต่อเนื่องใน 7-14 วันข้างหน้า`
       if (!isRealAI()) return NextResponse.json({ text: fallback })
       try {
         const raw = await callAI(
@@ -117,7 +115,7 @@ ${digest}
 3. คาดว่าจะช่วย performance ด้านไหน
 4. ความเสี่ยง/สิ่งที่ต้องติดตามต่อ (เช่น learning phase, CPA, Impression Share)
 น้ำเสียง client-friendly ใช้ในรายงานได้เลย ห้ามการันตีผลลัพธ์ ห้ามประดิษฐ์ข้อมูลที่ไม่มีใน log · ตอบเฉพาะเนื้อความ ไม่ต้องมีหัวข้อหรือ JSON`,
-          { tier: 'quality', _route: '/api/optimization-log/ai', _feature: 'optimization_log', _subfeature: 'summary' }
+          { tier: 'quality', _route: '/api/optimization-log/ai' }
         )
         const text = unwrapText(raw)
         return NextResponse.json({ text: text.length > 50 ? text : fallback })

@@ -27,28 +27,42 @@ export async function POST(
   // Read the RAW body first — required for signature verification.
   const rawBody = await req.text();
 
-  // Verify X-Line-Signature when a Messaging channel secret is configured.
+  // Verify X-Line-Signature. This endpoint is public and creates LINE users and
+  // leads, so an unverified payload is an open door for forged leads — refuse
+  // rather than accept when there is no secret to check against. A LINE channel
+  // cannot be connected without the secret anyway (it is one of the two
+  // realKeys), so a project that legitimately receives webhooks always has one.
   const lineConfig = await getConnectionConfig<LineConfig>(project.id, "LINE");
-  if (lineConfig.messagingChannelSecret) {
-    const valid = verifyLineSignature(
-      lineConfig.messagingChannelSecret,
-      rawBody,
-      req.headers.get("x-line-signature")
-    );
-    if (!valid) {
-      await prisma.webhookLog.create({
-        data: {
-          projectId: project.id,
-          source: "LINE",
-          payload: stringifyJson({ note: "signature rejected" }),
-          status: "REJECTED",
-          errorMessage: "Invalid X-Line-Signature",
-        },
-      });
-      return NextResponse.json({ error: "invalid signature" }, { status: 401 });
-    }
+  if (!lineConfig.messagingChannelSecret) {
+    await prisma.webhookLog.create({
+      data: {
+        projectId: project.id,
+        source: "LINE",
+        payload: stringifyJson({ note: "no channel secret configured" }),
+        status: "REJECTED",
+        errorMessage:
+          "Messaging Channel Secret ยังไม่ได้ตั้งค่า — ไม่สามารถยืนยันว่า webhook มาจาก LINE จริง",
+      },
+    });
+    return NextResponse.json({ error: "webhook not configured" }, { status: 401 });
   }
-  // else: no secret set (local/dev) — accept without verification.
+  const validSignature = verifyLineSignature(
+    lineConfig.messagingChannelSecret,
+    rawBody,
+    req.headers.get("x-line-signature")
+  );
+  if (!validSignature) {
+    await prisma.webhookLog.create({
+      data: {
+        projectId: project.id,
+        source: "LINE",
+        payload: stringifyJson({ note: "signature rejected" }),
+        status: "REJECTED",
+        errorMessage: "Invalid X-Line-Signature",
+      },
+    });
+    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+  }
 
   let body: unknown;
   try {

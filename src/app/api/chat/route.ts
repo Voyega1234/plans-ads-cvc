@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { buildAiUsageLabels, getProvider, logAiCost } from '@/lib/ai/provider'
+import { getProvider, logAiCost } from '@/lib/ai/provider'
 import { EXECUTIVE_GROWTH_SKILL, ACCOUNT_TYPE_REPORTING_SKILL } from '@/lib/ai/prompts'
 import { pullCampaignPerformance, loadRecentSnapshots } from '@/lib/google-ads/performance-reader'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 import { auth } from '@/lib/auth'
 import { getUserId } from '@/lib/session'
-import type { VertexContent } from '@/lib/ai/vertex-auth'
 
 interface AttachedFile {
   name:     string
@@ -396,10 +395,10 @@ export async function POST(req: NextRequest) {
 
       const hasFiles = messages.some(m => m.files && m.files.length > 0)
 
-      if (provider === 'vertex') {
-        // Vertex/Gemini contents — inject file text inline, images as inlineData
-        const vertexContents: VertexContent[] = messages.map((m) => {
-          if (!m.files?.length) return { role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }
+      if (provider === 'gemini' || provider === 'vertex') {
+        // Build Gemini contents — inject file text inline, images as inlineData
+        const geminiContents = messages.map((m) => {
+          if (!m.files?.length) return { role: m.role as 'user' | 'model', parts: [{ text: m.content }] }
           const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = []
           const textFiles = m.files.filter(f => !f.mimeType.startsWith('image/'))
           const imgFiles  = m.files.filter(f => f.mimeType.startsWith('image/'))
@@ -415,36 +414,56 @@ export async function POST(req: NextRequest) {
           return { role: m.role === 'assistant' ? 'model' : 'user', parts }
         })
 
-        const chatModel = process.env.AI_MODEL_QUALITY ?? 'gemini-3-flash-preview'
-        const { generateVertexContent, vertexText } = await import('@/lib/ai/vertex-auth')
-        const usageLabels = buildAiUsageLabels({
-          route: '/api/chat',
-          model: `vertex:${chatModel}`,
-          provider: 'vertex',
-          feature: 'chat',
-          subfeature: hasFiles ? 'message_with_files' : 'message',
-        })
-        const result = await generateVertexContent({
+        const chatModel = process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash'
+
+        // Vertex AI ผ่าน OIDC — request shape เดียวกับ Gemini SDK
+        if (provider === 'vertex') {
+          const { getVertexAccessToken, VERTEX_LOCATION, VERTEX_PROJECT } = await import('@/lib/ai/vertex-auth')
+          const token = await getVertexAccessToken()
+          // Gemini 3.x is served from the `global` location, whose endpoint is the
+          // un-prefixed host `aiplatform.googleapis.com` (NOT `global-aiplatform…`,
+          // which does not resolve). Regional locations keep the `<loc>-` prefix.
+          // Same rule as src/lib/ai/provider.ts — keep both in sync.
+          const vLoc = VERTEX_LOCATION()
+          const vHost = vLoc === 'global' ? 'aiplatform.googleapis.com' : `${vLoc}-aiplatform.googleapis.com`
+          const vRes = await fetch(`https://${vHost}/v1/projects/${VERTEX_PROJECT()}/locations/${vLoc}/publishers/google/models/${chatModel}:generateContent`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemWithCtx }] },
+              contents: geminiContents,
+              tools: [{ googleSearch: {} }],
+              generationConfig: { temperature: 0.75, maxOutputTokens: 65536 },
+            }),
+          })
+          if (!vRes.ok) throw new Error(`Vertex AI ${vRes.status}: ${(await vRes.text()).slice(0, 300)}`)
+          const vData = await vRes.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } }
+          const vu = vData.usageMetadata
+          if (vu) void logAiCost({ route: '/api/chat', model: `vertex:${chatModel}`, inputTokens: vu.promptTokenCount ?? 0, outputTokens: vu.candidatesTokenCount ?? 0, estimatedUSD: ((vu.promptTokenCount ?? 0) / 1e6) * 0.075 + ((vu.candidatesTokenCount ?? 0) / 1e6) * 0.30 })
+          const vText = (vData.candidates?.[0]?.content?.parts ?? []).map(pt => pt.text ?? '').join('')
+          return NextResponse.json({ content: vText, model: `vertex:${chatModel}` })
+        }
+
+        const { GoogleGenerativeAI } = await import('@google/generative-ai')
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+        const model = genAI.getGenerativeModel({
           model: chatModel,
-          systemPrompt: systemWithCtx,
-          contents: vertexContents,
-          temperature: 0.75,
-          maxTokens: 65536,
-          useGrounding: true,
-          labels: {
-            project: usageLabels.project,
-            provider: usageLabels.provider,
-            feature: usageLabels.feature,
-            subfeature: usageLabels.subfeature,
-          },
+          systemInstruction: systemWithCtx,
+          // Google Search grounding — Mercy can look up real-time market data, competitor info, industry news
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tools: [{ googleSearch: {} } as any],
         })
-        const chatUsage = result.usageMetadata
+
+        // eslint-disable-next-line
+        const result = await model.generateContent({ contents: geminiContents as any, generationConfig: { temperature: 0.75, maxOutputTokens: 65536 } })
+        const chatUsage = result.response.usageMetadata
         if (chatUsage) {
           const inp = chatUsage.promptTokenCount ?? 0
           const out = chatUsage.candidatesTokenCount ?? 0
-          void logAiCost({ route: '/api/chat', model: `vertex:${chatModel}`, inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30, provider: usageLabels.provider, feature: usageLabels.feature, subfeature: usageLabels.subfeature })
+          void logAiCost({ route: '/api/chat', model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash', inputTokens: inp, outputTokens: out, estimatedUSD: (inp / 1e6) * 0.075 + (out / 1e6) * 0.30 })
         }
-        return NextResponse.json({ content: vertexText(result), model: `vertex:${chatModel}` })
+        const text = result.response.text()
+        return NextResponse.json({ content: text, model: process.env.AI_MODEL_QUALITY ?? 'gemini-3.5-flash' })
       }
 
       if (provider === 'anthropic') {

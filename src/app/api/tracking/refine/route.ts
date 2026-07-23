@@ -128,9 +128,6 @@ notes format: "selector: X | element: Y | why: Z | test: W"
       {
         systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${TRACKING_CONTEXT}`,
         maxTokens: 65536,
-        _route: '/api/tracking/refine',
-        _feature: 'tracking',
-        _subfeature: 'refine',
       }
     );
 

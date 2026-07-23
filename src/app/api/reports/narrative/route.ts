@@ -202,7 +202,7 @@ ${recommendations?.filter((r) => r.priority === 'critical').map((r) => `- ${r.ti
 - ถ้า device/location ไม่มีข้อมูลให้บอกตรงๆ และ recommend วิธีเก็บข้อมูล`
 
   try {
-    const raw    = await callAI(prompt, { temperature: 0.3, maxTokens: 65536, tier: 'quality', useGrounding: true, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${ACCOUNT_TYPE_REPORTING_SKILL}`, _route: '/api/reports/narrative', _feature: 'reports', _subfeature: 'narrative' })
+    const raw    = await callAI(prompt, { temperature: 0.3, maxTokens: 65536, tier: 'quality', useGrounding: true, systemPrompt: `${EXECUTIVE_GROWTH_SKILL}\n\n${ACCOUNT_TYPE_REPORTING_SKILL}` })
     const start  = raw.indexOf('{')
     const end    = raw.lastIndexOf('}')
     if (start === -1 || end === -1) return NextResponse.json(fallback)
