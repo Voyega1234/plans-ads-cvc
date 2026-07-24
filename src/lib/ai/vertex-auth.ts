@@ -5,7 +5,7 @@
  *
  * เปิดใช้เมื่อครบ env ทั้งชุด (ตั้งใน Vercel หลัง connect OIDC กับ GCP):
  *   GCP_PROJECT_ID · GCP_PROJECT_NUMBER · GCP_WORKLOAD_IDENTITY_POOL_ID
- *   GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID · GCP_SERVICE_ACCOUNT_EMAIL
+ *   GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID · GCP_SERVICE_ACCOUNT_EMAIL · GCP_AUDIENCE
  *   (optional) VERTEX_LOCATION — default us-central1
  * ไม่ครบ = โหมดเดิมทุกอย่าง (GEMINI_API_KEY / ANTHROPIC_API_KEY)
  */
@@ -16,7 +16,8 @@ export function isVertexConfigured(): boolean {
     process.env.GCP_PROJECT_NUMBER &&
     process.env.GCP_WORKLOAD_IDENTITY_POOL_ID &&
     process.env.GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID &&
-    process.env.GCP_SERVICE_ACCOUNT_EMAIL
+    process.env.GCP_SERVICE_ACCOUNT_EMAIL &&
+    process.env.GCP_AUDIENCE
   )
 }
 
@@ -33,6 +34,8 @@ export async function getVertexAccessToken(): Promise<string> {
 
   const { ExternalAccountClient } = await import('google-auth-library')
   const { getVercelOidcToken } = await import('@vercel/oidc')
+  const vercelAudience = process.env.GCP_AUDIENCE
+  if (!vercelAudience) throw new Error('Vertex OIDC: ต้องตั้ง GCP_AUDIENCE ให้ตรงกับ Allowed audience ของ GCP provider')
 
   const client = ExternalAccountClient.fromJSON({
     type: 'external_account',
@@ -40,7 +43,9 @@ export async function getVertexAccessToken(): Promise<string> {
     subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
     token_url: 'https://sts.googleapis.com/v1/token',
     service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${process.env.GCP_SERVICE_ACCOUNT_EMAIL}:generateAccessToken`,
-    subject_token_supplier: { getSubjectToken: getVercelOidcToken },
+    // Exchange Vercel's runtime token so its aud claim exactly matches the
+    // audience allowed by the GCP workload identity provider.
+    subject_token_supplier: { getSubjectToken: () => getVercelOidcToken({ audience: vercelAudience }) },
   })
   if (!client) throw new Error('Vertex OIDC: สร้าง auth client ไม่สำเร็จ — เช็ค GCP_* env')
   client.scopes = ['https://www.googleapis.com/auth/cloud-platform']
