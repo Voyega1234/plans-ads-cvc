@@ -4,11 +4,27 @@
 // ingest API, then points every element with [data-line-add] to /line/start.
 
 const SNIPPET = `(function(){
+  // Locate OUR script tag. document.currentScript is null when a tag manager injects
+  // the snippet — GTM Custom HTML appends the <script> asynchronously — and the old
+  // fallback ("the last <script> in the document") then landed on some unrelated
+  // third-party script. data-project read null, so this bailed out with
+  // "[LINEHub] missing data-project" and never tracked a single visit. Confirmed live
+  // on a GTM-managed WordPress site, where the visitor count sat at 1 for weeks.
+  // So: identify the tag by what actually marks it, and accept window globals too,
+  // for tag managers that do not carry data-* attributes through.
+  function pick(sel){ var n = document.querySelectorAll(sel); return n[n.length-1] || null; }
   var s = document.currentScript;
-  if(!s){ s = (function(){var a=document.getElementsByTagName('script');return a[a.length-1];})(); }
-  var project = s.getAttribute('data-project');
-  var hub = s.getAttribute('data-hub') || new URL(s.src).origin;
+  if(!s || !s.getAttribute('data-project')){ s = pick('script[data-project]') || s; }
+
+  var project = (s && s.getAttribute('data-project')) || window.LINEHubProject;
   if(!project){ console.warn('[LINEHub] missing data-project'); return; }
+
+  // Same story for the hub origin: fall back to whichever tag loaded embed.js, since
+  // that is by definition the hub, then to an explicit global.
+  var srcEl = (s && s.src) ? s : pick('script[src*="/embed.js"]');
+  var hub = (s && s.getAttribute('data-hub')) || window.LINEHubHost ||
+            (srcEl && srcEl.src ? new URL(srcEl.src).origin : '');
+  if(!hub){ console.warn('[LINEHub] cannot resolve hub origin'); return; }
 
   function qp(name){
     var m = new RegExp('[?&]'+name+'=([^&#]*)').exec(location.search);
@@ -30,7 +46,12 @@ const SNIPPET = `(function(){
   };
 
   var LS = 'linehub_click_' + project;
-  function isLineLink(h){ return /lin\\.ee|line\\.me|liff\\.line|line:\\/\\//i.test(h || ''); }
+  // Recognise every common "go to our LINE OA" URL shape. Besides LINE's own hosts
+  // (lin.ee / line.me / liff.line / line://), Thai sites frequently route the button
+  // through a QR/redirect service — lineutm.com being the one in the wild here — so a
+  // click on it is still an Add-LINE intent and must count. Miss it and the "กดปุ่ม
+  // Add LINE" funnel stage stays 0 and lead attribution loses its 3h click window.
+  function isLineLink(h){ return /lin\\.ee|line\\.me|liff\\.line|line:\\/\\/|lineutm\\.com/i.test(h || ''); }
   function wire(clickId){
     // Remember the click; DO NOT change the LINE button — keep native 1-tap add.
     try { localStorage.setItem(LS, clickId); } catch(e){}

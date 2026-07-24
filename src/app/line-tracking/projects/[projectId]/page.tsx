@@ -38,30 +38,30 @@ export default async function ProjectOverview({
   const { projectId } = await params;
   const sp = await searchParams;
   const days = [7, 30, 90].includes(Number(sp.days)) ? Number(sp.days) : 7;
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    include: { connections: true, trackingLinks: true },
-  });
+  // Everything on this page keys off `projectId` from the URL, so it all goes out in a
+  // single round-trip wave — the project row and the session used to be awaited first,
+  // holding back the rest. `project.id` is the same value as `projectId`.
+  // Includes the period-over-period comparison (last N days vs the N days before).
+  const [project, session, cmp, stats, channels, statusDist, funnel, lineLife, recentLeads, recentEvents] =
+    await Promise.all([
+      prisma.project.findUnique({
+        where: { id: projectId },
+        include: { connections: true, trackingLinks: true },
+      }),
+      getAuthSession(),
+      getPeriodComparison(projectId, days),
+      getProjectStats(projectId),
+      getChannelBreakdown(projectId),
+      getStatusDistribution(projectId),
+      getFunnel(projectId),
+      getLineLifecycle(projectId),
+      prisma.lead.findMany({ where: { projectId }, orderBy: { createdAt: "desc" }, take: 6 }),
+      prisma.conversionEvent.findMany({ where: { projectId }, orderBy: { createdAt: "desc" }, take: 6 }),
+    ]);
   if (!project) notFound();
 
   // Staff (next-auth) see full controls/setup; client viewers get a read-only overview.
-  const session = await getAuthSession();
   const isStaff = !!session?.user?.id;
-
-  // Auto period-over-period comparison (last N days vs the N days before).
-  // Folded into the Promise.all below so it runs concurrently with the rest
-  // instead of serializing an extra round-trip batch before them.
-  const [cmp, stats, channels, statusDist, funnel, lineLife, recentLeads, recentEvents] =
-    await Promise.all([
-      getPeriodComparison(project.id, days),
-      getProjectStats(project.id),
-      getChannelBreakdown(project.id),
-      getStatusDistribution(project.id),
-      getFunnel(project.id),
-      getLineLifecycle(project.id),
-      prisma.lead.findMany({ where: { projectId: project.id }, orderBy: { createdAt: "desc" }, take: 6 }),
-      prisma.conversionEvent.findMany({ where: { projectId: project.id }, orderBy: { createdAt: "desc" }, take: 6 }),
-    ]);
 
   const progress = setupProgress(project.connections);
   const statusMap = connectionStatusMap(project.connections);
@@ -155,7 +155,7 @@ export default async function ProjectOverview({
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <KpiCard label="เข้าเว็บ (ทุกช่องทาง)" value={funnel.stages[0].count.toLocaleString()} accent="bg-sky-100" icon="👆" />
+        <KpiCard label="ผู้เข้าเว็บ (unique)" value={funnel.stages[0].count.toLocaleString()} accent="bg-sky-100" icon="👆" />
         <KpiCard label="Leads (แอด LINE)" value={stats.totalLeads.toLocaleString()} accent="bg-teal-100" icon="🧑‍🤝‍🧑" />
         <KpiCard label="คุณภาพผ่าน (สะสม)" value={qualifiedReached.toLocaleString()} accent="bg-violet-100" icon="⭐" />
         <KpiCard label="ปิดการขาย" value={stats.purchases.toLocaleString()} accent="bg-line-500/15" icon="💰" />

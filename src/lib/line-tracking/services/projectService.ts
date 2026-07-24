@@ -160,50 +160,70 @@ export function connectionStatusMap(
 
 // ---- Dashboard aggregates -------------------------------------------------
 
+/**
+ * These pages are force-dynamic, so every query is a fresh round-trip to a remote
+ * Postgres — and a serverless function only holds a handful of connections, so the
+ * cost of a page is driven by HOW MANY queries it fires, not how much data it reads.
+ * The helpers below collapse repeated counts over the same table into one grouped
+ * query and do the (trivial) arithmetic in memory instead. Same numbers, fewer trips.
+ */
+type StatusRow<S extends string = string> = { status: S; _count: number };
+
+/** Total across every status bucket. */
+function sumAll(rows: StatusRow[]): number {
+  return rows.reduce((n, r) => n + r._count, 0);
+}
+
+/** Total across the given statuses only. */
+function sumOf(rows: StatusRow[], statuses: readonly string[]): number {
+  return rows.reduce((n, r) => (statuses.includes(r.status) ? n + r._count : n), 0);
+}
+
+// Funnel stages are CUMULATIVE — a lead sitting in WON has already passed
+// contacted/qualified/quoted, so each stage is the set of statuses at or beyond it.
+const PURCHASED: readonly string[] = ["WON", "PAID"];
+const REACHED_QUOTED: readonly string[] = ["QUOTED", ...PURCHASED];
+const REACHED_QUALIFIED: readonly string[] = ["QUALIFIED", ...REACHED_QUOTED];
+const REACHED_CONTACTED: readonly string[] = ["CONTACTED", ...REACHED_QUALIFIED];
+
 export async function getAgencyDashboardStats() {
-  const [
-    totalProjects,
-    activeProjects,
-    totalLeads,
-    qualifiedLeads,
-    purchases,
-    conversionSent,
-    conversionFailed,
-  ] = await Promise.all([
-    prisma.project.count(),
-    prisma.project.count({ where: { status: "LIVE" } }),
-    prisma.lead.count(),
-    prisma.lead.count({ where: { status: "QUALIFIED" } }),
-    prisma.lead.count({ where: { status: { in: ["WON", "PAID"] } } }),
-    prisma.conversionEvent.count({ where: { status: "SENT" } }),
-    prisma.conversionEvent.count({ where: { status: "FAILED" } }),
+  // Was 7 separate counts (2 project + 3 lead + 2 conversionEvent). Each table is now
+  // asked once, grouped by status, and the buckets are summed here.
+  const [projectRows, leadRows, eventRows] = await Promise.all([
+    prisma.project.groupBy({ by: ["status"], _count: true }),
+    prisma.lead.groupBy({ by: ["status"], _count: true }),
+    prisma.conversionEvent.groupBy({ by: ["status"], _count: true }),
   ]);
 
   return {
-    totalProjects,
-    activeProjects,
-    totalLeads,
-    qualifiedLeads,
-    purchases,
-    conversionSent,
-    conversionFailed,
+    totalProjects: sumAll(projectRows),
+    activeProjects: sumOf(projectRows, ["LIVE"]),
+    totalLeads: sumAll(leadRows),
+    qualifiedLeads: sumOf(leadRows, ["QUALIFIED"]),
+    purchases: sumOf(leadRows, PURCHASED),
+    conversionSent: sumOf(eventRows, ["SENT"]),
+    conversionFailed: sumOf(eventRows, ["FAILED"]),
   };
 }
 
 /** Lead counts grouped by channelGroup, with purchases per channel. */
 export async function getChannelBreakdown(projectId: string) {
-  const leads = await prisma.lead.findMany({
+  // Was a findMany of every lead row for the project, aggregated in JS. Postgres can
+  // do the same fold itself — one grouped query, a handful of rows back instead of all.
+  const rows = await prisma.lead.groupBy({
+    by: ["channelGroup", "status"],
     where: { projectId },
-    select: { channelGroup: true, status: true, value: true },
+    _count: true,
+    _sum: { value: true },
   });
   const map = new Map<string, { leads: number; purchases: number; revenue: number }>();
-  for (const l of leads) {
-    const key = l.channelGroup ?? "Direct";
+  for (const r of rows) {
+    const key = r.channelGroup ?? "Direct";
     const row = map.get(key) ?? { leads: 0, purchases: 0, revenue: 0 };
-    row.leads += 1;
-    if (l.status === "WON" || l.status === "PAID") {
-      row.purchases += 1;
-      row.revenue += l.value;
+    row.leads += r._count;
+    if (r.status === "WON" || r.status === "PAID") {
+      row.purchases += r._count;
+      row.revenue += r._sum.value ?? 0;
     }
     map.set(key, row);
   }
@@ -214,12 +234,20 @@ export async function getChannelBreakdown(projectId: string) {
 
 /** LINE lifecycle funnel counts: friends / engaged (messaged) / blocked. */
 export async function getLineLifecycle(projectId: string) {
-  const [friends, engaged, blocked] = await Promise.all([
-    prisma.lineUser.count({ where: { projectId, friendStatus: "FRIEND" } }),
-    prisma.lineUser.count({ where: { projectId, lastMessageAt: { not: null } } }),
-    prisma.lineUser.count({ where: { projectId, friendStatus: "BLOCKED" } }),
-  ]);
-  return { friends, engaged, blocked };
+  // Was 3 counts over the same table. One grouped read gives all three: `_all` per
+  // friendStatus covers friends/blocked, and the non-null `lastMessageAt` count summed
+  // across every group is the old unfiltered "has messaged us" count.
+  const rows = await prisma.lineUser.groupBy({
+    by: ["friendStatus"],
+    where: { projectId },
+    _count: { _all: true, lastMessageAt: true },
+  });
+  const totalFor = (s: string) => rows.find((r) => r.friendStatus === s)?._count._all ?? 0;
+  return {
+    friends: totalFor("FRIEND"),
+    engaged: rows.reduce((n, r) => n + r._count.lastMessageAt, 0),
+    blocked: totalFor("BLOCKED"),
+  };
 }
 
 /** Full funnel broken down by channel: visit → button click → lead → purchase. */
@@ -232,17 +260,23 @@ export async function getChannelFunnel(
       ? { createdAt: { ...(range.from ? { gte: range.from } : {}), ...(range.to ? { lte: range.to } : {}) } }
       : {};
 
-  const reachedByCh = (statuses: string[]) =>
-    prisma.lead.groupBy({ by: ["channelGroup"], where: { projectId, status: { in: statuses }, ...inRange }, _count: true });
-
-  const [visits, btnClicks, leads, contacted, qualified, quoted, purchases] = await Promise.all([
-    prisma.adClick.groupBy({ by: ["channelGroup"], where: { projectId, ...inRange }, _count: true }),
-    prisma.adClick.groupBy({ by: ["channelGroup"], where: { projectId, lineClickedAt: { not: null }, ...inRange }, _count: true }),
-    prisma.lead.groupBy({ by: ["channelGroup"], where: { projectId, ...inRange }, _count: true }),
-    reachedByCh(["CONTACTED", "QUALIFIED", "QUOTED", "WON", "PAID"]),
-    reachedByCh(["QUALIFIED", "QUOTED", "WON", "PAID"]),
-    reachedByCh(["QUOTED", "WON", "PAID"]),
-    prisma.lead.groupBy({ by: ["channelGroup"], where: { projectId, status: { in: ["WON", "PAID"] }, ...inRange }, _count: true, _sum: { value: true } }),
+  // Was 7 queries: 2 over adClick and 5 over lead, one per cumulative funnel stage.
+  // Both tables are now read once, grouped, and the cumulative stages are derived here
+  // — a lead in WON counts toward contacted/qualified/quoted/purchases exactly as before.
+  // adClick uses a field-level count: `_all` is every click, `lineClickedAt` counts only
+  // the rows where that column is non-null, i.e. the old `{ not: null }` filter.
+  const [clickRows, leadRows] = await Promise.all([
+    prisma.adClick.groupBy({
+      by: ["channelGroup"],
+      where: { projectId, ...inRange },
+      _count: { _all: true, lineClickedAt: true },
+    }),
+    prisma.lead.groupBy({
+      by: ["channelGroup", "status"],
+      where: { projectId, ...inRange },
+      _count: true,
+      _sum: { value: true },
+    }),
   ]);
 
   type Row = { channel: string; visits: number; btnClicks: number; leads: number; contacted: number; qualified: number; quoted: number; purchases: number; revenue: number };
@@ -252,16 +286,21 @@ export async function getChannelFunnel(
     if (!map.has(key)) map.set(key, { channel: key, visits: 0, btnClicks: 0, leads: 0, contacted: 0, qualified: 0, quoted: 0, purchases: 0, revenue: 0 });
     return map.get(key)!;
   };
-  for (const v of visits) row(v.channelGroup).visits += v._count;
-  for (const b of btnClicks) row(b.channelGroup).btnClicks += b._count;
-  for (const l of leads) row(l.channelGroup).leads += l._count;
-  for (const c of contacted) row(c.channelGroup).contacted += c._count;
-  for (const q of qualified) row(q.channelGroup).qualified += q._count;
-  for (const q of quoted) row(q.channelGroup).quoted += q._count;
-  for (const p of purchases) {
-    const r = row(p.channelGroup);
-    r.purchases += p._count;
-    r.revenue += p._sum.value ?? 0;
+  for (const c of clickRows) {
+    const r = row(c.channelGroup);
+    r.visits += c._count._all;
+    r.btnClicks += c._count.lineClickedAt;
+  }
+  for (const l of leadRows) {
+    const r = row(l.channelGroup);
+    r.leads += l._count;
+    if (REACHED_CONTACTED.includes(l.status)) r.contacted += l._count;
+    if (REACHED_QUALIFIED.includes(l.status)) r.qualified += l._count;
+    if (REACHED_QUOTED.includes(l.status)) r.quoted += l._count;
+    if (PURCHASED.includes(l.status)) {
+      r.purchases += l._count;
+      r.revenue += l._sum.value ?? 0;
+    }
   }
   // Best performers first: revenue → purchases → visits.
   return Array.from(map.values()).sort(
@@ -291,28 +330,42 @@ export async function getFunnel(
     range?.from || range?.to
       ? { createdAt: { ...(range.from ? { gte: range.from } : {}), ...(range.to ? { lte: range.to } : {}) } }
       : {};
-  const reached = (statuses: string[]) =>
-    prisma.lead.count({ where: { projectId, status: { in: statuses }, ...inRange } });
+  // Was 9 queries: 2 adClick counts, 5 lead counts (one per cumulative stage), a
+  // lineUser count and a revenue aggregate. adClick and lead are each read once now.
+  const [clickAgg, leadRows, blocked] = await Promise.all([
+    prisma.adClick.aggregate({
+      where: { projectId, ...inRange },
+      _count: { _all: true, lineClickedAt: true },
+    }),
+    prisma.lead.groupBy({
+      by: ["status"],
+      where: { projectId, ...inRange },
+      _count: true,
+      _sum: { value: true },
+    }),
+    prisma.lineUser.count({ where: { projectId, friendStatus: "BLOCKED", ...inRange } }),
+  ]);
 
-  const [clicks, lineClicks, added, contacted, qualified, quoted, purchased, blocked, revenueAgg] =
-    await Promise.all([
-      prisma.adClick.count({ where: { projectId, ...inRange } }),
-      prisma.adClick.count({ where: { projectId, lineClickedAt: { not: null }, ...inRange } }),
-      prisma.lead.count({ where: { projectId, ...inRange } }),
-      reached(["CONTACTED", "QUALIFIED", "QUOTED", "WON", "PAID"]),
-      reached(["QUALIFIED", "QUOTED", "WON", "PAID"]),
-      reached(["QUOTED", "WON", "PAID"]),
-      reached(["WON", "PAID"]),
-      prisma.lineUser.count({ where: { projectId, friendStatus: "BLOCKED", ...inRange } }),
-      prisma.lead.aggregate({
-        where: { projectId, status: { in: ["WON", "PAID"] }, ...inRange },
-        _sum: { value: true },
-      }),
-    ]);
+  const clicks = clickAgg._count._all;
+  const lineClicks = clickAgg._count.lineClickedAt;
+  const added = sumAll(leadRows);
+  const contacted = sumOf(leadRows, REACHED_CONTACTED);
+  const qualified = sumOf(leadRows, REACHED_QUALIFIED);
+  const quoted = sumOf(leadRows, REACHED_QUOTED);
+  const purchased = sumOf(leadRows, PURCHASED);
+  const revenue = leadRows.reduce(
+    (n, r) => (PURCHASED.includes(r.status) ? n + (r._sum.value ?? 0) : n),
+    0
+  );
 
   return {
     stages: [
-      { key: "click", label: "เข้าเว็บ/คลิก", sub: "Visit / click", count: clicks },
+      // Counts AdClick rows, and embed.js records ONE per browser (it reuses the
+      // clickId it stashed in localStorage on every later visit that arrives with no
+      // utm/gclid). So a visitor who returns direct ten times is still 1 — which is
+      // what we want for attribution, but "เข้าเว็บ/คลิก" read as a visit counter and
+      // looked broken. Labelled as unique visitors to match what the number is.
+      { key: "click", label: "ผู้เข้าเว็บ (unique)", sub: "Unique visitors", count: clicks },
       { key: "lineclick", label: "กดปุ่ม LINE", sub: "Clicked Add-LINE", count: lineClicks },
       { key: "add", label: "แอด LINE", sub: "Added friend", count: added },
       { key: "contact", label: "ทักแชต", sub: "Messaged", count: contacted },
@@ -321,7 +374,7 @@ export async function getFunnel(
       { key: "purchase", label: "ปิดการขาย", sub: "Won / Paid", count: purchased },
     ],
     blocked,
-    revenue: revenueAgg._sum.value ?? 0,
+    revenue,
   };
 }
 
@@ -353,15 +406,19 @@ export async function getAgencyStatusDistribution() {
 }
 
 export async function getProjectStats(projectId: string) {
-  const [totalLeads, qualifiedLeads, purchases, sent, failed, pending] = await Promise.all([
-    prisma.lead.count({ where: { projectId } }),
-    prisma.lead.count({ where: { projectId, status: "QUALIFIED" } }),
-    prisma.lead.count({ where: { projectId, status: { in: ["WON", "PAID"] } } }),
-    prisma.conversionEvent.count({ where: { projectId, status: "SENT" } }),
-    prisma.conversionEvent.count({ where: { projectId, status: "FAILED" } }),
-    prisma.conversionEvent.count({ where: { projectId, status: "PENDING" } }),
+  // Was 6 counts (3 lead + 3 conversionEvent); now one grouped read per table.
+  const [leadRows, eventRows] = await Promise.all([
+    prisma.lead.groupBy({ by: ["status"], where: { projectId }, _count: true }),
+    prisma.conversionEvent.groupBy({ by: ["status"], where: { projectId }, _count: true }),
   ]);
-  return { totalLeads, qualifiedLeads, purchases, sent, failed, pending };
+  return {
+    totalLeads: sumAll(leadRows),
+    qualifiedLeads: sumOf(leadRows, ["QUALIFIED"]),
+    purchases: sumOf(leadRows, PURCHASED),
+    sent: sumOf(eventRows, ["SENT"]),
+    failed: sumOf(eventRows, ["FAILED"]),
+    pending: sumOf(eventRows, ["PENDING"]),
+  };
 }
 
 /**
@@ -374,13 +431,20 @@ export async function getPeriodComparison(projectId: string, days: number) {
   const curFrom = new Date(now.getTime() - days * DAY);
   const prevFrom = new Date(now.getTime() - 2 * days * DAY);
 
+  // One grouped read per window (was 3: a count, a filtered count and a sum over the
+  // very same rows). Leads/purchases/revenue all fall out of the status buckets.
   const metrics = async (from: Date, to: Date) => {
-    const [leads, purchases, rev] = await Promise.all([
-      prisma.lead.count({ where: { projectId, createdAt: { gte: from, lt: to } } }),
-      prisma.lead.count({ where: { projectId, status: { in: ["WON", "PAID"] }, createdAt: { gte: from, lt: to } } }),
-      prisma.lead.aggregate({ _sum: { value: true }, where: { projectId, status: { in: ["WON", "PAID"] }, createdAt: { gte: from, lt: to } } }),
-    ]);
-    return { leads, purchases, revenue: rev._sum.value ?? 0 };
+    const rows = await prisma.lead.groupBy({
+      by: ["status"],
+      where: { projectId, createdAt: { gte: from, lt: to } },
+      _count: true,
+      _sum: { value: true },
+    });
+    return {
+      leads: sumAll(rows),
+      purchases: sumOf(rows, PURCHASED),
+      revenue: rows.reduce((n, r) => (PURCHASED.includes(r.status) ? n + (r._sum.value ?? 0) : n), 0),
+    };
   };
 
   // The two windows are independent — run them concurrently (was 2 sequential waves).

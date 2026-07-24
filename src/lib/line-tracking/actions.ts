@@ -151,6 +151,56 @@ export async function testConnectionAction(formData: FormData) {
   revalidatePath(`/line-tracking/projects/${projectId}`);
 }
 
+/**
+ * Test step 1 of onboarding ("วางโค้ด Tracking บนเว็บไซต์ลูกค้า") on demand,
+ * the same way the LINE card has a Test button. The checklist itself only flips
+ * once real traffic arrives, which gives no answer to "did I paste it right?" —
+ * so this fetches the client site and looks for embed.js bound to THIS project
+ * slug. The verdict travels back in the query string, so no schema change.
+ */
+export async function testEmbedAction(formData: FormData) {
+  await requireStaff();
+  const projectId = String(formData.get("projectId"));
+  const base = `/line-tracking/projects/${projectId}/setup`;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { slug: true, websiteUrl: true },
+  });
+  if (!project) redirect(base);
+
+  const site = project.websiteUrl?.trim();
+  if (!site) redirect(`${base}?embedTest=nourl`);
+
+  let verdict: "ok" | "wrongslug" | "missing" | "unreachable";
+  try {
+    const url = /^https?:\/\//i.test(site) ? site : `https://${site}`;
+    const res = await fetch(url, {
+      redirect: "follow",
+      cache: "no-store",
+      // Some sites serve a different page to unknown agents — look like a browser.
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; LINEHubSetupCheck/1.0)" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      verdict = "unreachable";
+    } else {
+      const html = await res.text();
+      const hasScript = html.includes("/embed.js");
+      const hasSlug =
+        html.includes(`data-project="${project.slug}"`) ||
+        html.includes(`data-project='${project.slug}'`);
+      verdict = hasScript && hasSlug ? "ok" : hasScript ? "wrongslug" : "missing";
+    }
+  } catch {
+    // DNS failure, TLS error, timeout — all "we could not read the page".
+    verdict = "unreachable";
+  }
+
+  revalidatePath(base);
+  redirect(`${base}?embedTest=${verdict}`);
+}
+
 // ---- Conversion rules -----------------------------------------------------
 
 export async function updateConversionRuleAction(formData: FormData) {

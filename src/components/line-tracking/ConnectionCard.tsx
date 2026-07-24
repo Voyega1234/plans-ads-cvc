@@ -6,9 +6,31 @@ import { saveConnectionAction, testConnectionAction } from "@/lib/line-tracking/
 import { isRealMode } from "@/lib/line-tracking/connectors";
 import { CopyButton } from "@/components/line-tracking/CopyButton";
 import { CollapsibleCard } from "@/components/line-tracking/CollapsibleCard";
+import { getTrackingBaseUrl } from "@/lib/line-tracking/services/trackingService";
 import type { ConnectionType } from "@/lib/line-tracking/enums";
 import type { ProjectConnection } from "@prisma/client";
 import { fmtDate } from "@/lib/line-tracking/format";
+
+/**
+ * Secret fields render EMPTY on purpose — the stored value is never sent to the
+ * browser, and a blank submit means "keep what's saved" (saveConnectionConfig skips
+ * blank values). That contract breaks if something else fills the box for the user:
+ * a browser password manager sees several `type="password"` inputs on this page and
+ * can inject a saved login into them. The injected value is NOT blank, so it sails
+ * past the keep-existing guard and overwrites the real channel secret / access token
+ * on the next Save — after which LINE's signature check fails and webhook events are
+ * rejected with nothing on screen to explain it. These attributes tell Chrome/Safari
+ * and the common password managers to leave the field alone.
+ */
+function secretFieldGuards(isSecret?: boolean) {
+  if (!isSecret) return { autoComplete: "off" };
+  return {
+    autoComplete: "new-password",
+    "data-1p-ignore": "true",
+    "data-lpignore": "true",
+    "data-bwignore": "true",
+  };
+}
 
 export async function ConnectionCard({
   projectId,
@@ -44,7 +66,12 @@ export async function ConnectionCard({
   );
 
   const guide = CONNECTOR_GUIDE[type];
-  const baseUrl = process.env.TRACKING_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || "";
+  // Was reading TRACKING_BASE_URL / NEXT_PUBLIC_APP_URL directly, so with neither set
+  // this rendered a domain-less "/api/webhooks/line/<id>" — paste that into LINE and no
+  // event ever reaches us. getTrackingBaseUrl() is the same helper the tracking links
+  // already use and falls back to the Vercel deployment URL, so the address is correct
+  // out of the box; setting TRACKING_BASE_URL still overrides it (e.g. a custom domain).
+  const baseUrl = getTrackingBaseUrl();
   const lineWebhookUrl = type === "LINE" ? `${baseUrl}/api/webhooks/line/${projectId}` : null;
 
   return (
@@ -73,7 +100,11 @@ export async function ConnectionCard({
             <code className="flex-1 break-all rounded bg-white px-2 py-1 text-slate-700">{lineWebhookUrl}</code>
             <CopyButton text={lineWebhookUrl} label="Copy" />
           </div>
-          {!baseUrl && <div className="mt-1 text-rose-500">⚠️ ยังไม่ได้ตั้ง TRACKING_BASE_URL — URL จะไม่สมบูรณ์</div>}
+          {baseUrl.includes("localhost") && (
+            <div className="mt-1 text-rose-500">
+              ⚠️ นี่เป็น URL ของเครื่อง dev — LINE เรียกไม่ถึง ตั้ง TRACKING_BASE_URL เป็นโดเมนจริงก่อนใช้งาน
+            </div>
+          )}
         </div>
       )}
 
@@ -114,6 +145,7 @@ export async function ConnectionCard({
                   name={f.key}
                   rows={3}
                   className="input font-mono text-xs"
+                  {...secretFieldGuards(f.secret)}
                   placeholder={
                     f.secret && current
                         ? "•••••• (บันทึกไว้แล้ว — เว้นว่างถ้าไม่เปลี่ยน)"
@@ -133,6 +165,7 @@ export async function ConnectionCard({
                 type={f.secret ? "password" : "text"}
                 className="input"
                 defaultValue={f.secret ? "" : current ?? ""}
+                {...secretFieldGuards(f.secret)}
                 placeholder={
                     f.secret && current
                       ? `${maskSecret(current)} — เว้นว่างถ้าไม่เปลี่ยน`

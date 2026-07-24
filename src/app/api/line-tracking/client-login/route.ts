@@ -47,10 +47,30 @@ export async function POST(req: NextRequest) {
   // Logging in as a client switches the browser fully to client mode — clear any
   // staff (next-auth) session so the client never sees the MercyOS chrome, even in
   // the same browser that was used for staff dev-login/Google login.
-  for (const name of [
-    'authjs.session-token', '__Secure-authjs.session-token',
-    'next-auth.session-token', '__Secure-next-auth.session-token',
-  ]) cookieStore.delete(name)
+  //
+  // Deleting a cookie is just a Set-Cookie with Max-Age=0, and the browser applies the
+  // SAME rules to it as to any other Set-Cookie. next-auth names its production cookie
+  // `__Secure-authjs.session-token`, and the `__Secure-` prefix is only honoured when
+  // the Secure attribute is present — so a bare `cookies().delete(name)` (which emits
+  // no Secure) is silently REJECTED and the staff session survives. The client viewer
+  // then renders with a live staff session and gets the full MercyOS chrome plus every
+  // other client's data. Hence: delete by writing an expired cookie with the attributes
+  // spelled out. Secure is set only for the `__Secure-` names, so the plain-HTTP names
+  // used in local dev are still removable there.
+  //
+  // Matching on the live cookie jar (rather than a hardcoded list) also covers the
+  // numbered chunks next-auth splits large session cookies into (`…session-token.0`).
+  const STAFF_SESSION_COOKIE = /^(__Secure-)?(authjs|next-auth)\.session-token(\.\d+)?$/
+  for (const { name } of cookieStore.getAll()) {
+    if (!STAFF_SESSION_COOKIE.test(name)) continue
+    cookieStore.set(name, '', {
+      path: '/',
+      maxAge: 0,
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: name.startsWith('__Secure-'),
+    })
+  }
 
   return NextResponse.json({ ok: true, projectId: record.projectId })
 }

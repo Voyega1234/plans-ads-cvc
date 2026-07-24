@@ -11,8 +11,9 @@ import { ConversionRuleRow } from "@/components/line-tracking/ConversionRuleRow"
 import { CopyButton } from "@/components/line-tracking/CopyButton";
 import { DeleteProjectCard } from "@/components/line-tracking/DeleteProjectCard";
 import { Progress, StatusBadge } from "@/components/line-tracking/ui";
-import { setProjectStatusAction } from "@/lib/line-tracking/actions";
+import { setProjectStatusAction, testEmbedAction } from "@/lib/line-tracking/actions";
 import { buildTrackingUrl, getTrackingBaseUrl } from "@/lib/line-tracking/services/trackingService";
+import { fmtDate } from "@/lib/line-tracking/format";
 import type { ConnectionType } from "@/lib/line-tracking/enums";
 import { AD_CONNECTION_TYPES, LEAD_STATUS, LEAD_STATUS_LABEL } from "@/lib/line-tracking/enums";
 import type { LeadStatus } from "@/lib/line-tracking/enums";
@@ -42,25 +43,36 @@ export default async function SetupWizard({
   searchParams,
 }: {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ step?: string }>;
+  searchParams: Promise<{ step?: string; embedTest?: string }>;
 }) {
   const { projectId } = await params;
   const query = await searchParams;
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    include: { connections: true, conversionRules: { orderBy: { leadStatus: "asc" } } },
-  });
+  // One round-trip wave instead of two. The project row used to be awaited on its own
+  // before this batch could even start, but nothing in the batch needs it — every query
+  // keys off `projectId` straight from the URL, and `project.id` is that same value.
+  // Only allowlisted staff (apps/bob/varn@convertcake.com) may create client logins.
+  const [project, readiness, staffSession, embedClicks, leadCount, webhookLogs] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id: projectId },
+      include: { connections: true, conversionRules: { orderBy: { leadStatus: "asc" } } },
+    }),
+    getProjectReadiness(projectId),
+    getAuthSession(),
+    prisma.adClick.count({ where: { projectId } }),
+    prisma.lead.count({ where: { projectId } }),
+    // 10 webhook ล่าสุดที่ LINE ยิงเข้ามา — ให้ผู้ใช้เช็คเองได้ว่า LINE ต่อถึงระบบไหม
+    // โดยไม่ต้องพึ่ง dev เปิด Vercel logs. ระบบเขียน row นี้ทุกครั้งที่ webhook ถูกเรียก.
+    prisma.webhookLog.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, source: true, status: true, errorMessage: true, createdAt: true, payload: true },
+    }),
+  ]);
   if (!project) notFound();
 
   const step = (STEPS.find((s) => s.key === query.step)?.key ?? "info") as StepKey;
   const progress = setupProgress(project.connections);
-  // Only allowlisted staff (apps/bob/varn@convertcake.com) may create client logins.
-  const [readiness, staffSession, embedClicks, leadCount] = await Promise.all([
-    getProjectReadiness(project.id),
-    getAuthSession(),
-    prisma.adClick.count({ where: { projectId: project.id } }),
-    prisma.lead.count({ where: { projectId: project.id } }),
-  ]);
   const notReady = readiness.filter((r) => !r.ready);
   const canManage = canManageClients(staffSession?.user?.email);
   const stepIndex = STEPS.findIndex((s) => s.key === step);
@@ -77,6 +89,32 @@ export default async function SetupWizard({
     (c) => mediaTypes.includes(c.type as ConnectionType) && c.status === "CONNECTED"
   ).length;
   const requiredDone = (embedInstalled ? 1 : 0) + (lineReady ? 1 : 0);
+
+  // Verdict from the step-1 "Test" button (?embedTest=…). Checks the live site for
+  // the snippet — separate from embedInstalled, which only flips on real traffic.
+  const EMBED_TEST_RESULT: Record<string, { tone: string; text: string }> = {
+    ok: {
+      tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      text: `✅ เจอโค้ด Tracking บนเว็บแล้ว และผูกกับโปรเจกต์นี้ถูกต้อง — เหลือแค่เปิดเว็บผ่านลิงก์ที่มี ?utm_source=… สักครั้ง เพื่อให้ระบบบันทึก click แรก`,
+    },
+    wrongslug: {
+      tone: "border-amber-200 bg-amber-50 text-amber-700",
+      text: `⚠️ เจอโค้ดบนเว็บ แต่ data-project ไม่ตรงกับโปรเจกต์นี้ (ต้องเป็น "${project.slug}") — แก้ให้ตรงแล้วกด Test ใหม่`,
+    },
+    missing: {
+      tone: "border-rose-200 bg-rose-50 text-rose-700",
+      text: "❌ เปิดเว็บได้ แต่ไม่พบโค้ด Tracking — ยังไม่ได้วาง, วางผิดหน้า (ต้องอยู่ทุกหน้า/หน้าแรก), หรือยังไม่ได้ publish เว็บ",
+    },
+    unreachable: {
+      tone: "border-amber-200 bg-amber-50 text-amber-700",
+      text: "⚠️ เข้าเว็บไม่ได้ (timeout / เว็บปิด / บล็อกการเข้าถึง) — เช็ค Website URL ให้ถูก แล้วลองใหม่",
+    },
+    nourl: {
+      tone: "border-amber-200 bg-amber-50 text-amber-700",
+      text: "⚠️ ยังไม่ได้ใส่ Website URL ของโปรเจกต์ — ใส่ในขั้น Project Info ก่อน แล้วกด Test ใหม่",
+    },
+  };
+  const embedTestMessage = query.embedTest ? EMBED_TEST_RESULT[query.embedTest] : undefined;
 
   return (
     <div className="space-y-6">
@@ -123,6 +161,25 @@ export default async function SetupWizard({
                   <code className="block flex-1 break-all rounded-lg bg-slate-900 p-2.5 text-[11px] text-slate-100">{embedSnippet}</code>
                   <CopyButton text={embedSnippet} label="Copy" />
                 </div>
+
+                {/* Test button — checks the live site for the snippet, like the LINE card's Test. */}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <form action={testEmbedAction}>
+                    <input type="hidden" name="projectId" value={project.id} />
+                    <button type="submit" className="btn-ghost text-sm">
+                      🔍 Test — เช็คว่าโค้ดอยู่บนเว็บแล้วหรือยัง
+                    </button>
+                  </form>
+                  {project.websiteUrl && (
+                    <span className="text-[11px] text-slate-400">ตรวจที่ {project.websiteUrl}</span>
+                  )}
+                </div>
+
+                {embedTestMessage && (
+                  <div className={`mt-2 rounded-lg border p-2 text-xs ${embedTestMessage.tone}`}>
+                    {embedTestMessage.text}
+                  </div>
+                )}
                 <div className="mt-2 flex flex-wrap gap-3 text-xs">
                   <Link href={`/line-tracking/projects/${project.id}/tracking-links`} className="text-brand-600 hover:underline">จัดการลิงก์ + ปุ่ม Add LINE →</Link>
                   <Link href="/line-tracking/guide" className="text-slate-500 hover:underline">📖 คู่มือติดตั้งแบบละเอียด →</Link>
@@ -303,7 +360,10 @@ export default async function SetupWizard({
         )}
 
         {step === "line" && (
-          <ConnectionCard projectId={project.id} type="LINE" connection={conn(project.connections, "LINE")} />
+          <div className="space-y-4">
+            <ConnectionCard projectId={project.id} type="LINE" connection={conn(project.connections, "LINE")} />
+            <WebhookLogPanel logs={webhookLogs} />
+          </div>
         )}
         {step === "sheet" && (
           <ConnectionCard projectId={project.id} type="GOOGLE_SHEET" connection={conn(project.connections, "GOOGLE_SHEET")} />
@@ -443,6 +503,76 @@ function Info({ label, value }: { label: string; value: string }) {
     <div>
       <dt className="text-xs uppercase tracking-wide text-slate-400">{label}</dt>
       <dd className="font-medium text-slate-700">{value}</dd>
+    </div>
+  );
+}
+
+// ── แผงดู Webhook ล่าสุดจาก LINE ────────────────────────────────────────────
+// ให้ลูกค้า/แอดมินเช็คเองได้ว่า LINE ยิง event เข้ามาถึงระบบไหม โดยไม่ต้องเปิด Vercel logs.
+type WebhookLogRow = {
+  id: string;
+  source: string;
+  status: string;
+  errorMessage: string | null;
+  createdAt: Date;
+  payload: string | null;
+};
+
+const WEBHOOK_STATUS: Record<string, { tone: string; label: string }> = {
+  SUCCESS: { tone: "border-emerald-200 bg-emerald-50 text-emerald-700", label: "✅ รับแล้ว" },
+  REJECTED: { tone: "border-rose-200 bg-rose-50 text-rose-700", label: "🚫 ปฏิเสธ" },
+  FAILED: { tone: "border-amber-200 bg-amber-50 text-amber-700", label: "⚠️ ผิดพลาด" },
+};
+
+// สรุป payload เป็นข้อความสั้น ๆ — ไม่โชว์ raw payload (กัน PII เช่น LINE userId หลุด).
+function webhookSummary(payload: string | null): string {
+  if (!payload) return "";
+  try {
+    const p = JSON.parse(payload) as { note?: string; events?: { type?: string }[] };
+    if (p.note) return p.note;
+    const events = p.events ?? [];
+    if (events.length === 0) return "ทดสอบการเชื่อมต่อ (Verify) — ไม่มี event จริง";
+    const types = events.map((e) => e.type || "?");
+    return `${events.length} event: ${types.join(", ")}`;
+  } catch {
+    return "";
+  }
+}
+
+function WebhookLogPanel({ logs }: { logs: WebhookLogRow[] }) {
+  return (
+    <div className="card">
+      <h2 className="mb-1 text-base font-semibold text-slate-800">📡 Webhook ล่าสุดจาก LINE (10 รายการ)</h2>
+      <p className="mb-3 text-xs text-slate-500">
+        ทุกครั้งที่ LINE ยิง event เข้ามา (มีคนแอด / ทัก / บล็อก หรือกดปุ่ม Verify) จะโผล่ที่นี่ —
+        ถ้าว่างเปล่า แปลว่า LINE ยังต่อไม่ถึงระบบ (เช็ค Webhook URL ให้ถูก + เปิด &quot;Use webhook&quot; อยู่ไหม)
+      </p>
+      {logs.length === 0 ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+          ยังไม่มี webhook เข้ามาเลย — LINE ยังไม่เคยยิงมาที่ระบบนี้.
+          ลองกดปุ่ม <b>Verify</b> ใน LINE Developers → Messaging API → Webhook URL แล้วรีเฟรชหน้านี้
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {logs.map((log) => {
+            const st = WEBHOOK_STATUS[log.status] ?? {
+              tone: "border-slate-200 bg-slate-50 text-slate-600",
+              label: log.status,
+            };
+            const summary = webhookSummary(log.payload);
+            return (
+              <li key={log.id} className={`rounded-lg border p-2.5 text-sm ${st.tone}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">{st.label}</span>
+                  <span className="text-xs opacity-70">{fmtDate(log.createdAt)}</span>
+                </div>
+                {summary && <div className="mt-0.5 text-xs opacity-80">{summary}</div>}
+                {log.errorMessage && <div className="mt-0.5 text-xs font-medium">↳ {log.errorMessage}</div>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

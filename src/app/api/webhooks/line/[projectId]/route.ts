@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { stringifyJson } from "@/lib/line-tracking/json";
 import { upsertLineUser, verifyLineSignature, fetchLineProfile, downloadLineContent } from "@/lib/line-tracking/services/lineService";
@@ -7,43 +8,66 @@ import { processQueue, enqueueBlockConversion } from "@/lib/line-tracking/servic
 import { ocrSlip } from "@/lib/line-tracking/services/ocrService";
 import { getConnectionConfig } from "@/lib/line-tracking/services/connectionStore";
 import type { LineConfig } from "@/lib/line-tracking/connectors";
+import type { Project } from "@prisma/client";
 
 /**
  * LINE Messaging webhook endpoint (per project).
- * MVP: stores the raw event, links/creates a LINE user + Lead when a userId is
- * present. TODO(security): verify the X-Line-Signature HMAC with the channel
- * secret before trusting the payload.
+ * Stores the raw event, links/creates a LINE user + Lead when a userId is present.
+ *
+ * TIMING: LINE drops the connection if the webhook does not answer within ~1s
+ * ("A timeout occurred when sending a webhook event object" on Verify, and
+ * silently dropped events in production). So this handler does the bare minimum
+ * on the critical path — verify the signature, then ACK 200 immediately — and
+ * hands every slow step (profile lookup, lead upsert, OCR, conversion dispatch)
+ * to waitUntil(), which keeps the serverless function alive after the response.
  */
+/**
+ * Version probe. LINE only ever POSTs here, so GET was previously a 405 and there
+ * was no way — short of Vercel dashboard access — to tell whether a deployment
+ * actually carries the ACK-first handler or the old one that ran everything before
+ * responding. Opening this URL in a browser answers that in one second.
+ *
+ * Deliberately touches nothing: no DB, no config, no projectId lookup — so it
+ * leaks nothing and stays fast even if the database is down.
+ */
+export function GET() {
+  return NextResponse.json({
+    handler: "line-webhook",
+    ack: "immediate + waitUntil",
+    version: 2,
+  });
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
   const { projectId } = await params;
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
-  if (!project) {
-    return NextResponse.json({ error: "project not found" }, { status: 404 });
-  }
 
   // Read the RAW body first — required for signature verification.
   const rawBody = await req.text();
+
+  // Both lookups are keyed by projectId, so they run in parallel — one DB
+  // round-trip of latency instead of two before we can answer LINE.
+  const [project, lineConfig] = await Promise.all([
+    prisma.project.findUnique({ where: { id: projectId } }),
+    getConnectionConfig<LineConfig>(projectId, "LINE"),
+  ]);
+  if (!project) {
+    return NextResponse.json({ error: "project not found" }, { status: 404 });
+  }
 
   // Verify X-Line-Signature. This endpoint is public and creates LINE users and
   // leads, so an unverified payload is an open door for forged leads — refuse
   // rather than accept when there is no secret to check against. A LINE channel
   // cannot be connected without the secret anyway (it is one of the two
   // realKeys), so a project that legitimately receives webhooks always has one.
-  const lineConfig = await getConnectionConfig<LineConfig>(project.id, "LINE");
   if (!lineConfig.messagingChannelSecret) {
-    await prisma.webhookLog.create({
-      data: {
-        projectId: project.id,
-        source: "LINE",
-        payload: stringifyJson({ note: "no channel secret configured" }),
-        status: "REJECTED",
-        errorMessage:
-          "Messaging Channel Secret ยังไม่ได้ตั้งค่า — ไม่สามารถยืนยันว่า webhook มาจาก LINE จริง",
-      },
-    });
+    // Log off the critical path — the rejection itself must not wait on a DB write.
+    waitUntil(
+      logWebhook(project.id, { note: "no channel secret configured" }, "REJECTED",
+        "Messaging Channel Secret ยังไม่ได้ตั้งค่า — ไม่สามารถยืนยันว่า webhook มาจาก LINE จริง")
+    );
     return NextResponse.json({ error: "webhook not configured" }, { status: 401 });
   }
   const validSignature = verifyLineSignature(
@@ -52,15 +76,9 @@ export async function POST(
     req.headers.get("x-line-signature")
   );
   if (!validSignature) {
-    await prisma.webhookLog.create({
-      data: {
-        projectId: project.id,
-        source: "LINE",
-        payload: stringifyJson({ note: "signature rejected" }),
-        status: "REJECTED",
-        errorMessage: "Invalid X-Line-Signature",
-      },
-    });
+    waitUntil(
+      logWebhook(project.id, { note: "signature rejected" }, "REJECTED", "Invalid X-Line-Signature")
+    );
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
 
@@ -71,6 +89,39 @@ export async function POST(
     body = {};
   }
 
+  // ACK now, work later. Everything below this line used to run before the
+  // response and is what pushed the handler past LINE's timeout.
+  waitUntil(handleEvents(project, lineConfig, body));
+  return NextResponse.json({ ok: true });
+}
+
+/** Best-effort webhook audit row — never throws into the request path. */
+async function logWebhook(
+  projectId: string,
+  payload: unknown,
+  status: "SUCCESS" | "FAILED" | "REJECTED",
+  errorMessage?: string
+) {
+  try {
+    await prisma.webhookLog.create({
+      data: {
+        projectId,
+        source: "LINE",
+        payload: stringifyJson(payload),
+        status,
+        ...(errorMessage ? { errorMessage } : {}),
+      },
+    });
+  } catch {
+    // Logging must never break webhook handling.
+  }
+}
+
+/**
+ * Everything that used to run inline before the 200. Runs after the response
+ * via waitUntil, so its duration no longer counts against LINE's timeout.
+ */
+async function handleEvents(project: Project, lineConfig: LineConfig, body: unknown) {
   const events = (body as { events?: LineEvent[] })?.events ?? [];
   let processed = 0;
 
@@ -178,27 +229,18 @@ export async function POST(
     // Flush the queue so generate_lead / contact are sent right away.
     await processQueue({ projectId: project.id });
 
-    await prisma.webhookLog.create({
-      data: {
-        projectId: project.id,
-        source: "LINE",
-        payload: stringifyJson(body),
-        status: "SUCCESS",
-      },
-    });
-
-    return NextResponse.json({ ok: true, processed });
+    await logWebhook(project.id, body, "SUCCESS");
+    return processed;
   } catch (err) {
-    await prisma.webhookLog.create({
-      data: {
-        projectId: project.id,
-        source: "LINE",
-        payload: stringifyJson(body),
-        status: "FAILED",
-        errorMessage: err instanceof Error ? err.message : String(err),
-      },
-    });
-    return NextResponse.json({ ok: false }, { status: 500 });
+    await logWebhook(
+      project.id,
+      body,
+      "FAILED",
+      err instanceof Error ? err.message : String(err)
+    );
+    // Already ACKed to LINE — surface in logs + WebhookLog, nothing to return to.
+    console.error("[line-webhook] background processing failed:", err);
+    return 0;
   }
 }
 

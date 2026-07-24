@@ -15,18 +15,19 @@ export const dynamic = "force-dynamic";
 
 export default async function ConversionsPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
-  if (!project) notFound();
-
-  const [events, stats] = await Promise.all([
+  // Single round-trip wave — `project.id` is just `projectId` from the URL, so the
+  // project row no longer has to come back before the rest can be issued.
+  const [project, events, stats] = await Promise.all([
+    prisma.project.findUnique({ where: { id: projectId } }),
     prisma.conversionEvent.findMany({
-      where: { projectId: project.id },
+      where: { projectId },
       orderBy: { createdAt: "desc" },
       take: 100,
       include: { lead: { select: { displayName: true } } },
     }),
-    getProjectStats(project.id),
+    getProjectStats(projectId),
   ]);
+  if (!project) notFound();
 
   return (
     <div className="space-y-6">

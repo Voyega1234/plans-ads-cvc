@@ -269,6 +269,30 @@ export default function LineTrackingGuidePage() {
           คือ id ของโปรเจกต์ (ดูได้จาก URL ของหน้าโปรเจกต์ใน MercyOS)
           เมื่อลูกค้าแอดเพื่อน/ทักแชท/ส่งรูปสลิป ระบบจะสร้าง Lead อัตโนมัติ อัปเดตสถานะ และอ่านสลิปให้ (ดูข้อ 10)
         </p>
+        {/* จุดที่พลาดกันบ่อยที่สุด: ตั้งที่ LINE Developers อย่างเดียวไม่พอ ต้องเปิดที่ OA Manager ด้วย */}
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <div className="font-semibold">⚠️ ต้องตั้งอีกที่หนึ่งด้วย — ไม่งั้น event จะไม่เข้าเลย</div>
+          <p className="mt-1">
+            เปิด{" "}
+            <a
+              href="https://manager.line.biz/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium underline"
+            >
+              LINE Official Account Manager
+            </a>{" "}
+            → ตั้งค่า → การตอบกลับ แล้วตั้ง 2 อย่างนี้:
+          </p>
+          <ul className="mt-1.5 list-disc space-y-1 pl-5">
+            <li>เปิด <b>Webhook</b></li>
+            <li>ปิด <b>ตอบกลับอัตโนมัติ</b> — ถ้าเปิดค้างไว้ LINE จะตอบข้อความอัตโนมัติแทน แล้วไม่ส่ง event มาที่ระบบ</li>
+          </ul>
+          <p className="mt-2">
+            และอย่าเชื่อปุ่ม <b>Verify</b> อย่างเดียว — Verify ส่ง payload เปล่ามาทดสอบ ผ่านได้แม้ event จริงจะยังไม่เข้า
+            ให้ทดสอบด้วยการ <b>แอดเพื่อน OA จริง 1 ครั้ง</b> แล้วดูว่ามี Lead ขึ้นในระบบไหม
+          </p>
+        </div>
       </section>
 
       {/* 5. GA4 */}

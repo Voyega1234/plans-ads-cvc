@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 const COLORS = ["#1d4ed8", "#2563eb", "#3b82f6", "#0ea5e9", "#38bdf8", "#7dd3fc", "#bae6fd"];
 const ICONS = ["📢", "👉", "💬", "✍️", "⭐", "🧾", "💰"];
 const DESC = [
-  "คนเห็นโฆษณา / เข้าเว็บ",
+  "คนเข้าเว็บ (นับ 1 ต่อคน ไม่ใช่ต่อครั้ง)",
   "กดปุ่ม Add LINE (ทุกช่องทาง)",
   "เพิ่มเพื่อนสำเร็จ",
   "เริ่มทักแชตกับเรา",
@@ -71,15 +71,16 @@ export default async function FunnelPage({
 }) {
   const { projectId } = await params;
   const query = await searchParams;
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
-  if (!project) notFound();
-
   const range = resolveRange(query);
-  const [funnel, channels, channelFunnel] = await Promise.all([
-    getFunnel(project.id, range),
-    getChannelBreakdown(project.id),
-    getChannelFunnel(project.id, range),
+  // Single round-trip wave — `project.id` is just `projectId` from the URL, so the
+  // project row no longer has to come back before the rest can be issued.
+  const [project, funnel, channels, channelFunnel] = await Promise.all([
+    prisma.project.findUnique({ where: { id: projectId } }),
+    getFunnel(projectId, range),
+    getChannelBreakdown(projectId),
+    getChannelFunnel(projectId, range),
   ]);
+  if (!project) notFound();
 
   const top = funnel.stages[0].count || 1;
   const purchase = funnel.stages[funnel.stages.length - 1];
@@ -129,7 +130,7 @@ export default async function FunnelPage({
 
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <KpiCard label="เข้าเว็บ/คลิก" value={funnel.stages[0].count.toLocaleString()} accent="bg-amber-100" icon="👆" />
+        <KpiCard label="ผู้เข้าเว็บ (unique)" value={funnel.stages[0].count.toLocaleString()} accent="bg-amber-100" icon="👆" />
         <KpiCard label="กดปุ่ม Add LINE" value={funnel.stages[1].count.toLocaleString()} accent="bg-orange-100" icon="👉" />
         <KpiCard label="ปิดการขาย" value={purchase.count.toLocaleString()} accent="bg-line-500/15" icon="💰" />
         <KpiCard label="ยอดขายรวม" value={fmtMoney(funnel.revenue, project.currency)} accent="bg-rose-100" icon="฿" />
@@ -206,7 +207,7 @@ export default async function FunnelPage({
             <thead>
               <tr className="border-b border-slate-100">
                 <th className="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">ช่องทาง</th>
-                <th className="px-1.5 py-2 text-right text-xs font-semibold uppercase text-slate-500">เข้าเว็บ</th>
+                <th className="px-1.5 py-2 text-right text-xs font-semibold uppercase text-slate-500" title="ผู้เข้าเว็บ นับ 1 ต่อคน">ผู้เข้าเว็บ</th>
                 <th className="px-1.5 py-2 text-right text-xs font-semibold uppercase text-slate-500">กดปุ่ม</th>
                 <th className="px-1.5 py-2 text-right text-xs font-semibold uppercase text-slate-500">แอด</th>
                 <th className="px-1.5 py-2 text-right text-xs font-semibold uppercase text-slate-500">ทัก</th>

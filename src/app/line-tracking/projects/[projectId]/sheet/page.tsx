@@ -12,13 +12,14 @@ export const dynamic = "force-dynamic";
 
 export default async function SheetPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  const project = await prisma.project.findUnique({ where: { id: projectId } });
-  if (!project) notFound();
-
-  const [config, logs] = await Promise.all([
-    getConnectionConfig<SheetConfig>(project.id, "GOOGLE_SHEET"),
-    listSyncLogs(project.id),
+  // Single round-trip wave — `project.id` is just `projectId` from the URL, so the
+  // project row no longer has to come back before the rest can be issued.
+  const [project, config, logs] = await Promise.all([
+    prisma.project.findUnique({ where: { id: projectId } }),
+    getConnectionConfig<SheetConfig>(projectId, "GOOGLE_SHEET"),
+    listSyncLogs(projectId),
   ]);
+  if (!project) notFound();
   const real = isRealMode("GOOGLE_SHEET", config as Record<string, unknown>);
   const lastSync = logs[0];
 
