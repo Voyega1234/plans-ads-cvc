@@ -98,7 +98,11 @@ async function ocrVision(image: Buffer): Promise<OcrResult> {
 async function ocrGemini(image: Buffer): Promise<OcrResult> {
   try {
     const token = await getVertexAccessToken();
-    const model = process.env.AI_MODEL_STANDARD ?? "gemini-3.5-flash";
+    // Match the proven-working Vertex/Gemini image call (analyze-image route):
+    // same env var (AI_MODEL_QUALITY, not STANDARD) and same generous token cap —
+    // 1024 was likely truncating the response to empty before any visible text,
+    // which reads identically to "no JSON" in the old error message.
+    const model = process.env.AI_MODEL_QUALITY ?? "gemini-3.5-flash";
     const vLoc = VERTEX_LOCATION();
     const vHost = vLoc === "global" ? "aiplatform.googleapis.com" : `${vLoc}-aiplatform.googleapis.com`;
     const prompt = `นี่คือรูปสลิปโอนเงิน อ่านแล้วดึงข้อมูลออกมา ตอบเป็น JSON เท่านั้น ไม่มีข้อความอื่น:
@@ -123,7 +127,7 @@ amount คือยอดเงินที่โอนจริงเท่า�
               { text: prompt },
             ],
           }],
-          generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+          generationConfig: { temperature: 0, maxOutputTokens: 65536, responseMimeType: "application/json" },
         }),
       }
     );
@@ -131,11 +135,24 @@ amount คือยอดเงินที่โอนจริงเท่า�
       return { ok: false, text: "", amount: null, error: `Gemini ${res.status}: ${(await res.text()).slice(0, 200)}` };
     }
     const json = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
+      candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
+      promptFeedback?: { blockReason?: string };
     };
     const text = (json.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("");
     const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return { ok: false, text, amount: null, error: "Gemini: ไม่พบ JSON ในคำตอบ" };
+    if (!match) {
+      // Surface exactly what Gemini said (or why it said nothing) instead of a
+      // bare "no JSON found" — otherwise every distinct failure mode (safety
+      // block, empty response, plain-text refusal) looks identical in the log.
+      const blockReason = json.promptFeedback?.blockReason;
+      const finishReason = json.candidates?.[0]?.finishReason;
+      const detail = blockReason
+        ? `blocked: ${blockReason}`
+        : finishReason && finishReason !== "STOP"
+          ? `finishReason: ${finishReason}`
+          : `response: ${text.slice(0, 300) || "(ว่างเปล่า)"}`;
+      return { ok: false, text, amount: null, error: `Gemini: ไม่พบ JSON ในคำตอบ (${detail})` };
+    }
     const parsed = JSON.parse(match[0]) as {
       amount?: number | null; phone?: string | null; name?: string | null;
       suspicious?: boolean | null; suspiciousReason?: string | null;
