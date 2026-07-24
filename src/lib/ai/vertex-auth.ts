@@ -40,7 +40,11 @@ export async function getVertexAccessToken(): Promise<string> {
     subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
     token_url: 'https://sts.googleapis.com/v1/token',
     service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${process.env.GCP_SERVICE_ACCOUNT_EMAIL}:generateAccessToken`,
-    subject_token_supplier: { getSubjectToken: getVercelOidcToken },
+    // google-auth-library passes its supplier context as an argument. Do not
+    // forward that object to @vercel/oidc: it includes a GCP resource audience
+    // and would unintentionally request a custom Vercel token instead of the
+    // default token allowed by this provider.
+    subject_token_supplier: { getSubjectToken: () => getVercelOidcToken() },
   })
   if (!client) throw new Error('Vertex OIDC: สร้าง auth client ไม่สำเร็จ — เช็ค GCP_* env')
   client.scopes = ['https://www.googleapis.com/auth/cloud-platform']
