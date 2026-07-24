@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { stringifyJson } from "@/lib/line-tracking/json";
-import { upsertLineUser, verifyLineSignature, fetchLineProfile, downloadLineContent } from "@/lib/line-tracking/services/lineService";
+import { upsertLineUser, fetchLineProfile, downloadLineContent } from "@/lib/line-tracking/services/lineService";
 import { upsertLeadFromClick, changeLeadStatus } from "@/lib/line-tracking/services/leadService";
 import { processQueue, enqueueBlockConversion } from "@/lib/line-tracking/services/conversionQueueService";
 import { ocrSlip } from "@/lib/line-tracking/services/ocrService";
@@ -44,7 +44,7 @@ export async function POST(
 ) {
   const { projectId } = await params;
 
-  // Read the RAW body first — required for signature verification.
+  // Read the body once so it can be parsed after the project lookup.
   const rawBody = await req.text();
 
   // Both lookups are keyed by projectId, so they run in parallel — one DB
@@ -57,30 +57,10 @@ export async function POST(
     return NextResponse.json({ error: "project not found" }, { status: 404 });
   }
 
-  // Verify X-Line-Signature. This endpoint is public and creates LINE users and
-  // leads, so an unverified payload is an open door for forged leads — refuse
-  // rather than accept when there is no secret to check against. A LINE channel
-  // cannot be connected without the secret anyway (it is one of the two
-  // realKeys), so a project that legitimately receives webhooks always has one.
-  if (!lineConfig.messagingChannelSecret) {
-    // Log off the critical path — the rejection itself must not wait on a DB write.
-    waitUntil(
-      logWebhook(project.id, { note: "no channel secret configured" }, "REJECTED",
-        "Messaging Channel Secret ยังไม่ได้ตั้งค่า — ไม่สามารถยืนยันว่า webhook มาจาก LINE จริง")
-    );
-    return NextResponse.json({ error: "webhook not configured" }, { status: 401 });
-  }
-  const validSignature = verifyLineSignature(
-    lineConfig.messagingChannelSecret,
-    rawBody,
-    req.headers.get("x-line-signature")
-  );
-  if (!validSignature) {
-    waitUntil(
-      logWebhook(project.id, { note: "signature rejected" }, "REJECTED", "Invalid X-Line-Signature")
-    );
-    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
-  }
+  // TEMPORARY: LineUTM forwards events without LINE's X-Line-Signature, so this
+  // endpoint currently accepts forwarded payloads without signature validation.
+  // Restore the verification above, or replace it with a LineUTM shared secret,
+  // before exposing this webhook beyond the current integration.
 
   let body: unknown;
   try {
