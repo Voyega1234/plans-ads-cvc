@@ -26,7 +26,7 @@ npm run build
 
 ---
 
-รวมงานที่ยังไม่ได้ deploy ไว้ในชุดเดียว — ทั้งหมด **15 ไฟล์** (10 หัวข้อ ดูด้านล่าง)
+รวมงานที่ยังไม่ได้ deploy ไว้ในชุดเดียว — ทั้งหมด **16 ไฟล์** (10 หัวข้อ ดูด้านล่าง)
 
 > รอบแก้ keyword/AI (ย้ายไป Vertex OIDC) **deploy ไปแล้ว** ไม่รวมอยู่ในชุดนี้
 
@@ -358,7 +358,7 @@ Snippet เก่า (`data-project="slug"`) **ยังใช้ได้เห
 
 ---
 
-## 10) สลิปไม่ถูกอ่านเลย (OCR) — เพิ่ม log ให้เห็นสาเหตุจริง (ยังไม่ใช่ fix ตัวสาเหตุ)
+## 10) สลิปไม่ถูกอ่านเลย (OCR) — เพิ่ม log + เพิ่ม Gemini เป็นตัวอ่านหลัก
 
 ### อาการ
 ลูกค้าส่งสลิปเข้า LINE OA จริง → WebhookLog ขึ้น ✅ รับแล้ว (ไม่ crash) แต่ไม่มีบันทึก "อ่านสลิปอัตโนมัติ" ขึ้นในประวัติ lead เลย เหมือนระบบไม่เคยพยายามอ่าน
@@ -377,9 +377,38 @@ Snippet เก่า (`data-project="slug"`) **ยังใช้ได้เห
 
 ไฟล์ที่แก้: `src/app/api/webhooks/line/[projectId]/route.ts` (ไฟล์เดียวกับส่วนที่ 2 — ไม่กระทบ behavior เดิม เพิ่มแค่ log)
 
+### เพิ่มเติม — ให้ Gemini อ่านสลิปแทน regex (เผื่อแก้ปัญหาตรงจุด)
+เดิม flow คือ Google Vision อ่านตัวหนังสือดิบออกมาก่อน แล้วใช้ regex เดา "ยอดเงิน/เบอร์/ชื่อ" จากข้อความนั้น — regex เดาพลาดได้ง่ายเวลาสลิปแต่ละธนาคารจัดวางไม่เหมือนกัน
+
+เปลี่ยนเป็น **ลอง Gemini ก่อน** (`src/lib/line-tracking/services/ocrService.ts`, ฟังก์ชัน `ocrGemini`) — ส่งรูปสลิปให้ Gemini ผ่าน Vertex AI ตัว OIDC เดิมที่ระบบใช้อยู่แล้ว (ไม่ต้องเพิ่ม API key ใหม่) แล้วให้ตอบ JSON ยอดเงิน/เบอร์/ชื่อ กลับมาเลยในคำตอบเดียว แม่นกว่า regex เพราะ Gemini เข้าใจบริบท (แยกยอดโอนจริงออกจากเลขบัญชี/เลขอ้างอิงได้) ถ้า Gemini ล้มเหลว จะ fallback ไป Google Vision ตัวเดิม แล้วค่อย fallback ไป OCR.space เป็นลำดับสุดท้าย (ลำดับเดิม)
+
+ถ้าทั้ง Gemini และ Vision ล้มเหลวทั้งคู่ (และไม่มี `OCR_SPACE_API_KEY`) error message ที่ log จะโชว์เหตุผลของทั้งสองตัว (`Gemini: ... | Vision: ...`) ไม่ทิ้งเหตุผลของ Gemini ไป — เผื่อ debug ต่อได้ง่ายขึ้น
+
+### เพิ่มเติม — แก้ให้ "เรียกแน่ๆ" ไม่ใช่แค่เพิ่ม log รอบนอก
+เดิม guard เดียวเช็คครบทุกเงื่อนไขพร้อมกัน (`isMessage && type === "image" && message.id && messagingAccessToken`) — ถ้าเงื่อนไขไหนเงื่อนไขหนึ่งเป็น false (เช่น `messagingAccessToken` ไม่ได้ตั้งค่าไว้ในโปรเจกต์นั้น) ทั้งบล็อกจะถูกข้ามไปเงียบๆ **ไม่ log อะไรเลยแม้แต่บรรทัดเดียว** — นี่คือสาเหตุที่ search log คำว่า "OCR" แล้วไม่เจออะไรเลย (ทุก severity = 0): ไม่ใช่ว่า OCR รันแล้ว fail แบบเงียบ แต่เป็นไปได้ว่าโค้ดไม่เคยเข้าไปถึงจุดเรียก OCR เลย
+
+แก้โดยแยกเช็คเป็น 2 ชั้น:
+1. เช็คแค่ "นี่คือ message แบบรูปภาพหรือไม่" (`isMessage && event.message?.type === "image"`) — ถ้าใช่ **การันตีว่าจะมี log ออกมาอย่างน้อย 1 บรรทัดเสมอ**
+2. ชั้นในค่อยเช็ครายละเอียด (มี message.id มั้ย, มี access token มั้ย, โหลดรูปสำเร็จมั้ย, OCR อ่านได้มั้ย, อ่านได้แต่ไม่มีข้อมูลที่ใช้ได้) — แต่ละกรณีที่ล้มเหลว log เหตุผลเฉพาะของมันเอง เช่น `no messagingAccessToken configured`, `image download failed`, `slip OCR failed: ...`, `slip OCR ok but extracted nothing usable`
+
+**ผลคือ**: รอบทดสอบถัดไป ถ้าส่งรูปสลิปเข้า LINE OA จะต้องเห็น log อย่างน้อย 1 บรรทัดที่ขึ้นต้นด้วย `[line-webhook] slip OCR` เสมอ — ถ้ายังไม่เห็นอะไรเลย แปลว่าปัญหาไม่ได้อยู่ในบล็อกนี้แล้ว แต่อยู่ก่อนหน้านั้น (เช่น event ไม่ถึง handler, หรือ `isMessage`/`event.type` ไม่ตรงตามที่คิด) ซึ่งจะต้อง log เพิ่มที่จุดรับ event เข้ามาแทน
+
+มนุษย์ยังต้องกดยืนยัน PAID เองเหมือนเดิม (OCR ไม่ใช่ตัวตรวจสอบความถูกต้องของสลิป แค่ช่วยกรอกให้)
+
+### เพิ่มเติม — ให้ Gemini ช่วยสังเกตสลิปที่ดูตัดต่อ (สัญญาณเตือน ไม่ใช่การยืนยัน)
+เพิ่มให้ Gemini ตอบมาด้วยว่า `suspicious` (true/false) และ `suspiciousReason` — สังเกตจากฟอนต์ตัวเลขยอดเงินไม่ตรงกับส่วนอื่นของสลิป, ตัวหนังสือเบี้ยว/ซ้อนทับผิดตำแหน่ง, พื้นหลังเบลอหรือมีรอยต่อเฉพาะจุด ฯลฯ
+
+ถ้า `suspicious = true` จะขึ้น `⚠️ ต้องตรวจสอบ: <เหตุผล>` ในบันทึกประวัติ lead (คนละบรรทัดกับยอด/เบอร์/ชื่อที่อ่านได้) และ log `[line-webhook] slip OCR: suspicious slip flagged` ด้วย เพื่อให้เซลส์เห็นและตรวจสอบก่อนกด PAID โดยเฉพาะ
+
+**ข้อจำกัดสำคัญที่ต้องบอกลูกค้า:** นี่คือ "สัญญาณเตือนเบื้องต้น" จาก AI เท่านั้น ไม่ใช่การยืนยันกับธนาคารว่าสลิปจริงหรือปลอม — สลิปปลอมที่ทำมาดีอาจไม่ถูก flag ก็ได้ ถ้าต้องการยืนยันกับธนาคารจริงๆ ต้องใช้ API ตรวจสอบสลิปแยก (เช่น SlipOK/EasySlip) ซึ่งเป็นงานเพิ่มนอกเหนือจากที่ทำรอบนี้ ยังไม่ได้ทำ
+
+ทำงานเฉพาะฝั่ง Gemini (ตัวหลัก) เท่านั้น — ถ้า fallback ไป Vision หรือ OCR.space จะไม่มีค่า suspicious (เป็น undefined ไม่ใช่ false — ไม่ได้แปลว่าตรวจสอบแล้วว่าไม่น่าสงสัย แค่ไม่ได้ประเมิน)
+
+ไฟล์ที่แก้เพิ่ม: `src/lib/line-tracking/services/ocrService.ts`
+
 ---
 
-# ไฟล์ในชุดนี้ (15 ไฟล์)
+# ไฟล์ในชุดนี้ (16 ไฟล์)
 
 ```
 vercel.json                                                  ← maxDuration webhook + regions bom1
@@ -388,6 +417,7 @@ src/app/api/line-tracking/client-login/route.ts              ← ลบคุก
 src/components/line-tracking/ConnectionCard.tsx              ← Webhook URL มีโดเมน + กัน autofill
 src/lib/line-tracking/actions.ts                             ← + testEmbedAction() + รู้จัก embed.js?project=
 src/lib/line-tracking/services/projectService.ts             ← ยุบ query ด้วย groupBy
+src/lib/line-tracking/services/ocrService.ts                 ← อ่านสลิปด้วย Gemini ก่อน (fallback Vision → OCR.space)
 src/app/line-tracking/projects/[projectId]/page.tsx          ← รวมเป็นรอบเดียว
 src/app/line-tracking/projects/[projectId]/setup/page.tsx    ← + ปุ่ม Test + แผง Webhook ล่าสุด + snippet ใหม่
 src/app/line-tracking/projects/[projectId]/funnel/page.tsx   ← รวมเป็นรอบเดียว

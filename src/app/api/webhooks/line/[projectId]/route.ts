@@ -196,29 +196,53 @@ async function handleEvents(project: Project, lineConfig: LineConfig, body: unkn
       }
 
       // Image message = likely a payment slip → OCR the amount (sales confirms).
-      if (isMessage && event.message?.type === "image" && event.message.id && lineConfig.messagingAccessToken) {
-        const img = await downloadLineContent(lineConfig.messagingAccessToken, event.message.id);
-        if (img) {
-          const ocr = await ocrSlip(img);
-          if (ocr.ok) {
-            // Auto-fill from the slip — amount + (best-effort) name/phone. Only fill
-            // empty fields; sales still confirms everything before marking PAID.
-            const data: Record<string, unknown> = {};
-            const notes: string[] = [];
-            if (ocr.amount) {
-              data.slipAmount = ocr.amount; data.slipCheckedAt = new Date(); data.value = ocr.amount;
-              notes.push(`ยอด ${ocr.amount.toLocaleString()} ${lead.currency}`);
-            }
-            if (ocr.phone && !lead.phone) { data.phone = ocr.phone; notes.push(`เบอร์ ${ocr.phone}`); }
-            if (ocr.name && !lead.fullName) { data.fullName = ocr.name; notes.push(`ชื่อ ${ocr.name}`); }
-            if (Object.keys(data).length) {
-              await prisma.lead.update({ where: { id: lead.id }, data });
-              await prisma.leadStatusHistory.create({
-                data: {
-                  leadId: lead.id, newStatus: lead.status, changedBy: "OCR (Vision)",
-                  note: `📎 ได้รับสลิป — อ่านให้อัตโนมัติ: ${notes.join(" · ")} (เซลส์ตรวจสอบก่อนกด PAID)`,
-                },
-              });
+      // Split the "is this an image message" check from the "can we actually OCR
+      // it" check so every image message logs SOMETHING — previously a missing
+      // messageId or access token silently skipped the whole block with zero log
+      // output, indistinguishable from OCR never being invoked at all.
+      if (isMessage && event.message?.type === "image") {
+        if (!event.message.id) {
+          console.error("[line-webhook] slip OCR: image message missing message.id", { projectId: project.id });
+        } else if (!lineConfig.messagingAccessToken) {
+          console.error("[line-webhook] slip OCR: no messagingAccessToken configured for project", { projectId: project.id, messageId: event.message.id });
+        } else {
+          const img = await downloadLineContent(lineConfig.messagingAccessToken, event.message.id);
+          if (!img) {
+            console.error("[line-webhook] slip OCR: image download failed", { projectId: project.id, messageId: event.message.id });
+          } else {
+            const ocr = await ocrSlip(img);
+            if (!ocr.ok) {
+              console.error("[line-webhook] slip OCR failed:", ocr.error, { projectId: project.id, messageId: event.message.id });
+            } else {
+              // Auto-fill from the slip — amount + (best-effort) name/phone. Only fill
+              // empty fields; sales still confirms everything before marking PAID.
+              const data: Record<string, unknown> = {};
+              const notes: string[] = [];
+              if (ocr.amount) {
+                data.slipAmount = ocr.amount; data.slipCheckedAt = new Date(); data.value = ocr.amount;
+                notes.push(`ยอด ${ocr.amount.toLocaleString()} ${lead.currency}`);
+              }
+              if (ocr.phone && !lead.phone) { data.phone = ocr.phone; notes.push(`เบอร์ ${ocr.phone}`); }
+              if (ocr.name && !lead.fullName) { data.fullName = ocr.name; notes.push(`ชื่อ ${ocr.name}`); }
+              // Soft signal from Gemini only — not a real authenticity check, just
+              // an extra flag so sales looks twice before confirming PAID.
+              if (ocr.suspicious) {
+                notes.push(`⚠️ ต้องตรวจสอบ: ${ocr.suspiciousReason || "ระบบสงสัยว่าอาจเป็นสลิปที่ถูกตัดต่อ/แก้ไข"}`);
+                console.error("[line-webhook] slip OCR: suspicious slip flagged", { projectId: project.id, messageId: event.message.id, reason: ocr.suspiciousReason });
+              }
+              if (Object.keys(data).length) {
+                await prisma.lead.update({ where: { id: lead.id }, data });
+              }
+              if (notes.length) {
+                await prisma.leadStatusHistory.create({
+                  data: {
+                    leadId: lead.id, newStatus: lead.status, changedBy: "OCR (Gemini)",
+                    note: `📎 ได้รับสลิป — อ่านให้อัตโนมัติ: ${notes.join(" · ")} (เซลส์ตรวจสอบก่อนกด PAID)`,
+                  },
+                });
+              } else {
+                console.error("[line-webhook] slip OCR ok but extracted nothing usable", { projectId: project.id, messageId: event.message.id, text: ocr.text?.slice(0, 300) });
+              }
             }
           }
         }

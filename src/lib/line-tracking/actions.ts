@@ -188,6 +188,7 @@ export async function testEmbedAction(formData: FormData) {
       const html = await res.text();
       const hasScript = html.includes("/embed.js");
       const hasSlug =
+        html.includes(`/embed.js?project=${project.slug}`) ||
         html.includes(`data-project="${project.slug}"`) ||
         html.includes(`data-project='${project.slug}'`);
       verdict = hasScript && hasSlug ? "ok" : hasScript ? "wrongslug" : "missing";

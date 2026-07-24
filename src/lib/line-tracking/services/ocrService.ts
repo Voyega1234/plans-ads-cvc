@@ -1,13 +1,17 @@
 // Slip OCR — reads the transfer amount from a payment-slip image so sales don't
-// type it. NOT an authenticity check — a human still confirms PAID (OCR can misread /
-// slips can be edited).
+// type it. Gemini also gives a soft "looks edited?" signal (suspicious/suspiciousReason)
+// but this is NOT a real authenticity check — a human still confirms PAID (OCR can
+// misread / a well-made fake can still pass the suspicious check).
 //
 // Provider order:
-//  1) Google Cloud Vision via the existing GCP OIDC (no extra key) — used when the
-//     Vertex/OIDC env is configured (isVertexConfigured). Requires the Cloud Vision API
-//     enabled on the SA's project.
-//  2) OCR.space (OCR_SPACE_API_KEY) — fallback when OIDC isn't available (e.g. local).
-import { isVertexConfigured, getVertexAccessToken } from "@/lib/ai/vertex-auth";
+//  1) Gemini (Vertex AI, same GCP OIDC as the rest of the app) — reads the slip image
+//     directly and returns amount/phone/name in one call. More robust than plain OCR +
+//     regex across different bank slip layouts, since it understands context (transfer
+//     amount vs account number vs reference code) instead of pattern-matching.
+//  2) Google Cloud Vision (TEXT_DETECTION) via the same OIDC — fallback if Gemini fails.
+//     Requires the Cloud Vision API enabled on the SA's project.
+//  3) OCR.space (OCR_SPACE_API_KEY) — fallback when OIDC isn't available (e.g. local).
+import { isVertexConfigured, getVertexAccessToken, VERTEX_LOCATION, VERTEX_PROJECT } from "@/lib/ai/vertex-auth";
 
 export interface OcrResult {
   ok: boolean;
@@ -15,6 +19,11 @@ export interface OcrResult {
   amount: number | null;
   phone?: string | null;   // เบอร์ที่ OCR เดาได้จากสลิป (เซลส์ยืนยัน)
   name?: string | null;    // ชื่อที่ OCR เดาได้ (มีคำนำหน้า) — เซลส์ยืนยัน
+  // Soft signal only (Gemini path only — Vision/OCR.space can't judge this from
+  // plain text) — a sophisticated fake can still slip through. NOT a substitute
+  // for the human PAID confirmation, just an extra flag for sales to look twice.
+  suspicious?: boolean | null;
+  suspiciousReason?: string | null;
   error?: string;
 }
 
@@ -82,13 +91,81 @@ async function ocrVision(image: Buffer): Promise<OcrResult> {
   }
 }
 
+// Gemini (Vertex AI, same OIDC as ocrVision) — sends the slip image straight to the
+// model and asks for structured JSON, skipping the separate regex-parsing pass that
+// ocrVision needs. Tried first: usually more accurate across different bank slip
+// layouts since the model understands context, not just number patterns.
+async function ocrGemini(image: Buffer): Promise<OcrResult> {
+  try {
+    const token = await getVertexAccessToken();
+    const model = process.env.AI_MODEL_STANDARD ?? "gemini-3.5-flash";
+    const vLoc = VERTEX_LOCATION();
+    const vHost = vLoc === "global" ? "aiplatform.googleapis.com" : `${vLoc}-aiplatform.googleapis.com`;
+    const prompt = `นี่คือรูปสลิปโอนเงิน อ่านแล้วดึงข้อมูลออกมา ตอบเป็น JSON เท่านั้น ไม่มีข้อความอื่น:
+{"amount": ตัวเลขยอดโอนจริง (number ไม่มี comma) หรือ null ถ้าไม่เจอ,
+ "phone": เบอร์มือถือไทย 10 หลัก (string) หรือ null ถ้าไม่เจอ,
+ "name": ชื่อผู้โอนหรือผู้รับ พร้อมคำนำหน้า (string) หรือ null ถ้าไม่เจอ,
+ "suspicious": true ถ้าเห็นสัญญาณว่าอาจเป็นภาพตัดต่อ/แก้ไข เช่น ฟอนต์ของตัวเลขยอดเงินไม่ตรงกับฟอนต์ส่วนอื่นของสลิป, ตัวหนังสือ/ตัวเลขเบี้ยว-เยื้อง-ซ้อนทับผิดตำแหน่ง, พื้นหลังเบลอหรือมีรอยต่อเฉพาะบริเวณตัวเลข, สีพื้นหลังไม่สม่ำเสมอเฉพาะจุด — ให้เป็น false ถ้าดูเป็นสลิปปกติทั่วไป (ไม่ใช่ null ให้เดาไปทางใดทางหนึ่ง),
+ "suspiciousReason": ถ้า suspicious=true อธิบายสั้นๆ ว่าสงสัยตรงจุดไหน (string) ไม่งั้นเป็น null}
+amount คือยอดเงินที่โอนจริงเท่านั้น ห้ามเอาเลขบัญชีหรือเลขอ้างอิงธุรกรรมมาใส่
+หมายเหตุ: suspicious เป็นแค่การสังเกตเบื้องต้น ไม่ใช่การยืนยันแน่นอนว่าสลิปปลอมหรือของจริง ถ้าไม่แน่ใจให้ตอบ false`;
+
+    const res = await fetch(
+      `https://${vHost}/v1/projects/${VERTEX_PROJECT()}/locations/${vLoc}/publishers/google/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            role: "user",
+            parts: [
+              { inlineData: { mimeType: "image/jpeg", data: image.toString("base64") } },
+              { text: prompt },
+            ],
+          }],
+          generationConfig: { temperature: 0, maxOutputTokens: 1024, responseMimeType: "application/json" },
+        }),
+      }
+    );
+    if (!res.ok) {
+      return { ok: false, text: "", amount: null, error: `Gemini ${res.status}: ${(await res.text()).slice(0, 200)}` };
+    }
+    const json = (await res.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const text = (json.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("");
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return { ok: false, text, amount: null, error: "Gemini: ไม่พบ JSON ในคำตอบ" };
+    const parsed = JSON.parse(match[0]) as {
+      amount?: number | null; phone?: string | null; name?: string | null;
+      suspicious?: boolean | null; suspiciousReason?: string | null;
+    };
+    return {
+      ok: true,
+      text,
+      amount: typeof parsed.amount === "number" ? parsed.amount : null,
+      phone: parsed.phone || null,
+      name: parsed.name || null,
+      suspicious: parsed.suspicious === true,
+      suspiciousReason: parsed.suspicious === true ? (parsed.suspiciousReason || null) : null,
+    };
+  } catch (err) {
+    return { ok: false, text: "", amount: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function ocrSlip(image: Buffer, filename = "slip.jpg"): Promise<OcrResult> {
-  // Prefer Google Vision via OIDC (no key). Fall back to OCR.space if OIDC not configured
-  // or Vision fails but an OCR.space key exists.
+  // Prefer Gemini, then Google Vision — both via OIDC (no key). Fall back to OCR.space
+  // if OIDC not configured, or both Vertex-side attempts fail but an OCR.space key exists.
   if (isVertexConfigured()) {
+    const g = await ocrGemini(image);
+    if (g.ok) return g;
     const v = await ocrVision(image);
     if (v.ok) return v;
-    if (!process.env.OCR_SPACE_API_KEY?.trim()) return v; // no fallback available — return Vision error
+    if (!process.env.OCR_SPACE_API_KEY?.trim()) {
+      // No further fallback — surface both errors so the log actually shows why.
+      return { ...v, error: `Gemini: ${g.error} | Vision: ${v.error}` };
+    }
   }
   const apikey = process.env.OCR_SPACE_API_KEY?.trim();
   if (!apikey) {
