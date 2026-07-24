@@ -83,7 +83,7 @@ export default async function SetupWizard({
   // (ไม่ต้องเพิ่มคอลัมน์ใน DB / ไม่ต้อง migrate). แต่ละโปรเจกต์ใช้ snippet เดียวกัน ต่างแค่ data-project=slug
   const lineReady = project.connections.find((c) => c.type === "LINE")?.status === "CONNECTED";
   const embedInstalled = embedClicks > 0;
-  const embedSnippet = `<script src="${getTrackingBaseUrl()}/embed.js" data-project="${project.slug}"></script>`;
+  const embedSnippet = `<script src="${getTrackingBaseUrl()}/embed.js?project=${project.slug}"></script>`;
   const mediaTypes: ConnectionType[] = [...AD_CONNECTION_TYPES, "GA4", "GOOGLE_SHEET"];
   const mediaConnected = project.connections.filter(
     (c) => mediaTypes.includes(c.type as ConnectionType) && c.status === "CONNECTED"
@@ -99,7 +99,7 @@ export default async function SetupWizard({
     },
     wrongslug: {
       tone: "border-amber-200 bg-amber-50 text-amber-700",
-      text: `⚠️ เจอโค้ดบนเว็บ แต่ data-project ไม่ตรงกับโปรเจกต์นี้ (ต้องเป็น "${project.slug}") — แก้ให้ตรงแล้วกด Test ใหม่`,
+      text: `⚠️ เจอโค้ดบนเว็บ แต่ project ไม่ตรงกับโปรเจกต์นี้ (ต้องเป็น "${project.slug}") — แก้ให้ตรงแล้วกด Test ใหม่`,
     },
     missing: {
       tone: "border-rose-200 bg-rose-50 text-rose-700",

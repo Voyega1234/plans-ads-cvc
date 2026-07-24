@@ -26,7 +26,7 @@ npm run build
 
 ---
 
-รวมงานที่ยังไม่ได้ deploy ไว้ในชุดเดียว — ทั้งหมด **14 ไฟล์** (8 หัวข้อ ดูด้านล่าง)
+รวมงานที่ยังไม่ได้ deploy ไว้ในชุดเดียว — ทั้งหมด **15 ไฟล์** (10 หัวข้อ ดูด้านล่าง)
 
 > รอบแก้ keyword/AI (ย้ายไป Vertex OIDC) **deploy ไปแล้ว** ไม่รวมอยู่ในชุดนี้
 
@@ -330,23 +330,73 @@ GTM แทรกสคริปต์แบบ async ทำให้ `document.c
 
 ---
 
-# ไฟล์ในชุดนี้ (14 ไฟล์)
+## 9) embed.js — แก้ data-project หลุดจาก GTM แบบถาวร (ไม่ใช่แค่ patch เดิม)
+
+### อาการ
+Convert Cake เจอปัญหาเดียวกับส่วนที่ 7 ซ้ำอีกรอบ แม้ config ทุกอย่างถูกแล้ว (Console ไม่มี warning, "Use webhook" เปิด) เพราะ **GTM Custom HTML** ตอนแปลง string เป็น DOM element จริงเพื่อบังคับให้ browser รัน `<script>` (จำเป็น เพราะ script ที่แทรกผ่าน innerHTML เฉยๆ จะไม่รัน) ไม่รับประกันว่าจะ copy attribute แบบ `data-*` ไปด้วย — ยืนยันสดจาก Console จริงของ convertcake.com (`[LINEHub] missing data-project` ขึ้นบนหน้าเว็บจริง)
+
+ทางแก้เฉพาะหน้าคือแก้ที่ตัว GTM tag เอง (ใส่ `window.LINEHubProject = "..."` ก่อนโหลด embed.js) — ใช้ได้ผลจริง (ตัวเลขผู้เข้าเว็บ Convert Cake นับได้ 3 → 51 หลังแก้) แต่เป็นแค่แก้ config ของโปรเจกต์เดียว ทุกโปรเจกต์ใหม่ที่ฝังผ่าน GTM จะเจอบั๊กเดิมซ้ำอีกถ้าไม่แก้ที่ระบบ
+
+### สิ่งที่แก้ (ระดับโค้ด — กันทั้งระบบ)
+เปลี่ยนวิธีระบุโปรเจกต์หลักจาก `data-project` (attribute, tag manager ทำหายได้) ไปเป็น **query string บน `src` เอง** (`?project=slug`) เพราะ `src` เป็นสิ่งที่ browser ต้องใช้โหลดสคริปต์ ไม่มี tag manager ตัวไหนตัดทิ้งได้
+
+Snippet ใหม่ (แนะนำจากนี้ไป):
+```html
+<script src="https://<hub>/embed.js?project=slug"></script>
+```
+Snippet เก่า (`data-project="slug"`) **ยังใช้ได้เหมือนเดิม** — ลำดับการหา project คือ `?project=` บน src → `data-project` → `window.LINEHubProject` (fallback เดิมทั้งหมดยังอยู่ครบ ไม่ตัดของเก่าทิ้ง เว็บที่ติดตั้งไปแล้วไม่ต้องแก้อะไร)
+
+ไฟล์ที่แก้:
+- `src/app/embed.js/route.ts` — parse `?project=` จาก src ของตัวเอง เป็นลำดับแรก
+- `src/app/line-tracking/projects/[projectId]/tracking-links/page.tsx` — snippet ที่ให้ copy เปลี่ยนเป็นฟอร์มใหม่
+- `src/app/line-tracking/projects/[projectId]/setup/page.tsx` — เช่นเดียวกัน + ข้อความแจ้งเตือนตอน Test ไม่ตรง slug
+- `src/lib/line-tracking/actions.ts` — `testEmbedAction` (ตัวเช็คว่าเว็บติดตั้งถูกไหม) รู้จักฟอร์มใหม่ด้วย เดิมมองหาแค่ `data-project="slug"`
+- `src/app/line-tracking/guide/page.tsx` — ตัวอย่างในคู่มือเปลี่ยนเป็นฟอร์มใหม่ + อธิบายเหตุผลให้ลูกค้า/dev เข้าใจ
+
+### ทดสอบแล้ว
+จำลอง parse query string ทั้งฟอร์มใหม่/ฟอร์มเก่า (ไม่มี query)/มี param อื่นปนกัน — ได้ผลถูกทุกเคส, `tsc --noEmit` และ `npm run build` ผ่านสะอาด
+
+---
+
+## 10) สลิปไม่ถูกอ่านเลย (OCR) — เพิ่ม log ให้เห็นสาเหตุจริง (ยังไม่ใช่ fix ตัวสาเหตุ)
+
+### อาการ
+ลูกค้าส่งสลิปเข้า LINE OA จริง → WebhookLog ขึ้น ✅ รับแล้ว (ไม่ crash) แต่ไม่มีบันทึก "อ่านสลิปอัตโนมัติ" ขึ้นในประวัติ lead เลย เหมือนระบบไม่เคยพยายามอ่าน
+
+### Root cause ที่ยืนยันได้ตอนนี้
+โค้ดเดิม (บล็อก image message ใน `route.ts`) ถ้า `ocrSlip()` คืนค่า `ok:false` (ไม่ว่าเพราะ Google Vision ยังไม่ตั้งค่า, `OCR_SPACE_API_KEY` ไม่มี, หรือเรียก API แล้ว error) **จะเงียบสนิท ไม่ log อะไรเลย** WebhookLog ที่ขึ้น SUCCESS บอกได้แค่ "webhook ไม่ crash" ไม่ได้บอกว่า OCR ทำงานสำเร็จหรือเปล่า — ยังหาสาเหตุจริงไม่ได้เพราะไม่มีช่องทางดู
+
+(ทฤษฎีที่เป็นไปได้แต่ยังไม่ยืนยัน: Google Cloud Vision API ยังไม่ได้เปิดใช้บน GCP project หรือ `OCR_SPACE_API_KEY` ไม่ได้ตั้งใน Vercel — ต้องรอดู log หลัง deploy รอบนี้ถึงจะรู้ชัวร์)
+
+### สิ่งที่เพิ่ม
+เพิ่ม `console.error` 2 จุดใน `src/app/api/webhooks/line/[projectId]/route.ts`:
+- โหลดรูปจาก LINE ไม่สำเร็จ → `[line-webhook] slip OCR: image download failed`
+- OCR ล้มเหลว → `[line-webhook] slip OCR failed: <เหตุผลจริงจาก Vision/OCR.space>`
+
+**หลัง deploy รอบนี้ ให้ส่งสลิปทดสอบอีกครั้ง แล้วเปิด Vercel Function log กรองคำว่า `slip OCR` จะเห็นสาเหตุจริงทันที** — ถ้าเป็นเรื่อง env var ก็ตั้งเพิ่ม ถ้า Vision API ยังไม่เปิดก็ไปเปิดใน GCP Console แก้ที่ต้นเหตุได้เลยโดยไม่ต้องเดา
+
+ไฟล์ที่แก้: `src/app/api/webhooks/line/[projectId]/route.ts` (ไฟล์เดียวกับส่วนที่ 2 — ไม่กระทบ behavior เดิม เพิ่มแค่ log)
+
+---
+
+# ไฟล์ในชุดนี้ (15 ไฟล์)
 
 ```
 vercel.json                                                  ← maxDuration webhook + regions bom1
-src/app/api/webhooks/line/[projectId]/route.ts               ← ตอบ 200 ทันที + waitUntil
+src/app/api/webhooks/line/[projectId]/route.ts               ← ตอบ 200 ทันที + waitUntil + log OCR fail
 src/app/api/line-tracking/client-login/route.ts              ← ลบคุกกี้ staff ให้ได้จริง
 src/components/line-tracking/ConnectionCard.tsx              ← Webhook URL มีโดเมน + กัน autofill
-src/lib/line-tracking/actions.ts                             ← + testEmbedAction()
+src/lib/line-tracking/actions.ts                             ← + testEmbedAction() + รู้จัก embed.js?project=
 src/lib/line-tracking/services/projectService.ts             ← ยุบ query ด้วย groupBy
 src/app/line-tracking/projects/[projectId]/page.tsx          ← รวมเป็นรอบเดียว
-src/app/line-tracking/projects/[projectId]/setup/page.tsx    ← + ปุ่ม Test + แผง Webhook ล่าสุด + รวมเป็นรอบเดียว
+src/app/line-tracking/projects/[projectId]/setup/page.tsx    ← + ปุ่ม Test + แผง Webhook ล่าสุด + snippet ใหม่
 src/app/line-tracking/projects/[projectId]/funnel/page.tsx   ← รวมเป็นรอบเดียว
 src/app/line-tracking/projects/[projectId]/conversions/page.tsx ← รวมเป็นรอบเดียว
 src/app/line-tracking/projects/[projectId]/sheet/page.tsx    ← รวมเป็นรอบเดียว
+src/app/line-tracking/projects/[projectId]/tracking-links/page.tsx ← snippet ใหม่ (?project=slug)
 src/lib/line-tracking/connector-guide.ts                     ← ขั้นตอนตั้ง LINE: + Use webhook + OA Manager
-src/app/line-tracking/guide/page.tsx                         ← คู่มือในระบบ: + OA Manager + คำเตือนเรื่อง Verify
-src/app/embed.js/route.ts                                    ← หาแท็กตัวเองให้เจอเมื่อฝังผ่าน GTM
+src/app/line-tracking/guide/page.tsx                         ← คู่มือในระบบ: + OA Manager + snippet ใหม่
+src/app/embed.js/route.ts                                    ← หาแท็กตัวเองให้เจอเมื่อฝังผ่าน GTM + ?project= กันหลุดถาวร
 ```
 
 ทุกไฟล์อยู่ใน **LINE Tracking + webhook เท่านั้น** ยกเว้น `vercel.json` (ระดับโปรเจกต์)

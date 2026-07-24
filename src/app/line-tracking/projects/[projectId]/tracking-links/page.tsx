@@ -74,12 +74,12 @@ export default async function TrackingLinksPage({
             <div className="mb-1 flex items-center gap-2">
               <span className="badge bg-slate-800 text-white">1. วางในส่วน &lt;head&gt; หรือก่อน &lt;/body&gt;</span>
               <CopyButton
-                text={`<script src="${getTrackingBaseUrl()}/embed.js" data-project="${project.slug}"></script>`}
+                text={`<script src="${getTrackingBaseUrl()}/embed.js?project=${project.slug}"></script>`}
                 label="Copy script"
               />
             </div>
             <code className="block break-all rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
-              {`<script src="${getTrackingBaseUrl()}/embed.js" data-project="${project.slug}"></script>`}
+              {`<script src="${getTrackingBaseUrl()}/embed.js?project=${project.slug}"></script>`}
             </code>
           </div>
           <div>

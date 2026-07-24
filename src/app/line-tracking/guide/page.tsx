@@ -68,15 +68,17 @@ export default function LineTrackingGuidePage() {
           วางสคริปต์นี้ใน <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">&lt;head&gt;</code>{" "}
           ของทุกหน้าเว็บที่รับทราฟฟิกจากโฆษณา (หรือใส่ผ่าน Google Tag Manager ก็ได้ — วิธีทำอยู่ด้านล่าง)
           ด้านล่างเป็นตัวอย่างจริงจากโดเมนของระบบ — แก้แค่{" "}
-          <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">data-project</code>{" "}
+          <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">project=</code>{" "}
           ให้เป็น slug ของโปรเจกต์ตัวเอง:
         </p>
         <pre className="overflow-x-auto rounded-lg bg-slate-100 border border-slate-200 p-4 text-xs text-slate-800">
-{`<script
-  src="https://mercy-cvc.vercel.app/embed.js"
-  data-project="co-journey-visa"
-></script>`}
+{`<script src="https://mercy-cvc.vercel.app/embed.js?project=co-journey-visa"></script>`}
         </pre>
+        <p className="mt-2 text-xs text-slate-500">
+          ใส่ project เป็นส่วนหนึ่งของ src ตรงๆ (ไม่ใช้ data-project) เพราะ Google Tag Manager
+          บางเวอร์ชันจะดรอป attribute แบบ data-* ทิ้งตอนแทรกสคริปต์ ทำให้ระบบหาโปรเจกต์ไม่เจอ
+          และไม่นับผู้เข้าเว็บเลยแม้จะติดตั้งถูกทุกขั้นตอน
+        </p>
         <div className="mt-4 rounded-lg bg-brand-50 p-3">
           <p className="mb-2 text-sm font-medium text-slate-800">
             วิธีติดตั้งผ่าน Google Tag Manager (แนะนำ — ง่ายสุด สำหรับคนส่วนใหญ่)

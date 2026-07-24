@@ -1,5 +1,7 @@
 // Public embed script. Paste on the client's website:
-//   <script src="https://<hub>/embed.js" data-project="co-journey-visa"></script>
+//   <script src="https://<hub>/embed.js?project=co-journey-visa"></script>
+// (Older installs using data-project="co-journey-visa" instead of ?project= still work —
+// see the fallback chain below.)
 // It captures UTM + gclid/fbclid/ttclid + GA client id, records a click via the
 // ingest API, then points every element with [data-line-add] to /line/start.
 
@@ -10,18 +12,26 @@ const SNIPPET = `(function(){
   // third-party script. data-project read null, so this bailed out with
   // "[LINEHub] missing data-project" and never tracked a single visit. Confirmed live
   // on a GTM-managed WordPress site, where the visitor count sat at 1 for weeks.
-  // So: identify the tag by what actually marks it, and accept window globals too,
-  // for tag managers that do not carry data-* attributes through.
+  // Worse: GTM's Custom HTML tag also drops arbitrary data-* attributes when it
+  // recreates the <script> element to force execution — confirmed live on
+  // convertcake.com, where "Use webhook"/URL/secret were all correct but
+  // data-project still read null on every real page load. src is not affected (the
+  // browser needs it to load the script at all), so ?project= on the src itself is
+  // the one signal every tag manager preserves — resolve project from there FIRST,
+  // then fall back to data-project / window globals for already-installed snippets.
   function pick(sel){ var n = document.querySelectorAll(sel); return n[n.length-1] || null; }
   var s = document.currentScript;
   if(!s || !s.getAttribute('data-project')){ s = pick('script[data-project]') || s; }
 
-  var project = (s && s.getAttribute('data-project')) || window.LINEHubProject;
-  if(!project){ console.warn('[LINEHub] missing data-project'); return; }
+  var srcEl = (s && s.src) ? s : pick('script[src*="/embed.js"]');
+  var srcProject = '';
+  try { if (srcEl && srcEl.src) srcProject = new URL(srcEl.src).searchParams.get('project') || ''; } catch(e){}
+
+  var project = srcProject || (s && s.getAttribute('data-project')) || window.LINEHubProject;
+  if(!project){ console.warn('[LINEHub] missing project — add ?project=slug to the embed.js src'); return; }
 
   // Same story for the hub origin: fall back to whichever tag loaded embed.js, since
   // that is by definition the hub, then to an explicit global.
-  var srcEl = (s && s.src) ? s : pick('script[src*="/embed.js"]');
   var hub = (s && s.getAttribute('data-hub')) || window.LINEHubHost ||
             (srcEl && srcEl.src ? new URL(srcEl.src).origin : '');
   if(!hub){ console.warn('[LINEHub] cannot resolve hub origin'); return; }
