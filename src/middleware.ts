@@ -1,70 +1,26 @@
-import { auth } from '@/lib/auth'
-import { NextResponse } from 'next/server'
-import { LT_CLIENT_COOKIE, verifyClientToken } from '@/lib/line-tracking/clientToken'
+import NextAuth from 'next-auth'
+import { authConfig } from '@/lib/auth.config'
+
+// Middleware รันบน Edge runtime — ต้องใช้ auth.config.ts (ไม่มี prisma) เท่านั้น
+// ห้าม import '@/lib/auth' ที่นี่: มันดึง prisma เข้า Edge bundle แล้ว sign-in จะพัง
+// (สาเหตุเดียวกับตอนที่ Prisma adapter ทำ sign-in ค้างในอดีต)
+const { auth } = NextAuth(authConfig)
 
 // Login is always required to reach the app (no guest access).
 // SKIP_AUTH only controls per-user data scoping inside API routes (kept shared for the
 // agency team), NOT whether login is enforced — those two concerns are decoupled here.
-// Line Tracking external endpoints — called by LINE servers, ad-click redirects, the
-// visitor's browser, and the conversion cron. They have no session and can't pass an
-// interactive login, so they are exempt from the login gate. They are NOT open: the
-// LINE webhook verifies the X-Line-Signature HMAC and the cron checks CRON_SECRET.
-const PUBLIC_TRACKING_PREFIXES = [
-  '/go/', '/s/', '/t/', '/line/', '/embed.js',
-  '/api/webhooks/', '/api/track/', '/api/conversions/',
-]
-// Line Tracking client-viewer login/logout — must be reachable with no next-auth
-// session AND no lt_client cookie yet (that's the whole point of a login page).
-const CLIENT_AUTH_PREFIXES = [
-  '/line-tracking/client-login',
-  '/api/line-tracking/client-login',
-  '/api/line-tracking/client-logout',
-]
-function isPublicTracking(pathname: string): boolean {
-  return PUBLIC_TRACKING_PREFIXES.some(p => pathname === p || pathname.startsWith(p))
-}
-function isClientAuthPath(pathname: string): boolean {
-  return CLIENT_AUTH_PREFIXES.some(p => pathname === p || pathname.startsWith(p))
-}
-
-export default auth(async (req) => {
-  const pathname = req.nextUrl.pathname
+export default auth((req) => {
   const isLoggedIn = !!req.auth
-  const isAuthPage = pathname.startsWith('/auth')
-  const isAuthApi = pathname.startsWith('/api/auth')
-  const isPublic = isPublicTracking(pathname)
-  const isClientAuth = isClientAuthPath(pathname)
+  const isAuthPage = req.nextUrl.pathname.startsWith('/auth')
+  const isAuthApi = req.nextUrl.pathname.startsWith('/api/auth')
 
-  // Forward the pathname to server components (used by the Line Tracking layout to
-  // recognize the client-login page without gating it behind a session).
-  const headers = new Headers(req.headers)
-  headers.set('x-lt-pathname', pathname)
-  const withPathname = () => NextResponse.next({ request: { headers } })
-
-  if (isLoggedIn || isAuthPage || isAuthApi || isPublic || isClientAuth) {
-    return withPathname()
-  }
-
-  // No staff (next-auth) session. Check for a Line Tracking client-viewer cookie —
-  // a separate, contained cookie mechanism (see src/lib/line-tracking/clientAuth.ts).
-  // Staff (next-auth) behavior above is completely unaffected by this branch.
-  const clientToken = req.cookies.get(LT_CLIENT_COOKIE)?.value
-  const clientSession = clientToken ? await verifyClientToken(clientToken) : null
-
-  if (clientSession) {
-    const allowedPrefix = `/line-tracking/projects/${clientSession.projectId}`
-    const isAllowed = isPublic || isClientAuth || pathname === allowedPrefix || pathname.startsWith(`${allowedPrefix}/`)
-    if (isAllowed) {
-      return withPathname()
+  if (!isLoggedIn && !isAuthPage && !isAuthApi) {
+    // For page navigations, redirect to the sign-in page; for API/data calls return 401
+    if (req.nextUrl.pathname.startsWith('/api/')) {
+      return Response.json({ error: 'Unauthorized — login required' }, { status: 401 })
     }
-    return Response.redirect(new URL(allowedPrefix, req.nextUrl))
+    return Response.redirect(new URL('/auth/signin', req.nextUrl))
   }
-
-  // Neither next-auth session nor a valid client cookie.
-  if (pathname.startsWith('/api/')) {
-    return Response.json({ error: 'Unauthorized — login required' }, { status: 401 })
-  }
-  return Response.redirect(new URL('/auth/signin', req.nextUrl))
 })
 
 export const config = {

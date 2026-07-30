@@ -1,96 +1,70 @@
 import NextAuth from 'next-auth'
-import Google from 'next-auth/providers/google'
+import type { User } from 'next-auth'
+import { authConfig } from './auth.config'
+import { prisma } from './prisma'
 
-async function refreshAccessToken(refreshToken: string) {
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id:     process.env.GOOGLE_CLIENT_ID ?? '',
-      client_secret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-      grant_type:    'refresh_token',
-      refresh_token: refreshToken,
-    }),
-  })
-  const data = await res.json() as Record<string, unknown>
-  if (!res.ok || data.error) throw new Error(String(data.error ?? 'refresh_failed'))
-  return {
-    accessToken: data.access_token as string,
-    expiresAt:   Math.floor(Date.now() / 1000) + (data.expires_in as number ?? 3600),
-    refreshToken: (data.refresh_token as string | undefined) ?? refreshToken,
+/**
+ * INVARIANT ทั้งระบบ: session.user.id ต้องมีอยู่จริงในตาราง `User` เสมอ
+ *
+ * API route เกือบทุกตัวกรอง query ด้วย userId นี้ และหลายตาราง (MediaPlan, Brief,
+ * PushJob, AutomationRule, AutomationAlert, ChatSession) มี FK ชี้ไป User.id
+ * ถ้า id ใน session ไม่มีใน DB → เกิด 404 ปลอม ("Media plan not found"),
+ * รายการว่าง, และ FK violation ตอน create ทั่วทั้งแอป
+ *
+ * ฟังก์ชันนี้จึงรันทุกครั้งตอน sign-in (ครั้งเดียวต่อ login, ฝั่ง Node เท่านั้น):
+ * - ถ้ามี User เดิมที่ email ตรงกัน (เช่น row จากยุคที่ใช้ Prisma adapter)
+ *   → ใช้ id เดิม เพื่อให้ข้อมูลเก่าที่ผูกไว้กลับมาเชื่อมได้
+ * - ถ้าไม่มี → สร้าง row ใหม่ด้วย Google sub เป็น id
+ *
+ * ห้ามถอด logic นี้ออกโดยไม่ทบทวนทุก route ที่ใช้ getUserId()
+ * และห้าม import ไฟล์นี้จาก middleware.ts (Edge) — middleware ต้องใช้ auth.config.ts
+ */
+async function ensureDbUserId(user: User): Promise<string> {
+  const fallback = user.id ?? ''
+  try {
+    const email = user.email ?? ''
+    const existing = email
+      ? await prisma.user.findFirst({ where: { email }, select: { id: true } })
+      : null
+    if (existing) {
+      await prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          name:  user.name  ?? undefined,
+          image: user.image ?? undefined,
+        },
+      }).catch(() => {})
+      return existing.id
+    }
+    const created = await prisma.user.create({
+      data: {
+        ...(user.id ? { id: user.id } : {}),
+        email: email || null,
+        name:  user.name,
+        image: user.image,
+      },
+      select: { id: true },
+    })
+    return created.id
+  } catch (e) {
+    // sign-in ยังผ่านได้ แต่ invariant เสีย — จะโผล่ใน /api/health/auth-db
+    console.error('[auth] ensureDbUserId failed — userId invariant at risk:', e)
+    return fallback
   }
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // JWT sessions live in the cookie — no DB adapter needed. Using the Prisma adapter
-  // here caused sign-in to hang/error (SQLite write lock / OAuthAccountNotLinked vs seed).
-  providers: [
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-      authorization: {
-        params: {
-          scope: [
-            'openid',
-            'email',
-            'profile',
-            'https://www.googleapis.com/auth/adwords',
-            'https://www.googleapis.com/auth/analytics.readonly',
-            'https://www.googleapis.com/auth/analytics.edit',
-            'https://www.googleapis.com/auth/tagmanager.readonly',
-            'https://www.googleapis.com/auth/tagmanager.edit.containers',
-            'https://www.googleapis.com/auth/tagmanager.edit.containerversions',
-            'https://www.googleapis.com/auth/tagmanager.publish',
-          ].join(' '),
-          access_type: 'offline',
-          prompt: 'select_account consent',
-        },
-      },
-    }),
-  ],
-  session: { strategy: 'jwt' },
+  ...authConfig,
   callbacks: {
-    async signIn({ user }) {
-      const email = user.email ?? ''
-      return email.endsWith('@convertcake.com')
+    ...authConfig.callbacks,
+    async jwt(params) {
+      // base callback: เซ็ต token.id ชั่วคราว + เก็บ/refresh Google tokens
+      const token = await authConfig.callbacks!.jwt!(params)
+      // ตอน sign-in ครั้งแรกเท่านั้น (params.user มีค่า) — ยึด id จาก DB เป็นความจริง
+      if (params.user && token) {
+        token.id = await ensureDbUserId(params.user)
+      }
+      return token
     },
-    async jwt({ token, user, account }) {
-      if (user) {
-        token.id = user.id
-      }
-      // First sign-in — store tokens from Google
-      if (account?.provider === 'google') {
-        token.accessToken  = account.access_token
-        token.refreshToken = account.refresh_token
-        token.expiresAt    = account.expires_at
-        return token
-      }
-      // Token still valid — return as-is
-      if (Date.now() / 1000 < (token.expiresAt as number ?? 0) - 60) {
-        return token
-      }
-      // No Google refresh token (e.g. the local dev-login session) — nothing to refresh.
-      if (!token.refreshToken) return token
-      // Token expired — try to refresh
-      try {
-        const refreshed = await refreshAccessToken(token.refreshToken as string)
-        return { ...token, ...refreshed }
-      } catch {
-        return { ...token, error: 'RefreshTokenError' }
-      }
-    },
-    async session({ session, token }) {
-      if (token && session.user) {
-        session.user.id = token.id as string
-      }
-      const s = session as unknown as Record<string, unknown>
-      s.accessToken  = token.accessToken
-      s.refreshToken = token.refreshToken
-      if (token.error) s.error = token.error
-      return session
-    },
-  },
-  pages: {
-    signIn: '/auth/signin',
   },
 })

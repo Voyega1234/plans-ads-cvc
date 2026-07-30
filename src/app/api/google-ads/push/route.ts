@@ -83,7 +83,8 @@ export async function POST(req: NextRequest) {
       throw pushError
     }
   } catch (error) {
-    console.error(error)
-    return NextResponse.json({ error: 'Failed to push blueprint' }, { status: 500 })
+    console.error('[google-ads/push]', error)
+    // ส่ง detail กลับด้วย — 500 กลาง ๆ ทำให้ debug รอบก่อนต้องไล่ทั้งระบบ
+    return NextResponse.json({ error: 'Failed to push blueprint', detail: String(error) }, { status: 500 })
   }
 }

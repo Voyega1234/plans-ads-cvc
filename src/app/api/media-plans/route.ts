@@ -25,7 +25,10 @@ export async function POST(req: NextRequest) {
   try {
     const skipAuth = process.env.SKIP_AUTH === 'true'
     const session = skipAuth ? null : await auth()
-    const userId = skipAuth ? 'system' : getUserId(session)
+    // auth.ts รับประกันว่า id ใน session มี row จริงในตาราง User (ensureDbUserId)
+    // จึงใส่เป็นเจ้าของได้โดยไม่ชน FK — ห้ามกลับไปสร้างแบบไร้เจ้าของ ไม่งั้น
+    // ทุก route ที่กรองด้วย userId จะหา plan ไม่เจอ (404 "Media plan not found")
+    const ownerId = skipAuth ? null : (getUserId(session) || null)
 
     const body = await req.json() as {
       businessName?: string
@@ -61,9 +64,10 @@ export async function POST(req: NextRequest) {
       if (clientExists) resolvedClientId = body.clientId
     }
 
-    // สร้าง brief minimal — ไม่ส่ง userId/clientId เพื่อหลีกเลี่ยง FK violation
+    // สร้าง brief minimal — ผูกเจ้าของด้วย ownerId ที่การันตีแล้วว่ามีในตาราง User
     const brief = await prisma.brief.create({
       data: {
+        ...(ownerId ? { userId: ownerId } : {}),
         businessName,
         websiteUrl:     briefStr(bi.websiteUrl,     'https://example.com'),
         productService: briefStr(bi.productService, businessName),
@@ -82,6 +86,7 @@ export async function POST(req: NextRequest) {
 
     const plan = await prisma.mediaPlan.create({
       data: {
+        ...(ownerId ? { userId: ownerId } : {}),
         briefId:      brief.id,
         title:        `Media Plan - ${businessName} - ${new Date().toLocaleDateString('th-TH', { month: 'long', year: 'numeric' })}`,
         objective:    'LEADS',
