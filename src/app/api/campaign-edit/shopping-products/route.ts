@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isMockMode } from '@/lib/google-ads/client'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 
 const DEV_TOKEN = process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? ''
@@ -13,14 +12,6 @@ export interface ProductGroup {
   listingGroupType: string
   caseValue: string
   status: 'ENABLED' | 'PAUSED' | 'REMOVED'
-}
-
-function getMockProductGroups(campaignId: string): ProductGroup[] {
-  return [
-    { resourceName: `customers/mock/adGroupCriteria/${campaignId}~1`, criterionId: '1', adGroupId: '1', adGroupName: 'All Products', listingGroupType: 'UNIT', caseValue: 'All products', status: 'ENABLED' },
-    { resourceName: `customers/mock/adGroupCriteria/${campaignId}~2`, criterionId: '2', adGroupId: '1', adGroupName: 'All Products', listingGroupType: 'SUBDIVISION', caseValue: 'Shoes', status: 'ENABLED' },
-    { resourceName: `customers/mock/adGroupCriteria/${campaignId}~3`, criterionId: '3', adGroupId: '1', adGroupName: 'All Products', listingGroupType: 'UNIT', caseValue: 'Sneakers', status: 'PAUSED' },
-  ]
 }
 
 function adsHeaders(token: string): Record<string, string> {
@@ -40,10 +31,6 @@ export async function GET(req: NextRequest) {
 
   if (!customerId || !campaignId) {
     return NextResponse.json({ error: 'customerId and campaignId are required' }, { status: 400 })
-  }
-
-  if (isMockMode()) {
-    return NextResponse.json({ productGroups: getMockProductGroups(campaignId) })
   }
 
   try {
@@ -118,10 +105,6 @@ export async function POST(req: NextRequest) {
 
   if (!body.customerId || !body.resourceName || !body.status) {
     return NextResponse.json({ error: 'customerId, resourceName, and status are required' }, { status: 400 })
-  }
-
-  if (isMockMode()) {
-    return NextResponse.json({ success: true, mock: true, resourceName: body.resourceName, status: body.status })
   }
 
   try {

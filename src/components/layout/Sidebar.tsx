@@ -268,22 +268,27 @@ export default function Sidebar() {
 
           {/* Tools dropdown */}
           <div>
-            <div className={cn(
-              'flex items-center rounded-lg transition-colors',
-              isToolsActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
-            )}>
-              <Link href="/tools" className="flex-1 flex items-center gap-2.5 px-3 py-2">
+            {/* The /tools hub page is retired — the parent row now only toggles the
+                dropdown; each tool is reached from the sub-items below. */}
+            <button
+              onClick={() => setToolsOpen(o => !o)}
+              className={cn(
+                'w-full flex items-center rounded-lg transition-colors',
+                isToolsActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+              )}
+            >
+              <span className="flex-1 flex items-center gap-2.5 px-3 py-2">
                 <Wrench className={cn('w-4 h-4 flex-shrink-0', isToolsActive ? 'text-gray-700' : 'text-gray-400')} />
                 <span className={cn('text-sm flex-1 text-left', isToolsActive ? 'font-semibold text-gray-900' : 'font-medium')}>
                   Tools
                 </span>
-              </Link>
-              <button onClick={() => setToolsOpen(o => !o)} className="pr-3 py-2">
+              </span>
+              <span className="pr-3 py-2">
                 {toolsOpen
                   ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                   : <ChevronRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
-              </button>
-            </div>
+              </span>
+            </button>
             {toolsOpen && (
               <div className="mt-0.5 ml-3 pl-3 border-l border-gray-100 space-y-0.5">
                 {toolsNav.map(t => {

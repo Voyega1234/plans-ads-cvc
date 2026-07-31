@@ -184,6 +184,208 @@ function AccountCard({ health }: { health: AccountHealth }) {
   )
 }
 
+// ── Monthly Budget Progress (ต่อ account) ────────────────────────────────────
+// งบเดือนตั้งต่อ account เก็บใน DB กลาง (ตาราง AccountMonthlyBudget สร้างเองอัตโนมัติ)
+// → ทั้งทีมเห็นค่าเดียวกันทุกเครื่อง · spend เดือนนี้ดึงจริงจาก Google Ads (THIS_MONTH)
+// · เส้นวิ่งซ้าย→ขวาถึงเส้นชัย 100% พร้อมจุดคาดการณ์สิ้นเดือนแบบ run-rate
+
+interface SpendMTD { spendMTD: number; budget: number; error?: string }
+
+function MonthlyBudgetCard({ accountId, accountName, spend, onSaveBudget }: {
+  accountId: string
+  accountName: string
+  spend: SpendMTD | undefined
+  onSaveBudget: (accountId: string, budgetBaht: number) => Promise<boolean>
+}) {
+  const budget = spend?.budget ?? 0
+  const [draft, setDraft]     = useState('')
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving]   = useState(false)
+  const [saveErr, setSaveErr] = useState(false)
+
+  useEffect(() => { if (budget > 0) setDraft(String(budget)) }, [budget])
+
+  async function saveBudget() {
+    const v = parseFloat(draft)
+    if (!v || v <= 0) return
+    setSaving(true); setSaveErr(false)
+    const ok = await onSaveBudget(accountId, v)
+    setSaving(false)
+    if (ok) setEditing(false)
+    else setSaveErr(true)
+  }
+
+  const spendMTD    = spend?.spendMTD ?? 0
+  const now         = new Date()
+  const day         = now.getDate()
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const projected   = day > 0 ? (spendMTD / day) * daysInMonth : 0
+
+  const usedPct = budget > 0 ? (spendMTD / budget) * 100 : 0
+  const projPct = budget > 0 ? (projected / budget) * 100 : 0
+  const remain  = budget - spendMTD
+  const diff    = projected - budget
+  const over    = diff > budget * 0.02
+  const under   = projPct > 0 && projPct < 85
+  // แกนของเส้น: ยืดให้เห็นจุดคาดการณ์ที่เกิน 100% ได้ (สูงสุด 130%)
+  const axisMax = Math.min(130, Math.max(105, projPct + 5, usedPct + 5))
+  const x = (pct: number) => `${Math.min(100, (pct / axisMax) * 100)}%`
+
+  const budgetInput = (
+    <span className="inline-flex items-center gap-1">
+      <input
+        type="number" min="1" value={draft} onChange={(e) => setDraft(e.target.value)}
+        placeholder="งบเดือน (บาท)"
+        className="w-28 rounded-lg border border-gray-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-200"
+      />
+      <button onClick={saveBudget} disabled={saving} className="rounded-lg bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">{saving ? '…' : 'บันทึก'}</button>
+      {budget > 0 && <button onClick={() => setEditing(false)} className="text-[11px] text-gray-400 hover:text-gray-600">ยกเลิก</button>}
+    </span>
+  )
+
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-semibold text-gray-900">{accountName} <span className="ml-1 font-mono text-[10px] text-gray-400">{accountId}</span></p>
+        {budget > 0 && !editing
+          ? <button onClick={() => setEditing(true)} className="text-[11px] text-blue-600 hover:underline">แก้งบเดือน ✎</button>
+          : budgetInput}
+      </div>
+
+      {spend?.error && <p className="mt-1 text-[11px] text-red-500">ดึง spend ไม่สำเร็จ: {spend.error}</p>}
+      {saveErr && <p className="mt-1 text-[11px] text-red-500">บันทึกงบไม่สำเร็จ — ลองอีกครั้ง</p>}
+
+      {budget <= 0 && !editing ? (
+        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          ใส่งบประมาณรายเดือนของ account นี้ก่อน ระบบถึงจะคำนวณ % และแนวโน้มได้ · spend เดือนนี้: {formatCurrency(spendMTD)}
+        </p>
+      ) : budget > 0 && (
+        <>
+          {/* สรุป 3 ช่อง: งบทั้งหมด / ใช้ไปแล้ว / คงเหลือ */}
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div className="rounded-lg bg-gray-50 px-2 py-2">
+              <p className="text-[10px] text-gray-400">💰 งบทั้งหมด</p>
+              <p className="text-sm font-bold text-gray-900">{formatCurrency(budget)}</p>
+            </div>
+            <div className="rounded-lg bg-emerald-50 px-2 py-2">
+              <p className="text-[10px] text-emerald-600">✅ ใช้ไปแล้ว {usedPct.toFixed(0)}%</p>
+              <p className="text-sm font-bold text-emerald-700">{formatCurrency(spendMTD)}</p>
+            </div>
+            <div className={cn('rounded-lg px-2 py-2', remain >= 0 ? 'bg-blue-50' : 'bg-red-50')}>
+              <p className={cn('text-[10px]', remain >= 0 ? 'text-blue-600' : 'text-red-500')}>งบคงเหลือ {(100 - usedPct).toFixed(0)}%</p>
+              <p className={cn('text-sm font-bold', remain >= 0 ? 'text-blue-700' : 'text-red-600')}>{formatCurrency(remain)}</p>
+            </div>
+          </div>
+
+          {/* เส้น progress ซ้าย→ขวา + เส้นชัย 100% + จุดคาดการณ์ */}
+          <div className="mt-5 mb-1 px-1">
+            <div className="relative h-2 rounded-full bg-gray-100">
+              {/* ใช้จริง (ทึบ) */}
+              <div
+                className={cn('absolute left-0 top-0 h-2 rounded-full', over ? 'bg-orange-400' : 'bg-blue-500')}
+                style={{ width: x(usedPct) }}
+              />
+              {/* ช่วงคาดการณ์ (โปร่ง) จากตำแหน่งปัจจุบัน → จุดคาดการณ์ */}
+              {projPct > usedPct && (
+                <div
+                  className={cn('absolute top-0 h-2 rounded-r-full opacity-40', over ? 'bg-orange-400' : 'bg-blue-400')}
+                  style={{ left: x(usedPct), width: `${Math.max(0, Math.min(100, (projPct / axisMax) * 100) - Math.min(100, (usedPct / axisMax) * 100))}%` }}
+                />
+              )}
+              {/* เส้นชัย 100% */}
+              <div className="absolute top-[-6px] h-5 w-0.5 bg-gray-700" style={{ left: x(100) }} title="งบประมาณ 100%" />
+              {/* ตำแหน่งปัจจุบัน */}
+              <div className="absolute top-[-5px] h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white bg-emerald-500 shadow" style={{ left: x(usedPct) }} title={`ใช้ไปแล้ว ${usedPct.toFixed(0)}%`} />
+              {/* จุดคาดการณ์สิ้นเดือน */}
+              <div className={cn('absolute top-[-4px] h-3.5 w-3.5 -translate-x-1/2 rounded-full border-2 border-white shadow', over ? 'bg-red-500' : 'bg-blue-400')} style={{ left: x(projPct) }} title={`คาดการณ์สิ้นเดือน ${projPct.toFixed(0)}%`} />
+            </div>
+            <div className="relative mt-1.5 h-8 text-[10px] text-gray-400">
+              <span className="absolute -translate-x-1/2" style={{ left: x(0) }}>0%<br/>ต้นเดือน</span>
+              <span className="absolute -translate-x-1/2" style={{ left: x(50) }}>50%</span>
+              <span className="absolute -translate-x-1/2 font-semibold text-emerald-600" style={{ left: x(usedPct) }}>{usedPct.toFixed(0)}%<br/>ตอนนี้</span>
+              <span className="absolute -translate-x-1/2 font-semibold text-gray-700" style={{ left: x(100) }}>🏁 100%</span>
+              {Math.abs(projPct - 100) > 4 && Math.abs(projPct - usedPct) > 4 && (
+                <span className={cn('absolute -translate-x-1/2 font-semibold', over ? 'text-red-500' : 'text-blue-500')} style={{ left: x(projPct) }}>{projPct.toFixed(0)}%<br/>คาดการณ์</span>
+              )}
+            </div>
+          </div>
+
+          {/* คาดการณ์สิ้นเดือน + แนวโน้ม */}
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-gray-500">
+              📈 ถ้าใช้อัตรานี้ต่อไป (วันที่ {day}/{daysInMonth}) สิ้นเดือนจะใช้ <b>{projPct.toFixed(0)}%</b> = <b>{formatCurrency(projected)}</b>
+              {' '}· {diff >= 0 ? 'เกินงบ' : 'ต่ำกว่างบ'} <b className={diff >= 0 ? 'text-red-600' : 'text-emerald-600'}>{formatCurrency(Math.abs(diff))}</b> ({Math.abs((diff / budget) * 100).toFixed(0)}%)
+            </p>
+            <span className={cn('rounded-full px-2.5 py-1 text-[11px] font-bold',
+              over ? 'bg-red-50 text-red-600 border border-red-200'
+                : under ? 'bg-blue-50 text-blue-600 border border-blue-200'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200')}>
+              {over ? '⚠️ แนวโน้ม: เกินงบ' : under ? '💤 แนวโน้ม: ใช้ต่ำกว่าแผน' : '✓ แนวโน้ม: ตามแผน'}
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function MonthlyBudgetSection({ healths }: { healths: AccountHealth[] }) {
+  const [spends, setSpends]   = useState<Record<string, SpendMTD>>({})
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const ids = healths.map((h) => h.accountId).filter(Boolean)
+    if (!ids.length) return
+    setLoading(true)
+    fetch(`/api/morning-brief/monthly-budget?customerIds=${ids.join(',')}`)
+      .then((r) => r.json())
+      .then((d: { accounts?: Array<{ customerId: string; spendMTD: number; budget: number; error?: string }> }) => {
+        const m: Record<string, SpendMTD> = {}
+        for (const a of d.accounts ?? []) m[a.customerId] = { spendMTD: a.spendMTD, budget: a.budget ?? 0, error: a.error }
+        setSpends(m)
+      })
+      .catch(() => { /* คงแสดง 0 พร้อมช่องกรอกงบ */ })
+      .finally(() => setLoading(false))
+  }, [healths])
+
+  // บันทึกงบลง DB กลาง — ทุกคนในทีมเห็นค่าเดียวกัน
+  async function saveBudget(accountId: string, budgetBaht: number): Promise<boolean> {
+    try {
+      const res = await fetch('/api/morning-brief/monthly-budget', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId: accountId, budgetBaht }),
+      })
+      if (!res.ok) return false
+      setSpends((prev) => ({
+        ...prev,
+        [accountId]: { spendMTD: prev[accountId]?.spendMTD ?? 0, budget: budgetBaht, error: prev[accountId]?.error },
+      }))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  if (!healths.length) return null
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 p-5">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+          💰 Monthly Budget Progress
+          {loading && <span className="text-[10px] font-normal text-gray-400">กำลังดึง spend เดือนนี้…</span>}
+        </h2>
+      </div>
+      <p className="text-xs text-gray-400 mb-3">ภาพรวมการใช้งบเดือนนี้ต่อ account — ตั้งงบเดือนต่อ account (เก็บใน DB กลาง — ทั้งทีมเห็นค่าเดียวกัน) · spend ดึงจริงจาก Google Ads</p>
+      <div className="space-y-3">
+        {healths.map((h) => (
+          <MonthlyBudgetCard key={h.accountId} accountId={h.accountId} accountName={h.accountName} spend={spends[h.accountId]} onSaveBudget={saveBudget} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function MorningBriefPage() {
   const [brief, setBrief]           = useState<MorningBriefData | null>(null)
   const [loading, setLoading]       = useState(true)
@@ -337,6 +539,11 @@ export default function MorningBriefPage() {
                 <p className="text-sm text-gray-500">กำลังรอข้อมูล...</p>
               )}
             </div>
+
+            {/* Monthly Budget Progress — คุมงบเดือนต่อ account */}
+            {brief.accountHealths && brief.accountHealths.length > 0 && (
+              <MonthlyBudgetSection healths={brief.accountHealths} />
+            )}
 
             {/* Account Health Grid */}
             {brief.accountHealths && brief.accountHealths.length > 0 && (

@@ -60,6 +60,23 @@ export async function upsertLeadFromClick(params: {
     ? await prisma.adClick.findUnique({ where: { clickId: params.clickId } })
     : null;
 
+  // LIFF / LINE-Login entry points stamp the user's click on the LineUser row
+  // BEFORE the follow event arrives — prefer that exact click (1:1 per person)
+  // over the time-window guess below. Purely additive: only fills a click that
+  // would otherwise fall back to window matching or Direct.
+  if (!click && params.lineUserId) {
+    const lu = await prisma.lineUser.findUnique({ where: { id: params.lineUserId } });
+    const rememberedId = lu?.latestClickId ?? lu?.firstClickId;
+    if (rememberedId) {
+      const used = await prisma.lead.findFirst({
+        where: { projectId: params.projectId, clickId: rememberedId },
+      });
+      if (!used) {
+        click = await prisma.adClick.findUnique({ where: { clickId: rememberedId } });
+      }
+    }
+  }
+
   // No explicit click (e.g. webhook follow) → attribute to the most recent
   // Add-LINE click for this project so the lead gets a real channel (not Direct).
   // Prefer someone who actually clicked the Add-LINE button, within 3h; else the

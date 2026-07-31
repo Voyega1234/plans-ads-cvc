@@ -5,9 +5,7 @@ import { setupProgress } from "@/lib/line-tracking/services/projectService";
 import { getProjectReadiness } from "@/lib/line-tracking/services/readinessService";
 import { getAuthSession } from "@/lib/session";
 import { canManageClients } from "@/lib/line-tracking/clientAdmins";
-import ClientAccessManager from "@/components/line-tracking/ClientAccessManager";
 import { ConnectionCard } from "@/components/line-tracking/ConnectionCard";
-import { ConversionRuleRow } from "@/components/line-tracking/ConversionRuleRow";
 import { CopyButton } from "@/components/line-tracking/CopyButton";
 import { DeleteProjectCard } from "@/components/line-tracking/DeleteProjectCard";
 import { Progress, StatusBadge } from "@/components/line-tracking/ui";
@@ -15,9 +13,7 @@ import { setProjectStatusAction, testEmbedAction } from "@/lib/line-tracking/act
 import { buildTrackingUrl, getTrackingBaseUrl } from "@/lib/line-tracking/services/trackingService";
 import { fmtDate } from "@/lib/line-tracking/format";
 import type { ConnectionType } from "@/lib/line-tracking/enums";
-import { AD_CONNECTION_TYPES, LEAD_STATUS, LEAD_STATUS_LABEL } from "@/lib/line-tracking/enums";
-import type { LeadStatus } from "@/lib/line-tracking/enums";
-import { PLATFORMS, PLATFORM_DATA_SENT } from "@/lib/line-tracking/platforms";
+import { AD_CONNECTION_TYPES } from "@/lib/line-tracking/enums";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +50,7 @@ export default async function SetupWizard({
   const [project, readiness, staffSession, embedClicks, leadCount, webhookLogs] = await Promise.all([
     prisma.project.findUnique({
       where: { id: projectId },
-      include: { connections: true, conversionRules: { orderBy: { leadStatus: "asc" } } },
+      include: { connections: true },
     }),
     getProjectReadiness(projectId),
     getAuthSession(),
@@ -97,13 +93,30 @@ export default async function SetupWizard({
       tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
       text: `✅ เจอโค้ด Tracking บนเว็บแล้ว และผูกกับโปรเจกต์นี้ถูกต้อง — เหลือแค่เปิดเว็บผ่านลิงก์ที่มี ?utm_source=… สักครั้ง เพื่อให้ระบบบันทึก click แรก`,
     },
+    // Real clicks recorded but the tag is invisible in server-rendered HTML —
+    // normal for GTM / JS-injected installs. Without this verdict the page showed
+    // "✅ ตรวจพบ click จริง" and "❌ ไม่พบโค้ด" side by side about the same install.
+    oktraffic: {
+      tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      text: "✅ โค้ด Tracking ทำงานอยู่จริง — ระบบได้รับ click จากเว็บนี้แล้ว (ดูตัวเลขด้านบน) แค่ตัวสแกนมองไม่เห็น tag ใน HTML เพราะเว็บติดตั้งผ่าน Google Tag Manager หรือ inject ด้วย JavaScript ซึ่งเป็นเรื่องปกติ ไม่ต้องแก้อะไร",
+    },
+    // Snippet found inside the site's published GTM container — the state right
+    // after a correct GTM install, before any tracked click exists.
+    okgtm: {
+      tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      text: "✅ เจอโค้ด Tracking ในตัว GTM ของเว็บแล้ว และผูกกับโปรเจกต์นี้ถูกต้อง — tag จะยิงเมื่อหน้าเว็บโหลด เหลือแค่เปิดเว็บผ่านลิงก์ที่มี ?utm_source=… สักครั้ง เพื่อให้ระบบบันทึก click แรก",
+    },
+    gtmnotag: {
+      tone: "border-amber-200 bg-amber-50 text-amber-700",
+      text: "⚠️ เว็บนี้ใช้ GTM แต่ยังไม่เจอโค้ด Tracking ใน container ที่เผยแพร่ — ถ้าเพิ่ม tag ใน GTM แล้ว อย่าลืมกด Submit → Publish (สาเหตุอันดับ 1) หรือยังไม่ได้เพิ่ม Custom HTML tag เลย",
+    },
     wrongslug: {
       tone: "border-amber-200 bg-amber-50 text-amber-700",
       text: `⚠️ เจอโค้ดบนเว็บ แต่ project ไม่ตรงกับโปรเจกต์นี้ (ต้องเป็น "${project.slug}") — แก้ให้ตรงแล้วกด Test ใหม่`,
     },
     missing: {
       tone: "border-rose-200 bg-rose-50 text-rose-700",
-      text: "❌ เปิดเว็บได้ แต่ไม่พบโค้ด Tracking — ยังไม่ได้วาง, วางผิดหน้า (ต้องอยู่ทุกหน้า/หน้าแรก), หรือยังไม่ได้ publish เว็บ",
+      text: "❌ เปิดเว็บได้ แต่ไม่พบโค้ด Tracking — ยังไม่ได้วาง, วางผิดหน้า (ต้องอยู่ทุกหน้า/หน้าแรก), หรือยังไม่ได้ publish เว็บ (ถ้าติดตั้งผ่าน GTM: ตัวสแกนจะมองไม่เห็น — ให้เปิดเว็บผ่านลิงก์ที่มี ?utm_source=… หนึ่งครั้งแล้วกด Test ใหม่ ระบบจะเช็คจาก click จริงแทน)",
     },
     unreachable: {
       tone: "border-amber-200 bg-amber-50 text-amber-700",
@@ -123,9 +136,12 @@ export default async function SetupWizard({
           <h1 className="text-xl font-bold text-slate-900">Setup Wizard · {project.name}</h1>
           <p className="text-sm text-slate-500">ตั้งค่าการเชื่อมต่อทั้งหมดของโปรเจกต์นี้ทีละขั้น</p>
         </div>
-        <div className="w-full sm:w-48">
-          <Progress percent={progress.percent} />
-          <div className="mt-1 text-right text-xs text-slate-400">{progress.percent}% connected</div>
+        <div className="flex items-center gap-3">
+          <Link href={`/line-tracking/projects/${project.id}/settings`} className="btn-ghost text-sm">⚙️ Settings</Link>
+          <div className="w-40 sm:w-48">
+            <Progress percent={progress.percent} />
+            <div className="mt-1 text-right text-xs text-slate-400">{progress.percent}% connected</div>
+          </div>
         </div>
       </div>
 
@@ -283,8 +299,19 @@ export default async function SetupWizard({
         )}
       </div>
 
-      {/* Client Login management — allowlisted staff only */}
-      {canManage && <ClientAccessManager projectId={project.id} />}
+      {/* Client Login moved to its own settings sub-page — link for staff only */}
+      {canManage && (
+        <Link
+          href={`/line-tracking/projects/${project.id}/settings/client-login`}
+          className="card flex items-center gap-3 border border-slate-200 transition-colors hover:border-brand-400 hover:bg-brand-500/5"
+        >
+          <span className="text-2xl">🔑</span>
+          <span>
+            <span className="block font-semibold text-slate-800">Client Login</span>
+            <span className="mt-0.5 block text-xs text-slate-500">ย้ายไปหน้า Settings แล้ว — สร้าง/จัดการบัญชีลูกค้าได้ที่นั่น →</span>
+          </span>
+        </Link>
+      )}
 
       {/* step nav */}
       <div className="flex flex-wrap gap-2">
@@ -380,63 +407,18 @@ export default async function SetupWizard({
         )}
 
         {step === "conversions" && (
-          <div className="space-y-4">
-            {/* Reference: event names per status × platform */}
-            <div className="card overflow-x-auto">
-              <h2 className="text-base font-semibold">📋 Event ทั้งหมด (สถานะ Lead → ชื่อ event แต่ละแพลตฟอร์ม)</h2>
-              <p className="mb-2 text-sm text-slate-500">ตารางอ้างอิง — เมื่อ Lead เปลี่ยนสถานะ ระบบยิง event ชื่อนี้ไปแต่ละแพลตฟอร์ม</p>
-              <table className="min-w-full text-xs">
-                <thead>
-                  <tr className="border-b border-slate-100">
-                    <th className="th">สถานะ</th>
-                    {PLATFORMS.map((p) => <th key={p.id} className="th">{p.label}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {LEAD_STATUS.map((st) => (
-                    <tr key={st} className="border-b border-slate-50">
-                      <td className="td font-medium">{st}<div className="text-[10px] text-slate-400">{LEAD_STATUS_LABEL[st as LeadStatus]}</div></td>
-                      {PLATFORMS.map((p) => (
-                        <td key={p.id} className="td">{p.events[st as LeadStatus] ?? <span className="text-slate-300">—</span>}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <p className="mt-2 rounded-lg bg-rose-50 p-2 text-xs text-rose-600">
-                🚫 <b>line_block</b> → GA4 (นอกเหนือจากตาราง) — ยิงอัตโนมัติเมื่อลูกค้า <b>บล็อก LINE OA</b>
-                เพื่อให้เห็น flow ครบ (แอด → ทัก → ปิดการขาย → บล็อก) ส่งเฉพาะ GA4 ไม่ส่ง ad platform
-              </p>
-            </div>
-
-            {/* Reference: what data is sent per platform */}
-            <div className="card">
-              <h2 className="text-base font-semibold">📤 ส่งข้อมูลอะไรไปบ้าง (ต่อแพลตฟอร์ม)</h2>
-              <p className="mb-3 rounded-lg bg-line-500/5 p-2 text-xs text-line-600">
-                🔒 ไม่ส่งข้อมูลส่วนบุคคล (ชื่อจริง / เบอร์ / อีเมล) เด็ดขาด — ส่งแค่ click id, id เข้ารหัส, และค่า conversion
-              </p>
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                {PLATFORMS.map((p) => (
-                  <div key={p.id} className="rounded-lg border border-slate-100 p-3">
-                    <div className="mb-1 font-semibold text-slate-700">{p.label}</div>
-                    <ul className="list-inside list-disc space-y-0.5 text-xs text-slate-500">
-                      {PLATFORM_DATA_SENT[p.id].map((f) => <li key={f}>{f}</li>)}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Editable rules */}
-            <div className="card space-y-3">
-              <h2 className="text-base font-semibold">Conversion Mapping (เปิด/ปิด ต่อสถานะ)</h2>
-              <p className="text-sm text-slate-500">
-                กำหนดว่าแต่ละสถานะ Lead จะส่ง event ไปแพลตฟอร์มไหนบ้าง (ติ๊กเปิด/ปิดได้)
-              </p>
-              {project.conversionRules.map((rule) => (
-                <ConversionRuleRow key={rule.id} projectId={project.id} rule={rule} />
-              ))}
-            </div>
+          <div className="card space-y-3">
+            <h2 className="text-base font-semibold">⚡ Conversion Mapping</h2>
+            <p className="text-sm text-slate-500">
+              ส่วนนี้ย้ายไปหน้า Settings แล้ว — ตาราง event ทุกสถานะ (รวม 🚫 line_block ที่ส่งได้ทุกแพลตฟอร์ม),
+              เปิด/ปิดกฎ, และแก้ชื่อ event ได้ทั้งแบบ Standard และ Custom
+            </p>
+            <Link
+              href={`/line-tracking/projects/${project.id}/settings/conversion-mapping`}
+              className="btn-primary inline-block text-sm"
+            >
+              เปิด Conversion Mapping →
+            </Link>
           </div>
         )}
 

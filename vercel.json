@@ -13,7 +13,8 @@
     "src/app/api/templates/research/route.ts": { "maxDuration": 120 },
     "src/app/api/adcopy/generate/route.ts": { "maxDuration": 120 },
     "src/app/api/conversions/process/route.ts": { "maxDuration": 300 },
-    "src/app/api/webhooks/line/[projectId]/route.ts": { "maxDuration": 60 }
+    "src/app/api/webhooks/line/[projectId]/route.ts": { "maxDuration": 60 },
+    "src/app/line-tracking/projects/[projectId]/setup/page.tsx": { "maxDuration": 60 }
   },
   "crons": [
     { "path": "/api/conversions/process", "schedule": "*/10 * * * *" }

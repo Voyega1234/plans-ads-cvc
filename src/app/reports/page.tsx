@@ -37,6 +37,7 @@ interface PctChanges {
 interface CampaignRow {
   campaignName: string; cost: number; impressions: number; clicks: number
   conversions: number; ctr: number; cpc: number; cpa: number; conversionRate: number
+  status?: string // ENABLED / PAUSED — จาก live pull (snapshot เก่าอาจไม่มี)
   changes?: PctChanges
 }
 
@@ -325,7 +326,14 @@ export default function ReportsPage() {
       if (savedRoas) setTargetROAS(savedRoas)
     } catch { /* private mode */ }
   }, [selectedId])
-  const [report, setReport]                   = useState<WeeklyReport | null>(null)
+  const [reportRaw, setReportRaw]             = useState<WeeklyReport | null>(null)
+  // แสดงเฉพาะแคมเปญ ENABLED โดย default — account ใหญ่มี PAUSED ยาวมากจนหน้ารก
+  const [onlyEnabled, setOnlyEnabled]         = useState(true)
+  const report = useMemo<WeeklyReport | null>(() => {
+    if (!reportRaw) return null
+    if (!onlyEnabled) return reportRaw
+    return { ...reportRaw, campaigns: reportRaw.campaigns.filter(c => (c.status ?? 'ENABLED') === 'ENABLED') }
+  }, [reportRaw, onlyEnabled])
   const [loading, setLoading]                 = useState(false)
   const [error, setError]                     = useState<string | null>(null)
   const [syncing, setSyncing]                 = useState(false)
@@ -619,7 +627,7 @@ export default function ReportsPage() {
       const res = await fetch(`/api/reports/weekly?customerId=${cid}&targetCPA=${cpa}&dateRange=${dr}`)
       if (!res.ok) throw new Error('โหลด report ไม่สำเร็จ')
       const data = await res.json() as WeeklyReport
-      setReport(data)
+      setReportRaw(data)
       loadAllDimensions(data)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'เกิดข้อผิดพลาด')
@@ -1766,6 +1774,17 @@ ${ctx}`
             className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 disabled:opacity-50">
             <RefreshCw className={cn('w-3.5 h-3.5', syncing && 'animate-spin')} />
             {syncing ? 'Syncing...' : 'Sync & Refresh'}
+          </button>
+          {/* Enabled-only filter — ตัดหาง PAUSED ยาว ๆ ของ account ใหญ่ออกจากทุกตาราง/กราฟ/export */}
+          <button
+            onClick={() => setOnlyEnabled(v => !v)}
+            className={cn('flex items-center gap-1.5 px-3 py-2 text-sm rounded-xl border shadow-sm transition-colors',
+              onlyEnabled
+                ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700'
+                : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50')}
+            title="กรองเฉพาะแคมเปญที่ ENABLED"
+          >
+            {onlyEnabled ? '✓ เฉพาะ Active' : 'รวม Paused'}
           </button>
         </div>
       </div>

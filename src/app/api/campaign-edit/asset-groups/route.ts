@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isMockMode } from '@/lib/google-ads/client'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 
 const DEV_TOKEN = process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? ''
@@ -24,24 +23,6 @@ export interface AssetGroup {
   businessName: string
   images: AssetGroupImage[]
   logos: AssetGroupImage[]
-}
-
-function getMockAssetGroups(campaignId: string): AssetGroup[] {
-  return [
-    {
-      assetGroupId: `${campaignId}-ag-1`,
-      assetGroupResourceName: `customers/mock/assetGroups/${campaignId}-ag-1`,
-      name: 'Asset Group หลัก',
-      status: 'ENABLED',
-      finalUrls: ['https://example.co.th'],
-      headlines: ['โปรโมชั่นพิเศษ', 'ราคาถูกที่สุด', 'สั่งซื้อได้เลย'],
-      longHeadlines: ['สินค้าคุณภาพสูงราคาโปร สั่งซื้อออนไลน์ได้เลยวันนี้'],
-      descriptions: ['บริการระดับพรีเมียม คุ้มค่าทุกบาท', 'ส่งด่วนทั่วไทย รับประกันคุณภาพ'],
-      businessName: 'Example Brand',
-      images: [],
-      logos: [],
-    },
-  ]
 }
 
 function adsHeaders(token: string): Record<string, string> {
@@ -78,10 +59,6 @@ export async function GET(req: NextRequest) {
 
   if (!customerId || !campaignId) {
     return NextResponse.json({ error: 'customerId and campaignId are required' }, { status: 400 })
-  }
-
-  if (isMockMode()) {
-    return NextResponse.json({ assetGroups: getMockAssetGroups(campaignId) })
   }
 
   try {

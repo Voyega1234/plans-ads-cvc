@@ -105,6 +105,28 @@ export async function ConnectionCard({
               ⚠️ นี่เป็น URL ของเครื่อง dev — LINE เรียกไม่ถึง ตั้ง TRACKING_BASE_URL เป็นโดเมนจริงก่อนใช้งาน
             </div>
           )}
+          <div className="mt-2 border-t border-brand-100 pt-2 text-brand-600">
+            🤖 <b>ลูกค้ามีบอท/webhook เดิมอยู่แล้ว?</b> LINE ให้ตั้ง Webhook ได้ URL เดียวต่อ channel —
+            ให้วาง URL ข้างบนนี้ใน LINE ตามปกติ แล้วเลือก <b>Option 2</b> ในฟอร์มด้านล่าง
+            พร้อมใส่ Webhook URL เดิมของบอทลูกค้า ระบบจะส่งทุก event ต่อให้บอทเดิมแบบครบถ้วน
+            (raw body + ลายเซ็นเดิม — บอทลูกค้า verify ผ่านและตอบแชทได้ปกติ ส่วนเราก็เก็บ Lead ได้พร้อมกัน)
+          </div>
+          {/* LIFF tracking link — LINE-domain-only measurement (FB post → LINE ตรง ๆ) */}
+          {config.liffId && (
+            <div className="mt-2 border-t border-brand-100 pt-2">
+              <div className="font-semibold">📱 ลิงก์ LIFF (โดเมน LINE — วัด add ที่ไม่ผ่านเว็บได้แบบ 1:1):</div>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="flex-1 break-all rounded bg-white px-2 py-1 text-slate-700">
+                  {`https://liff.line.me/${config.liffId}?src=ชื่อช่องทาง`}
+                </code>
+                <CopyButton text={`https://liff.line.me/${config.liffId}?src=`} label="Copy" />
+              </div>
+              <div className="mt-1 text-[11px] opacity-80">
+                เปลี่ยน <code>src=</code> ต่อช่องทาง (เช่น fb-post / line-ads) — และตั้ง Endpoint URL ของ LIFF app
+                ใน LINE Developers เป็น <code>{baseUrl}/liff/&lt;slug ของโปรเจกต์&gt;</code>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -135,6 +157,20 @@ export async function ConnectionCard({
         <input type="hidden" name="type" value={type} />
         {meta.fields.map((f) => {
           const current = config[f.key];
+          if (f.options) {
+            return (
+              <div key={f.key}>
+                <label className="label">
+                  {f.label} {f.optional && <span className="text-slate-300">(optional)</span>}
+                </label>
+                <select name={f.key} className="input" defaultValue={current || f.options[0].value}>
+                  {f.options.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          }
           if (f.textarea) {
             return (
               <div key={f.key}>

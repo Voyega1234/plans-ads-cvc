@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isMockMode } from '@/lib/google-ads/client'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 
 const DEV_TOKEN = process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? ''
@@ -39,10 +38,6 @@ export async function POST(req: NextRequest) {
   }
   if (!descriptions || descriptions.length < 2) {
     return NextResponse.json({ error: 'At least 2 descriptions required' }, { status: 400 })
-  }
-
-  if (isMockMode()) {
-    return NextResponse.json({ success: true, mock: true, assetGroupResourceName })
   }
 
   try {

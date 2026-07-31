@@ -5,6 +5,7 @@ import { getGoogleAdsAccessToken } from './auth'
 interface CampaignPerformanceRow {
   campaignId: string
   campaignName: string
+  status: string
   cost: number
   impressions: number
   clicks: number
@@ -58,6 +59,7 @@ export async function getCampaignPerformance(
     SELECT
       campaign.id,
       campaign.name,
+      campaign.status,
       metrics.cost_micros,
       metrics.impressions,
       metrics.clicks,
@@ -99,7 +101,7 @@ export async function getCampaignPerformance(
 
   type GadsResult = {
     results?: Array<{
-      campaign: { id: string; name: string }
+      campaign: { id: string; name: string; status?: string }
       metrics: { costMicros: string; impressions: string; clicks: string; conversions: string; ctr: string; averageCpc: string; costPerConversion: string }
     }>
   }
@@ -115,6 +117,7 @@ export async function getCampaignPerformance(
     return {
       campaignId:        String(r.campaign.id ?? ''),
       campaignName:      r.campaign.name,
+      status:            r.campaign.status ?? 'ENABLED',
       cost,
       impressions:       Number(r.metrics.impressions ?? 0),
       clicks:            Number(r.metrics.clicks ?? 0),

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isMockMode } from '@/lib/google-ads/client'
 import { getGoogleAdsAccessToken } from '@/lib/google-ads/auth'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -29,98 +28,6 @@ export interface LiveAd {
 
 // ─── Mock data ─────────────────────────────────────────────────────────────────
 
-function getMockAds(campaignId: string): LiveAd[] {
-  return [
-    {
-      adId: `${campaignId}-ad-001`,
-      adGroupId: `${campaignId}-ag-001`,
-      adGroupName: 'กลุ่มโฆษณา — สินค้าหลัก',
-      adType: 'RSA',
-      headlines: [
-        { text: 'โปรโมชั่นพิเศษวันนี้', pinned_field: 'HEADLINE_1' },
-        { text: 'ราคาถูกที่สุดในไทย' },
-        { text: 'สั่งซื้อง่ายส่งเร็ว' },
-        { text: 'รับประกันคุณภาพ' },
-        { text: 'ฟรีค่าจัดส่งทั่วประเทศ' },
-      ],
-      longHeadlines: [],
-      descriptions: [
-        { text: 'สินค้าคุณภาพสูง ราคาคุ้มค่า ส่งฟรีทุกออเดอร์ สั่งซื้อเลยวันนี้' },
-        { text: 'บริการลูกค้า 24 ชั่วโมง คืนสินค้าได้ภายใน 30 วัน' },
-      ],
-      finalUrls: ['https://example.co.th/products'],
-      status: 'ENABLED',
-      metrics: { impressions: 42800, clicks: 1284, ctr: 3.0, conversions: 38 },
-    },
-    {
-      adId: `${campaignId}-ad-002`,
-      adGroupId: `${campaignId}-ag-001`,
-      adGroupName: 'กลุ่มโฆษณา — สินค้าหลัก',
-      adType: 'RESPONSIVE_DISPLAY',
-      headlines: [
-        { text: 'ลดราคาทุกวัน' },
-        { text: 'ของแท้จากผู้ผลิต' },
-        { text: 'เช็คราคาตอนนี้' },
-      ],
-      longHeadlines: [{ text: 'สินค้าคุณภาพราคาโปร สั่งออนไลน์ส่งด่วนทั่วไทย' }],
-      descriptions: [
-        { text: 'ร้านค้าออนไลน์อันดับ 1 สินค้าครบ ราคาโปร จัดส่งไว' },
-        { text: 'มั่นใจได้กับคุณภาพ ลูกค้ากว่า 50,000 คนไว้วางใจ' },
-      ],
-      finalUrls: ['https://example.co.th/sale'],
-      status: 'ENABLED',
-      metrics: { impressions: 28600, clicks: 857, ctr: 3.0, conversions: 22 },
-    },
-    {
-      adId: `${campaignId}-ad-003`,
-      adGroupId: `${campaignId}-ag-002`,
-      adGroupName: 'กลุ่มโฆษณา — แบรนด์',
-      adType: 'DEMAND_GEN_MULTI_ASSET',
-      headlines: [
-        { text: 'แบรนด์ชั้นนำ คุณภาพระดับพรีเมียม' },
-        { text: 'ผลิตภัณฑ์คุณภาพสูง' },
-      ],
-      longHeadlines: [],
-      descriptions: [
-        { text: 'แบรนด์ที่วางใจได้ สินค้าแท้ 100% จัดส่งด่วนทั่วประเทศ' },
-        { text: 'ช้อปตรงจากแบรนด์ รับส่วนลดพิเศษสำหรับสมาชิก' },
-      ],
-      finalUrls: ['https://example.co.th/brand'],
-      status: 'PAUSED',
-      metrics: { impressions: 9200, clicks: 460, ctr: 5.0, conversions: 14 },
-    },
-    {
-      adId: `${campaignId}-ad-004`,
-      adGroupId: `${campaignId}-ag-003`,
-      adGroupName: 'กลุ่มโฆษณา — App',
-      adType: 'APP',
-      headlines: [
-        { text: 'โหลดแอปวันนี้' },
-        { text: 'ดีลพิเศษเฉพาะในแอป' },
-      ],
-      longHeadlines: [],
-      descriptions: [
-        { text: 'ดาวน์โหลดฟรี รับส่วนลดออเดอร์แรกทันที' },
-        { text: 'ช้อปสะดวกกว่าในแอป พร้อมโปรเฉพาะสมาชิก' },
-      ],
-      finalUrls: [],
-      status: 'ENABLED',
-      metrics: { impressions: 63400, clicks: 2220, ctr: 3.5, conversions: 67 },
-    },
-  ]
-}
-
-// ─── GET ───────────────────────────────────────────────────────────────────────
-
-const AD_TYPE_MAP: Record<string, EditableAdType> = {
-  RESPONSIVE_SEARCH_AD: 'RSA',
-  RESPONSIVE_DISPLAY_AD: 'RESPONSIVE_DISPLAY',
-  APP_AD: 'APP',
-  DEMAND_GEN_MULTI_ASSET_AD: 'DEMAND_GEN_MULTI_ASSET',
-  DEMAND_GEN_VIDEO_RESPONSIVE_AD: 'DEMAND_GEN_VIDEO',
-  DEMAND_GEN_CAROUSEL_AD: 'DEMAND_GEN_CAROUSEL',
-}
-
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const customerId = searchParams.get('customerId') ?? ''
@@ -128,10 +35,6 @@ export async function GET(req: NextRequest) {
 
   if (!customerId || !campaignId) {
     return NextResponse.json({ error: 'customerId and campaignId are required' }, { status: 400 })
-  }
-
-  if (isMockMode()) {
-    return NextResponse.json({ ads: getMockAds(campaignId) })
   }
 
   // Real Google Ads REST API — ดึง field ของทุก ad type ที่รองรับ (Search / Display / App / Demand Gen)
@@ -283,13 +186,6 @@ export async function POST(req: NextRequest) {
 
   if (adType === 'DEMAND_GEN_CAROUSEL') {
     return NextResponse.json({ error: 'Demand Gen Carousel ads แก้ text ผ่านหน้านี้ไม่ได้ — แก้ใน Google Ads UI' }, { status: 400 })
-  }
-
-  if (isMockMode()) {
-    return NextResponse.json({
-      success: true,
-      resourceName: `customers/${customerId}/ads/${adId}`,
-    })
   }
 
   try {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { prisma } from "@/lib/prisma";
 import { stringifyJson } from "@/lib/line-tracking/json";
-import { upsertLineUser, fetchLineProfile, downloadLineContent } from "@/lib/line-tracking/services/lineService";
+import { upsertLineUser, verifyLineSignature, fetchLineProfile, downloadLineContent } from "@/lib/line-tracking/services/lineService";
 import { upsertLeadFromClick, changeLeadStatus } from "@/lib/line-tracking/services/leadService";
 import { processQueue, enqueueBlockConversion } from "@/lib/line-tracking/services/conversionQueueService";
 import { ocrSlip } from "@/lib/line-tracking/services/ocrService";
@@ -44,7 +44,7 @@ export async function POST(
 ) {
   const { projectId } = await params;
 
-  // Read the body once so it can be parsed after the project lookup.
+  // Read the RAW body first — required for signature verification.
   const rawBody = await req.text();
 
   // Both lookups are keyed by projectId, so they run in parallel — one DB
@@ -57,10 +57,30 @@ export async function POST(
     return NextResponse.json({ error: "project not found" }, { status: 404 });
   }
 
-  // TEMPORARY: LineUTM forwards events without LINE's X-Line-Signature, so this
-  // endpoint currently accepts forwarded payloads without signature validation.
-  // Restore the verification above, or replace it with a LineUTM shared secret,
-  // before exposing this webhook beyond the current integration.
+  // Verify X-Line-Signature. This endpoint is public and creates LINE users and
+  // leads, so an unverified payload is an open door for forged leads — refuse
+  // rather than accept when there is no secret to check against. A LINE channel
+  // cannot be connected without the secret anyway (it is one of the two
+  // realKeys), so a project that legitimately receives webhooks always has one.
+  if (!lineConfig.messagingChannelSecret) {
+    // Log off the critical path — the rejection itself must not wait on a DB write.
+    waitUntil(
+      logWebhook(project.id, { note: "no channel secret configured" }, "REJECTED",
+        "Messaging Channel Secret ยังไม่ได้ตั้งค่า — ไม่สามารถยืนยันว่า webhook มาจาก LINE จริง")
+    );
+    return NextResponse.json({ error: "webhook not configured" }, { status: 401 });
+  }
+  const validSignature = verifyLineSignature(
+    lineConfig.messagingChannelSecret,
+    rawBody,
+    req.headers.get("x-line-signature")
+  );
+  if (!validSignature) {
+    waitUntil(
+      logWebhook(project.id, { note: "signature rejected" }, "REJECTED", "Invalid X-Line-Signature")
+    );
+    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+  }
 
   let body: unknown;
   try {
@@ -69,10 +89,78 @@ export async function POST(
     body = {};
   }
 
+  // Option 2 (relay): the customer already ran a bot on this channel before we
+  // took over the (single) webhook slot — pass every verified event through to
+  // the bot's original URL so it keeps working. Off the critical path: LINE has
+  // its ~1s timeout, the customer's bot can be arbitrarily slow.
+  if (lineConfig.webhookMode === "relay" && lineConfig.forwardUrl) {
+    waitUntil(
+      forwardToClientBot(project.id, lineConfig.forwardUrl, rawBody, {
+        signature: req.headers.get("x-line-signature"),
+        retryKey: req.headers.get("x-line-retry-key"),
+      })
+    );
+  }
+
   // ACK now, work later. Everything below this line used to run before the
   // response and is what pushed the handler past LINE's timeout.
   waitUntil(handleEvents(project, lineConfig, body));
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * Relay the raw event to the customer's original bot (webhookMode "relay").
+ * MUST send rawBody byte-for-byte — X-Line-Signature is HMAC-SHA256 over the raw
+ * bytes with the channel secret, and the destination bot verifies with that same
+ * secret (same channel). Re-serializing the JSON would change the bytes and break
+ * verification. We have already ACKed LINE with 200, so LINE will NOT retry on a
+ * forward failure — retry here, then surface the failure in WebhookLog so it
+ * shows up in the setup page's webhook panel instead of only in Vercel logs.
+ */
+async function forwardToClientBot(
+  projectId: string,
+  forwardUrl: string,
+  rawBody: string,
+  headers: { signature: string | null; retryKey: string | null }
+) {
+  let target: URL;
+  try {
+    target = new URL(forwardUrl);
+  } catch {
+    await logWebhook(projectId, { note: `forward: URL ไม่ถูกต้อง` }, "FAILED",
+      `Forward ไม่สำเร็จ — Webhook URL เดิมของลูกค้าไม่ใช่ URL ที่ถูกต้อง (${forwardUrl})`);
+    return;
+  }
+  // Guard 1: https only. Guard 2: never forward into a LINE-hub webhook endpoint
+  // (ours or any deployment of this app) — that would loop events back into us.
+  if (target.protocol !== "https:" || target.pathname.includes("/api/webhooks/line")) {
+    await logWebhook(projectId, { note: "forward: URL ไม่ผ่านเงื่อนไข" }, "FAILED",
+      "Forward ไม่สำเร็จ — Webhook เดิมของลูกค้าต้องเป็น https และห้ามชี้กลับมาที่ระบบนี้เอง");
+    return;
+  }
+
+  let lastError = "";
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(target, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(headers.signature ? { "x-line-signature": headers.signature } : {}),
+          ...(headers.retryKey ? { "x-line-retry-key": headers.retryKey } : {}),
+        },
+        body: rawBody,
+        redirect: "manual", // a redirect would drop the POST body/signature — treat as failure
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.ok) return;
+      lastError = `HTTP ${res.status}`;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  await logWebhook(projectId, { note: `forward → ${target.origin} ล้มเหลว` }, "FAILED",
+    `Forward ไป webhook เดิมของลูกค้าไม่สำเร็จ (${lastError}) — บอทลูกค้าไม่ได้รับ event รอบนี้ (ฝั่ง tracking ของเราได้รับปกติ)`);
 }
 
 /** Best-effort webhook audit row — never throws into the request path. */

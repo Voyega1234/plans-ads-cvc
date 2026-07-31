@@ -196,6 +196,9 @@ export default function CampaignAdjustmentPage() {
   const [selectedAccountId, setSelectedAccountId] = useState('')
   const [campaigns, setCampaigns] = useState<ExistingCampaign[]>([])
   const [loadingCampaigns, setLoadingCampaigns] = useState(false)
+  // Campaign list filter — free-text name search + status
+  const [campaignFilter, setCampaignFilter] = useState('')
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState<'ALL' | 'ENABLED' | 'PAUSED'>('ALL')
   const [selectedCampaign, setSelectedCampaign] = useState<ExistingCampaign | null>(null)
   const [selectedAdGroup, setSelectedAdGroup] = useState<ExistingAdGroup | null>(null)
   const [selectedAd, setSelectedAd] = useState<ExistingAd | null>(null)
@@ -330,9 +333,9 @@ export default function CampaignAdjustmentPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const data = await res.json() as { success?: boolean; message?: string; error?: string; mock?: boolean }
+      const data = await res.json() as { success?: boolean; message?: string; error?: string }
       if (res.ok && data.success) {
-        setResult({ ok: true, message: data.message ?? `${MODE_LABELS[mode]} สำเร็จ${data.mock ? ' (Mock)' : ''}` })
+        setResult({ ok: true, message: data.message ?? `${MODE_LABELS[mode]} สำเร็จ` })
       } else {
         setResult({ ok: false, message: data.error ?? 'เกิดข้อผิดพลาด' })
       }
@@ -385,11 +388,49 @@ export default function CampaignAdjustmentPage() {
           </div>
 
           {/* Campaign list */}
-          {campaigns.length > 0 && (
+          {campaigns.length > 0 && (() => {
+            const visible = campaigns.filter(c => {
+              if (campaignStatusFilter !== 'ALL' && c.status !== campaignStatusFilter) return false
+              if (campaignFilter.trim() && !c.name.toLowerCase().includes(campaignFilter.trim().toLowerCase())) return false
+              return true
+            })
+            return (
             <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <p className="text-sm font-semibold text-gray-700 mb-3">2. เลือก Campaign ({campaigns.length})</p>
+              <p className="text-sm font-semibold text-gray-700 mb-3">
+                2. เลือก Campaign ({visible.length === campaigns.length ? campaigns.length : `${visible.length}/${campaigns.length}`})
+              </p>
+              {/* Filter: name search + status */}
+              <div className="mb-2 space-y-1.5">
+                <input
+                  value={campaignFilter}
+                  onChange={e => setCampaignFilter(e.target.value)}
+                  placeholder="🔍 ค้นหาชื่อ campaign..."
+                  className="w-full px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <div className="flex gap-1">
+                  {(['ALL', 'ENABLED', 'PAUSED'] as const).map(s => (
+                    <button
+                      key={s}
+                      onClick={() => setCampaignStatusFilter(s)}
+                      className={cn(
+                        'px-2 py-1 text-[10px] font-semibold rounded-md border transition-colors',
+                        campaignStatusFilter === s
+                          ? s === 'ENABLED' ? 'bg-green-600 border-green-600 text-white'
+                            : s === 'PAUSED' ? 'bg-amber-500 border-amber-500 text-white'
+                            : 'bg-gray-800 border-gray-800 text-white'
+                          : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                      )}
+                    >
+                      {s === 'ALL' ? 'ทั้งหมด' : s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {visible.length === 0 && (
+                <p className="py-3 text-center text-xs text-gray-400">ไม่มี campaign ตรงกับ filter</p>
+              )}
               <div className="space-y-1.5 max-h-80 overflow-y-auto">
-                {campaigns.map(c => (
+                {visible.map(c => (
                   <button
                     key={c.id}
                     onClick={() => selectCampaign(c)}
@@ -420,7 +461,8 @@ export default function CampaignAdjustmentPage() {
                 ))}
               </div>
             </div>
-          )}
+            )
+          })()}
         </div>
 
         {/* ── Right: Adjustment form ── */}

@@ -11,6 +11,13 @@ export interface LineConfig {
   liffId?: string;
   messagingChannelSecret?: string;
   messagingAccessToken?: string;
+  // LINE allows exactly ONE webhook URL per channel. When the customer already
+  // runs a bot on that channel, our URL replaces theirs — so "relay" mode
+  // forwards every verified event (raw body + original X-Line-Signature) to the
+  // bot's original URL. Same channel = same secret, so the signature verifies at
+  // the destination as if LINE had called it directly.
+  webhookMode?: "direct" | "relay";
+  forwardUrl?: string;
 }
 
 export interface SheetConfig {
@@ -88,6 +95,8 @@ export interface ConnectorField {
   secret?: boolean; // secret fields are masked in read views and never listed raw
   textarea?: boolean;
   optional?: boolean;
+  /** Renders as a <select> instead of a text input. */
+  options?: { value: string; label: string }[];
 }
 
 export interface ConnectorMeta {
@@ -114,6 +123,21 @@ export const CONNECTOR_META: Record<ConnectionType, ConnectorMeta> = {
       { key: "addFriendUrl", label: "Add Friend URL (ลิงก์แอดเพื่อน — จำเป็น)", placeholder: "https://lin.ee/xxxx" },
       { key: "messagingChannelSecret", label: "Messaging Channel Secret (จำเป็น — ยืนยัน webhook)", secret: true },
       { key: "messagingAccessToken", label: "Messaging Access Token (จำเป็น — ดึงชื่อ/รูป + อ่านสลิป)", secret: true },
+      {
+        key: "webhookMode",
+        label: "โหมด Webhook (เลือกตามลูกค้า)",
+        optional: true,
+        options: [
+          { value: "direct", label: "Option 1 — ลูกค้าไม่มีบอทเดิม: ใช้ webhook ของระบบเราอย่างเดียว" },
+          { value: "relay", label: "Option 2 — ลูกค้ามีบอท/webhook เดิม: forward ทุก event ต่อให้บอทเดิมด้วย" },
+        ],
+      },
+      {
+        key: "forwardUrl",
+        label: "Webhook URL เดิมของบอทลูกค้า (ใส่เมื่อเลือก Option 2)",
+        placeholder: "https://bot-ของลูกค้า.example.com/callback",
+        optional: true,
+      },
       { key: "loginChannelId", label: "LINE Login Channel ID (ไม่บังคับ — เฉพาะถ้าอยาก attribution แม่น 1:1)", optional: true },
       { key: "loginChannelSecret", label: "LINE Login Channel Secret (ไม่บังคับ)", secret: true, optional: true },
       { key: "liffId", label: "LIFF ID", optional: true },

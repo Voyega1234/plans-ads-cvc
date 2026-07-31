@@ -1435,6 +1435,1083 @@ function BudgetModal({
   )
 }
 
+// ─── Reapprove confirm modal ───────────────────────────────────────────────────
+// Every push action funnels through this: it lists exactly what will change and
+// nothing reaches Google Ads until the user clicks ยืนยัน (re-approve step).
+
+interface PendingConfirm {
+  title: string
+  detail: string[]
+  confirmLabel: string
+  tone: 'emerald' | 'amber' | 'blue' | 'red'
+  run: () => Promise<void> | void
+}
+
+const CONFIRM_TONES: Record<PendingConfirm['tone'], string> = {
+  emerald: 'bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300',
+  amber:   'bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300',
+  blue:    'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300',
+  red:     'bg-red-600 hover:bg-red-700 disabled:bg-red-300',
+}
+
+function ConfirmActionModal({ pending, onClose }: { pending: PendingConfirm; onClose: () => void }) {
+  const [running, setRunning] = useState(false)
+  async function confirm() {
+    setRunning(true)
+    try {
+      await pending.run()
+      onClose()
+    } finally {
+      setRunning(false)
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-gray-900 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-500"/>{pending.title}
+          </h3>
+          <button onClick={onClose} disabled={running} className="p-1 rounded hover:bg-gray-100"><X className="w-4 h-4 text-gray-400"/></button>
+        </div>
+        <div className="max-h-56 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50 p-3 space-y-1">
+          {pending.detail.map((line, i) => (
+            <p key={i} className="text-xs text-gray-700">• {line}</p>
+          ))}
+        </div>
+        <p className="text-[11px] text-gray-400">ตรวจสอบรายการด้านบนก่อน — กดยืนยันแล้วระบบจะ push ไปที่ Google Ads จริงทันที</p>
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={confirm}
+            disabled={running}
+            className={cn('flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-white text-sm font-medium rounded-lg transition-colors', CONFIRM_TONES[pending.tone])}
+          >
+            {running ? <Loader2 className="w-4 h-4 animate-spin"/> : <CheckCircle2 className="w-4 h-4"/>}
+            {pending.confirmLabel}
+          </button>
+          <button onClick={onClose} disabled={running} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">ยกเลิก</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Bidding section (campaign level) ──────────────────────────────────────────
+// Adjust bidding targets via the existing edit_campaign_bidding action. The API
+// updates the target of the given strategy — pushing a strategy that does not
+// match the campaign's live strategy is rejected by Google Ads, so we default to
+// the campaign's current one and warn on mismatch.
+
+const BIDDING_LABELS: Record<string, string> = {
+  TARGET_CPA: 'Target CPA',
+  MAXIMIZE_CONVERSIONS: 'Maximize Conversions',
+  TARGET_ROAS: 'Target ROAS',
+  MAXIMIZE_CONVERSION_VALUE: 'Maximize Conversion Value',
+  TARGET_SPEND: 'Maximize Clicks (Target Spend)',
+  MANUAL_CPC: 'Manual CPC',
+}
+
+const ADJUSTABLE_STRATEGIES = ['MAXIMIZE_CONVERSIONS', 'TARGET_CPA', 'MAXIMIZE_CONVERSION_VALUE', 'TARGET_ROAS'] as const
+type AdjustableStrategy = (typeof ADJUSTABLE_STRATEGIES)[number]
+
+function BiddingSection({ campaign, customerId, confirm }: {
+  campaign: CampaignSummary
+  customerId: string
+  confirm: (p: PendingConfirm) => void
+}) {
+  const current = campaign.biddingStrategyType ?? ''
+  const [strategy, setStrategy] = useState<AdjustableStrategy>(
+    (ADJUSTABLE_STRATEGIES as readonly string[]).includes(current) ? current as AdjustableStrategy : 'MAXIMIZE_CONVERSIONS'
+  )
+  const [target, setTarget] = useState('')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const isCpa = strategy === 'TARGET_CPA' || strategy === 'MAXIMIZE_CONVERSIONS'
+  const mismatch = current !== '' && current !== strategy
+
+  async function push(value: number) {
+    const res = await fetch('/api/campaign-adjustments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'edit_campaign_bidding',
+        customerId,
+        campaignResourceName: campaign.campaignResourceName,
+        biddingStrategyType: strategy,
+        // Picking a different strategy than the campaign's current one = switch it.
+        ...(mismatch ? { changeStrategy: true } : {}),
+        ...(isCpa ? { targetCpaMicros: Math.round(value * 1_000_000) } : { targetRoas: value }),
+      }),
+    })
+    const data = await res.json() as { success?: boolean; message?: string; error?: string }
+    if (res.ok && data.success) {
+      setMsg({ ok: true, text: data.message ?? `ปรับ bidding สำเร็จ` })
+    } else {
+      setMsg({ ok: false, text: data.error ?? 'ปรับ bidding ไม่สำเร็จ' })
+    }
+  }
+
+  function request() {
+    const value = parseFloat(target)
+    if (!value || value <= 0) { setMsg({ ok: false, text: isCpa ? 'ระบุ Target CPA (บาท) ให้ถูกต้อง' : 'ระบุ Target ROAS (เท่า) ให้ถูกต้อง' }); return }
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันปรับ Bidding?',
+      detail: [
+        `${campaign.campaignName}`,
+        `Strategy: ${BIDDING_LABELS[strategy] ?? strategy}${mismatch ? ` (ปัจจุบัน: ${BIDDING_LABELS[current] ?? current} — ถ้าไม่ตรง Google จะปฏิเสธ)` : ''}`,
+        isCpa ? `Target CPA: ฿${value.toLocaleString()}` : `Target ROAS: ${value} เท่า (${Math.round(value * 100)}%)`,
+      ],
+      confirmLabel: 'ปรับ Bidding',
+      tone: 'blue',
+      run: () => push(value),
+    })
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center gap-2 mb-3">
+        <DollarSign className="w-4 h-4 text-blue-500"/>
+        <p className="font-semibold text-sm text-gray-900">Bidding</p>
+        {current && (
+          <span className="px-2 py-0.5 text-[11px] bg-blue-50 text-blue-600 border border-blue-100 rounded-full">
+            ปัจจุบัน: {BIDDING_LABELS[current] ?? current}
+          </span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[220px]">
+          <label className="block text-xs font-medium text-gray-500 mb-1">Strategy</label>
+          <select value={strategy} onChange={e => setStrategy(e.target.value as AdjustableStrategy)}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            {ADJUSTABLE_STRATEGIES.map(s => <option key={s} value={s}>{BIDDING_LABELS[s]}</option>)}
+          </select>
+        </div>
+        <div className="w-40">
+          <label className="block text-xs font-medium text-gray-500 mb-1">{isCpa ? 'Target CPA (บาท)' : 'Target ROAS (เท่า)'}</label>
+          <input type="number" min="0" step={isCpa ? '1' : '0.1'} value={target} onChange={e => setTarget(e.target.value)}
+            placeholder={isCpa ? 'เช่น 250' : 'เช่น 4 (= 400%)'}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+        </div>
+        <button onClick={request}
+          className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+          <Save className="w-4 h-4"/>ปรับ Bidding
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+      </div>
+      {mismatch && (
+        <p className="mt-1.5 text-[11px] text-amber-600">
+          ⚠️ strategy ที่เลือกต่างจากปัจจุบัน — ระบบจะ<b>เปลี่ยน strategy จริง</b>ใน Google Ads (แคมเปญเข้าสู่ช่วงเรียนรู้ใหม่)
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ─── Keywords section (SEARCH campaigns) ───────────────────────────────────────
+// View / add / pause / remove keywords per ad group + AI suggestions grounded on
+// the live keywords and the campaign's real ad copy. All pushes go through the
+// reapprove modal.
+
+interface KeywordRowUI {
+  adGroupId: string
+  adGroupName: string
+  adGroupResourceName: string
+  criterionResourceName: string
+  text: string
+  matchType: 'EXACT' | 'PHRASE' | 'BROAD' | 'UNKNOWN'
+  status: 'ENABLED' | 'PAUSED'
+  negative: boolean
+}
+
+interface KeywordAISuggestion {
+  add: { text: string; matchType: 'EXACT' | 'PHRASE' | 'BROAD'; reason: string }[]
+  pauseOrRemove: { text: string; reason: string }[]
+  rationale: string
+}
+
+function KeywordsSection({ campaign, customerId, confirm }: {
+  campaign: CampaignSummary
+  customerId: string
+  confirm: (p: PendingConfirm) => void
+}) {
+  const [rows, setRows] = useState<KeywordRowUI[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  // add form
+  const [addText, setAddText] = useState('')
+  const [addMatch, setAddMatch] = useState<'EXACT' | 'PHRASE' | 'BROAD'>('PHRASE')
+  const [addAdGroup, setAddAdGroup] = useState('')
+
+  // AI suggest
+  const [aiInstruction, setAiInstruction] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiResult, setAiResult] = useState<KeywordAISuggestion | null>(null)
+  const [aiPicked, setAiPicked] = useState<Set<string>>(new Set())
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/campaign-edit/keywords?customerId=${customerId}&campaignResourceName=${encodeURIComponent(campaign.campaignResourceName)}`)
+      const data = await res.json() as { keywords?: KeywordRowUI[]; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'โหลด keywords ไม่สำเร็จ')
+      setRows(data.keywords ?? [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'โหลด keywords ไม่สำเร็จ')
+    } finally {
+      setLoading(false)
+    }
+  }, [customerId, campaign.campaignResourceName])
+
+  useEffect(() => { load() }, [load])
+
+  const adGroups = Array.from(new Map(rows.map(r => [r.adGroupResourceName, r.adGroupName])).entries())
+  const effectiveAddAdGroup = addAdGroup || adGroups[0]?.[0] || ''
+
+  async function mutate(operations: Record<string, unknown>[], successText: string) {
+    const res = await fetch('/api/campaign-edit/keywords', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId, operations }),
+    })
+    const data = await res.json() as { success?: boolean; message?: string; error?: string }
+    if (res.ok && data.success) {
+      setMsg({ ok: true, text: data.message ?? `${successText}` })
+      await load()
+    } else {
+      setMsg({ ok: false, text: data.error ?? 'ปรับ keyword ไม่สำเร็จ' })
+    }
+  }
+
+  function requestSetStatus(row: KeywordRowUI, status: 'ENABLED' | 'PAUSED') {
+    confirm({
+      title: status === 'PAUSED' ? 'ยืนยันพัก keyword?' : 'ยืนยันเปิด keyword?',
+      detail: [`"${row.text}" [${row.matchType}] ใน ${row.adGroupName} — ${row.status} → ${status}`],
+      confirmLabel: status === 'PAUSED' ? 'พัก keyword' : 'เปิด keyword',
+      tone: status === 'PAUSED' ? 'amber' : 'emerald',
+      run: () => mutate(
+        [{ op: 'set_status', criterionResourceName: row.criterionResourceName, status }],
+        status === 'PAUSED' ? 'พัก keyword แล้ว' : 'เปิด keyword แล้ว'
+      ),
+    })
+  }
+
+  function requestRemove(row: KeywordRowUI) {
+    confirm({
+      title: 'ยืนยันลบ keyword?',
+      detail: [`ลบถาวร: "${row.text}" [${row.matchType}] ใน ${row.adGroupName}`],
+      confirmLabel: 'ลบ keyword',
+      tone: 'red',
+      run: () => mutate([{ op: 'remove', criterionResourceName: row.criterionResourceName }], 'ลบ keyword แล้ว'),
+    })
+  }
+
+  function requestAdd() {
+    const words = addText.split('\n').map(s => s.trim()).filter(Boolean)
+    if (!words.length) { setMsg({ ok: false, text: 'พิมพ์ keyword ที่จะเพิ่มก่อน (บรรทัดละคำ)' }); return }
+    if (!effectiveAddAdGroup) { setMsg({ ok: false, text: 'ยังไม่มี Ad Group ให้เพิ่ม keyword' }); return }
+    const agName = adGroups.find(([rn]) => rn === effectiveAddAdGroup)?.[1] ?? ''
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันเพิ่ม keywords?',
+      detail: words.map(w => `+ "${w}" [${addMatch}] → ${agName}`),
+      confirmLabel: `เพิ่ม ${words.length} keywords`,
+      tone: 'emerald',
+      run: () => mutate(
+        words.map(w => ({ op: 'add', adGroupResourceName: effectiveAddAdGroup, text: w, matchType: addMatch })),
+        `เพิ่ม ${words.length} keywords แล้ว`
+      ).then(() => setAddText('')),
+    })
+  }
+
+  async function askAI() {
+    setAiLoading(true)
+    setAiResult(null)
+    setAiPicked(new Set())
+    try {
+      // Ground the suggestion on the campaign's real ad copy.
+      let adHeadlines: string[] = []
+      let adDescriptions: string[] = []
+      try {
+        const adsRes = await fetch(`/api/campaign-edit/ads?customerId=${customerId}&campaignId=${campaign.campaignId}`)
+        const adsData = await adsRes.json() as { ads?: { headlines?: { text: string }[]; descriptions?: { text: string }[] }[] }
+        adHeadlines = (adsData.ads ?? []).flatMap(a => (a.headlines ?? []).map(h => h.text)).slice(0, 15)
+        adDescriptions = (adsData.ads ?? []).flatMap(a => (a.descriptions ?? []).map(d => d.text)).slice(0, 8)
+      } catch { /* ad copy is optional grounding */ }
+
+      const res = await fetch('/api/campaign-edit/keyword-suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignName: campaign.campaignName,
+          existingKeywords: rows.map(r => ({ text: r.text, matchType: r.matchType, status: r.status })),
+          adHeadlines,
+          adDescriptions,
+          instruction: aiInstruction,
+        }),
+      })
+      const data = await res.json() as KeywordAISuggestion & { error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'AI แนะนำไม่สำเร็จ')
+      setAiResult(data)
+      setAiPicked(new Set(data.add.map(a => a.text)))
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'AI แนะนำไม่สำเร็จ' })
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  function requestApplyAI() {
+    if (!aiResult) return
+    const picked = aiResult.add.filter(a => aiPicked.has(a.text))
+    if (!picked.length) { setMsg({ ok: false, text: 'เลือก keyword ที่จะเพิ่มอย่างน้อย 1 คำ' }); return }
+    if (!effectiveAddAdGroup) { setMsg({ ok: false, text: 'ยังไม่มี Ad Group ให้เพิ่ม keyword' }); return }
+    const agName = adGroups.find(([rn]) => rn === effectiveAddAdGroup)?.[1] ?? ''
+    confirm({
+      title: 'ยืนยันเพิ่ม keywords จาก AI?',
+      detail: picked.map(a => `+ "${a.text}" [${a.matchType}] → ${agName}`),
+      confirmLabel: `เพิ่ม ${picked.length} keywords`,
+      tone: 'emerald',
+      run: () => mutate(
+        picked.map(a => ({ op: 'add', adGroupResourceName: effectiveAddAdGroup, text: a.text, matchType: a.matchType })),
+        `เพิ่ม ${picked.length} keywords จาก AI แล้ว`
+      ).then(() => setAiResult(null)),
+    })
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center gap-2 mb-3">
+        <Search className="w-4 h-4 text-indigo-500"/>
+        <p className="font-semibold text-sm text-gray-900">Keywords</p>
+        {rows.length > 0 && <span className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-500 rounded-full">{rows.length}</span>}
+        <button onClick={load} disabled={loading} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+          <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')}/>รีเฟรช
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+      </div>
+
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+      {loading && rows.length === 0 && (
+        <div className="flex items-center gap-2 py-4 text-gray-400 text-sm"><Loader2 className="w-4 h-4 animate-spin"/>กำลังโหลด keywords...</div>
+      )}
+      {!loading && !error && rows.length === 0 && (
+        <p className="text-sm text-gray-400 py-2">ยังไม่มี keyword ในแคมเปญนี้</p>
+      )}
+
+      {/* Keyword table grouped by ad group */}
+      {rows.length > 0 && (
+        <div className="rounded-lg border border-gray-100 overflow-hidden mb-3 max-h-72 overflow-y-auto">
+          {adGroups.map(([agRn, agName]) => (
+            <div key={agRn}>
+              <div className="px-3 py-1.5 bg-gray-50 text-[11px] font-semibold text-gray-500 border-b border-gray-100">{agName}</div>
+              {rows.filter(r => r.adGroupResourceName === agRn).map(r => (
+                <div key={r.criterionResourceName} className="flex items-center gap-2 px-3 py-2 border-b border-gray-50 last:border-b-0">
+                  <span className={cn('flex-1 min-w-0 truncate text-sm', r.status === 'PAUSED' ? 'text-gray-400' : 'text-gray-800')}>
+                    {r.negative && <span className="text-red-500 font-semibold mr-1">−</span>}{r.text}
+                  </span>
+                  <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-50 text-indigo-600 rounded">{r.matchType}</span>
+                  <span className={cn('px-1.5 py-0.5 text-[10px] font-semibold rounded', r.status === 'ENABLED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>{r.status}</span>
+                  <button
+                    onClick={() => requestSetStatus(r, r.status === 'ENABLED' ? 'PAUSED' : 'ENABLED')}
+                    className="text-xs text-gray-500 hover:text-gray-800"
+                    title={r.status === 'ENABLED' ? 'พัก keyword' : 'เปิด keyword'}
+                  >
+                    {r.status === 'ENABLED' ? <ToggleLeft className="w-4 h-4"/> : <ToggleRight className="w-4 h-4"/>}
+                  </button>
+                  <button onClick={() => requestRemove(r)} className="text-gray-300 hover:text-red-500" title="ลบ keyword">
+                    <X className="w-3.5 h-3.5"/>
+                  </button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add keywords */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="rounded-lg border border-gray-100 p-3 space-y-2">
+          <p className="text-xs font-semibold text-gray-600 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/>เพิ่ม Keywords (บรรทัดละคำ)</p>
+          <textarea value={addText} onChange={e => setAddText(e.target.value)} rows={3}
+            placeholder={'คลินิกทันตกรรม ใกล้ฉัน\nจัดฟัน ราคา'}
+            className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+          <div className="flex items-center gap-2">
+            <select value={addMatch} onChange={e => setAddMatch(e.target.value as 'EXACT' | 'PHRASE' | 'BROAD')}
+              className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg bg-white">
+              <option value="EXACT">EXACT</option>
+              <option value="PHRASE">PHRASE</option>
+              <option value="BROAD">BROAD</option>
+            </select>
+            <select value={effectiveAddAdGroup} onChange={e => setAddAdGroup(e.target.value)}
+              className="flex-1 min-w-0 px-2 py-1.5 text-xs border border-gray-200 rounded-lg bg-white">
+              {adGroups.map(([rn, name]) => <option key={rn} value={rn}>{name}</option>)}
+            </select>
+            <button onClick={requestAdd}
+              className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">เพิ่ม</button>
+          </div>
+        </div>
+
+        {/* AI suggest */}
+        <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3 space-y-2">
+          <p className="text-xs font-semibold text-indigo-700 flex items-center gap-1"><Sparkles className="w-3.5 h-3.5"/>AI แนะนำ keyword (อิงจาก keyword + ad จริง)</p>
+          <div className="flex items-center gap-2">
+            <input value={aiInstruction} onChange={e => setAiInstruction(e.target.value)}
+              placeholder="สิ่งที่อยากปรับ เช่น เน้นคนหาราคา / ตัดคำกว้าง"
+              className="flex-1 px-2.5 py-1.5 text-xs border border-indigo-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"/>
+            <button onClick={askAI} disabled={aiLoading}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg transition-colors">
+              {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <Sparkles className="w-3.5 h-3.5"/>}แนะนำ
+            </button>
+          </div>
+          {aiResult && (
+            <div className="space-y-2">
+              {aiResult.add.length > 0 && (
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {aiResult.add.map(a => (
+                    <label key={a.text} className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" className="mt-0.5 rounded border-gray-300 text-indigo-600"
+                        checked={aiPicked.has(a.text)}
+                        onChange={() => setAiPicked(prev => {
+                          const next = new Set(prev)
+                          if (next.has(a.text)) next.delete(a.text); else next.add(a.text)
+                          return next
+                        })}/>
+                      <span className="min-w-0"><b>&quot;{a.text}&quot;</b> [{a.matchType}] <span className="text-gray-400">— {a.reason}</span></span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {aiResult.pauseOrRemove.length > 0 && (
+                <div className="rounded-lg bg-amber-50 border border-amber-100 p-2 space-y-0.5">
+                  <p className="text-[11px] font-semibold text-amber-700">แนะนำให้พัก/ลบ (กดจากตารางด้านบน):</p>
+                  {aiResult.pauseOrRemove.map(p => (
+                    <p key={p.text} className="text-[11px] text-amber-700">• &quot;{p.text}&quot; — {p.reason}</p>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-gray-400">{aiResult.rationale}</p>
+              <button onClick={requestApplyAI}
+                className="w-full px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
+                เพิ่มคำที่เลือก ({aiResult.add.filter(a => aiPicked.has(a.text)).length})
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Extensions section (sitelink / callout, campaign level) ───────────────────
+
+interface ExtensionRowUI {
+  campaignAssetResourceName: string
+  assetResourceName: string
+  fieldType: 'SITELINK' | 'CALLOUT'
+  linkText?: string
+  description1?: string
+  description2?: string
+  finalUrl?: string
+  calloutText?: string
+}
+
+function ExtensionsSection({ campaign, customerId, confirm }: {
+  campaign: CampaignSummary
+  customerId: string
+  confirm: (p: PendingConfirm) => void
+}) {
+  const [rows, setRows] = useState<ExtensionRowUI[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const [slText, setSlText] = useState('')
+  const [slUrl, setSlUrl] = useState('')
+  const [slDesc1, setSlDesc1] = useState('')
+  const [slDesc2, setSlDesc2] = useState('')
+  const [coText, setCoText] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/campaign-edit/extensions?customerId=${customerId}&campaignResourceName=${encodeURIComponent(campaign.campaignResourceName)}`)
+      const data = await res.json() as { extensions?: ExtensionRowUI[]; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'โหลด extensions ไม่สำเร็จ')
+      setRows(data.extensions ?? [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'โหลด extensions ไม่สำเร็จ')
+    } finally {
+      setLoading(false)
+    }
+  }, [customerId, campaign.campaignResourceName])
+
+  useEffect(() => { load() }, [load])
+
+  async function mutate(operations: Record<string, unknown>[], successText: string) {
+    const res = await fetch('/api/campaign-edit/extensions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId, operations }),
+    })
+    const data = await res.json() as { success?: boolean; message?: string; error?: string }
+    if (res.ok && data.success) {
+      setMsg({ ok: true, text: data.message ?? `${successText}` })
+      await load()
+    } else {
+      setMsg({ ok: false, text: data.error ?? 'ปรับ extension ไม่สำเร็จ' })
+    }
+  }
+
+  function requestAddSitelink() {
+    if (!slText.trim() || !slUrl.trim()) { setMsg({ ok: false, text: 'Sitelink ต้องมีข้อความ + URL' }); return }
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันเพิ่ม Sitelink?',
+      detail: [`+ Sitelink "${slText.trim()}" → ${slUrl.trim()}`, ...(slDesc1.trim() ? [`คำอธิบาย: ${slDesc1.trim()}${slDesc2.trim() ? ' / ' + slDesc2.trim() : ''}`] : []), `แคมเปญ: ${campaign.campaignName}`],
+      confirmLabel: 'เพิ่ม Sitelink',
+      tone: 'emerald',
+      run: () => mutate(
+        [{ op: 'add_sitelink', campaignResourceName: campaign.campaignResourceName, linkText: slText.trim(), finalUrl: slUrl.trim(), description1: slDesc1.trim(), description2: slDesc2.trim() }],
+        'เพิ่ม Sitelink แล้ว'
+      ).then(() => { setSlText(''); setSlUrl(''); setSlDesc1(''); setSlDesc2('') }),
+    })
+  }
+
+  function requestAddCallout() {
+    if (!coText.trim()) { setMsg({ ok: false, text: 'พิมพ์ข้อความ Callout ก่อน' }); return }
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันเพิ่ม Callout?',
+      detail: [`+ Callout "${coText.trim()}"`, `แคมเปญ: ${campaign.campaignName}`],
+      confirmLabel: 'เพิ่ม Callout',
+      tone: 'emerald',
+      run: () => mutate(
+        [{ op: 'add_callout', campaignResourceName: campaign.campaignResourceName, calloutText: coText.trim() }],
+        'เพิ่ม Callout แล้ว'
+      ).then(() => setCoText('')),
+    })
+  }
+
+  function requestRemove(row: ExtensionRowUI) {
+    const label = row.fieldType === 'SITELINK' ? `Sitelink "${row.linkText}"` : `Callout "${row.calloutText}"`
+    confirm({
+      title: `ยืนยันถอด ${row.fieldType === 'SITELINK' ? 'Sitelink' : 'Callout'}?`,
+      detail: [`ถอด ${label} ออกจาก ${campaign.campaignName} (ตัว asset ยังอยู่ใน library ของบัญชี)`],
+      confirmLabel: 'ถอดออก',
+      tone: 'red',
+      run: () => mutate([{ op: 'remove', campaignAssetResourceName: row.campaignAssetResourceName }], 'ถอด extension แล้ว'),
+    })
+  }
+
+  const sitelinks = rows.filter(r => r.fieldType === 'SITELINK')
+  const callouts = rows.filter(r => r.fieldType === 'CALLOUT')
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center gap-2 mb-3">
+        <LayoutGrid className="w-4 h-4 text-teal-500"/>
+        <p className="font-semibold text-sm text-gray-900">Extensions (Sitelink / Callout)</p>
+        {rows.length > 0 && <span className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-500 rounded-full">{rows.length}</span>}
+        <button onClick={load} disabled={loading} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+          <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')}/>รีเฟรช
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+      </div>
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* Sitelinks */}
+        <div className="rounded-lg border border-gray-100 p-3 space-y-2">
+          <p className="text-xs font-semibold text-gray-600">Sitelinks ({sitelinks.length})</p>
+          {sitelinks.map(r => (
+            <div key={r.campaignAssetResourceName} className="flex items-start gap-2 text-xs border-b border-gray-50 pb-1.5 last:border-b-0">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-gray-800 truncate">{r.linkText}</p>
+                <p className="text-gray-400 truncate">{r.finalUrl}</p>
+                {(r.description1 || r.description2) && <p className="text-gray-400 truncate">{[r.description1, r.description2].filter(Boolean).join(' / ')}</p>}
+              </div>
+              <button onClick={() => requestRemove(r)} className="text-gray-300 hover:text-red-500 shrink-0" title="ถอดออก"><X className="w-3.5 h-3.5"/></button>
+            </div>
+          ))}
+          {!loading && sitelinks.length === 0 && <p className="text-xs text-gray-400">ยังไม่มี sitelink</p>}
+          <div className="pt-1 space-y-1.5">
+            <div className="flex gap-1.5">
+              <input value={slText} onChange={e => setSlText(e.target.value)} maxLength={25} placeholder="ข้อความ (≤25)"
+                className="flex-1 min-w-0 px-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400"/>
+              <input value={slUrl} onChange={e => setSlUrl(e.target.value)} placeholder="https://..."
+                className="flex-1 min-w-0 px-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400"/>
+            </div>
+            <div className="flex gap-1.5">
+              <input value={slDesc1} onChange={e => setSlDesc1(e.target.value)} maxLength={35} placeholder="คำอธิบาย 1 (ไม่บังคับ)"
+                className="flex-1 min-w-0 px-2 py-1.5 text-xs border border-gray-200 rounded-lg"/>
+              <input value={slDesc2} onChange={e => setSlDesc2(e.target.value)} maxLength={35} placeholder="คำอธิบาย 2 (ไม่บังคับ)"
+                className="flex-1 min-w-0 px-2 py-1.5 text-xs border border-gray-200 rounded-lg"/>
+              <button onClick={requestAddSitelink}
+                className="px-3 py-1.5 text-xs font-medium bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition-colors shrink-0">เพิ่ม</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Callouts */}
+        <div className="rounded-lg border border-gray-100 p-3 space-y-2">
+          <p className="text-xs font-semibold text-gray-600">Callouts ({callouts.length})</p>
+          <div className="flex flex-wrap gap-1.5">
+            {callouts.map(r => (
+              <span key={r.campaignAssetResourceName} className="inline-flex items-center gap-1 px-2 py-1 bg-teal-50 border border-teal-100 text-teal-700 text-xs rounded-full">
+                {r.calloutText}
+                <button onClick={() => requestRemove(r)} className="hover:text-red-500" title="ถอดออก"><X className="w-3 h-3"/></button>
+              </span>
+            ))}
+            {!loading && callouts.length === 0 && <p className="text-xs text-gray-400">ยังไม่มี callout</p>}
+          </div>
+          <div className="flex gap-1.5 pt-1">
+            <input value={coText} onChange={e => setCoText(e.target.value)} maxLength={25} placeholder="เช่น ส่งฟรีทั่วไทย (≤25)"
+              className="flex-1 min-w-0 px-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-400"/>
+            <button onClick={requestAddCallout}
+              className="px-3 py-1.5 text-xs font-medium bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition-colors shrink-0">เพิ่ม</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Audience section (campaign-level USER_LIST criteria) ──────────────────────
+
+interface AttachedAudienceUI {
+  criterionResourceName: string
+  userListResourceName: string
+  name: string
+  bidModifier?: number
+  negative: boolean
+}
+
+interface AvailableUserListUI {
+  resourceName: string
+  name: string
+  sizeForSearch?: number
+}
+
+function AudienceSection({ campaign, customerId, confirm }: {
+  campaign: CampaignSummary
+  customerId: string
+  confirm: (p: PendingConfirm) => void
+}) {
+  const [attached, setAttached] = useState<AttachedAudienceUI[]>([])
+  const [available, setAvailable] = useState<AvailableUserListUI[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [pickList, setPickList] = useState('')
+  const [bidMod, setBidMod] = useState('')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/campaign-edit/audiences?customerId=${customerId}&campaignResourceName=${encodeURIComponent(campaign.campaignResourceName)}`)
+      const data = await res.json() as { attached?: AttachedAudienceUI[]; available?: AvailableUserListUI[]; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'โหลด audiences ไม่สำเร็จ')
+      setAttached(data.attached ?? [])
+      setAvailable(data.available ?? [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'โหลด audiences ไม่สำเร็จ')
+    } finally {
+      setLoading(false)
+    }
+  }, [customerId, campaign.campaignResourceName])
+
+  useEffect(() => { load() }, [load])
+
+  const attachedRns = new Set(attached.map(a => a.userListResourceName))
+  const addable = available.filter(a => !attachedRns.has(a.resourceName))
+  const effectivePick = pickList || addable[0]?.resourceName || ''
+
+  async function mutate(operations: Record<string, unknown>[], successText: string) {
+    const res = await fetch('/api/campaign-edit/audiences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId, operations }),
+    })
+    const data = await res.json() as { success?: boolean; message?: string; error?: string }
+    if (res.ok && data.success) {
+      setMsg({ ok: true, text: data.message ?? `${successText}` })
+      await load()
+    } else {
+      setMsg({ ok: false, text: data.error ?? 'ปรับ audience ไม่สำเร็จ' })
+    }
+  }
+
+  function requestAdd() {
+    if (!effectivePick) { setMsg({ ok: false, text: 'ไม่มี audience list ให้เพิ่ม (สร้าง user list ใน Google Ads ก่อน)' }); return }
+    const name = addable.find(a => a.resourceName === effectivePick)?.name ?? effectivePick
+    const mod = parseFloat(bidMod)
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันเพิ่ม Audience?',
+      detail: [`+ "${name}" → ${campaign.campaignName}`, ...(mod > 0 ? [`Bid modifier: ×${mod}`] : [])],
+      confirmLabel: 'เพิ่ม Audience',
+      tone: 'emerald',
+      run: () => mutate(
+        [{ op: 'add', campaignResourceName: campaign.campaignResourceName, userListResourceName: effectivePick, ...(mod > 0 ? { bidModifier: mod } : {}) }],
+        'เพิ่ม audience แล้ว'
+      ).then(() => { setPickList(''); setBidMod('') }),
+    })
+  }
+
+  function requestRemove(a: AttachedAudienceUI) {
+    confirm({
+      title: 'ยืนยันถอด Audience?',
+      detail: [`ถอด "${a.name}" ออกจาก ${campaign.campaignName}`],
+      confirmLabel: 'ถอดออก',
+      tone: 'red',
+      run: () => mutate([{ op: 'remove', criterionResourceName: a.criterionResourceName }], 'ถอด audience แล้ว'),
+    })
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center gap-2 mb-3">
+        <Globe className="w-4 h-4 text-purple-500"/>
+        <p className="font-semibold text-sm text-gray-900">Audiences (Remarketing / Customer lists)</p>
+        {attached.length > 0 && <span className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-500 rounded-full">{attached.length}</span>}
+        <button onClick={load} disabled={loading} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+          <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')}/>รีเฟรช
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+      </div>
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {attached.map(a => (
+          <span key={a.criterionResourceName} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 border border-purple-100 text-purple-700 text-xs rounded-full">
+            {a.negative && <span className="font-bold text-red-500">−</span>}
+            {a.name}
+            {a.bidModifier ? <span className="text-purple-400">×{a.bidModifier}</span> : null}
+            <button onClick={() => requestRemove(a)} className="hover:text-red-500" title="ถอดออก"><X className="w-3 h-3"/></button>
+          </span>
+        ))}
+        {!loading && attached.length === 0 && <p className="text-xs text-gray-400">ยังไม่มี audience ผูกกับแคมเปญนี้</p>}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <select value={effectivePick} onChange={e => setPickList(e.target.value)}
+          className="flex-1 min-w-[200px] px-2 py-1.5 text-xs border border-gray-200 rounded-lg bg-white">
+          {addable.length === 0 && <option value="">— ไม่มี list ที่ยังไม่ได้เพิ่ม —</option>}
+          {addable.map(a => (
+            <option key={a.resourceName} value={a.resourceName}>
+              {a.name}{typeof a.sizeForSearch === 'number' ? ` (~${a.sizeForSearch.toLocaleString()} คน)` : ''}
+            </option>
+          ))}
+        </select>
+        <input type="number" min="0" step="0.1" value={bidMod} onChange={e => setBidMod(e.target.value)}
+          placeholder="bid ×(เช่น 1.2)"
+          className="w-28 px-2 py-1.5 text-xs border border-gray-200 rounded-lg"/>
+        <button onClick={requestAdd}
+          className="px-3 py-1.5 text-xs font-medium bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors">เพิ่ม</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Ad group section (bid + enable/pause per ad group) ────────────────────────
+
+interface AdGroupRowUI {
+  adGroupId: string
+  adGroupResourceName: string
+  name: string
+  status: 'ENABLED' | 'PAUSED'
+  cpcBidMicros: number
+  type: string
+}
+
+function AdGroupBidsSection({ campaign, customerId, confirm }: {
+  campaign: CampaignSummary
+  customerId: string
+  confirm: (p: PendingConfirm) => void
+}) {
+  const [rows, setRows] = useState<AdGroupRowUI[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [bidDraft, setBidDraft] = useState<Record<string, string>>({})
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/campaign-edit/ad-groups?customerId=${customerId}&campaignResourceName=${encodeURIComponent(campaign.campaignResourceName)}`)
+      const data = await res.json() as { adGroups?: AdGroupRowUI[]; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'โหลด ad groups ไม่สำเร็จ')
+      setRows(data.adGroups ?? [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'โหลด ad groups ไม่สำเร็จ')
+    } finally {
+      setLoading(false)
+    }
+  }, [customerId, campaign.campaignResourceName])
+
+  useEffect(() => { load() }, [load])
+
+  async function mutate(operations: Record<string, unknown>[], successText: string) {
+    const res = await fetch('/api/campaign-edit/ad-groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId, operations }),
+    })
+    const data = await res.json() as { success?: boolean; message?: string; error?: string }
+    if (res.ok && data.success) {
+      setMsg({ ok: true, text: data.message ?? `${successText}` })
+      await load()
+    } else {
+      setMsg({ ok: false, text: data.error ?? 'ปรับ ad group ไม่สำเร็จ' })
+    }
+  }
+
+  function requestSetStatus(row: AdGroupRowUI) {
+    const status: 'ENABLED' | 'PAUSED' = row.status === 'ENABLED' ? 'PAUSED' : 'ENABLED'
+    confirm({
+      title: status === 'PAUSED' ? 'ยืนยันหยุด Ad Group?' : 'ยืนยันเปิด Ad Group?',
+      detail: [`${row.name} — ${row.status} → ${status}`],
+      confirmLabel: status === 'PAUSED' ? 'หยุด Ad Group' : 'เปิด Ad Group',
+      tone: status === 'PAUSED' ? 'amber' : 'emerald',
+      run: () => mutate([{ op: 'set_status', adGroupResourceName: row.adGroupResourceName, status }],
+        status === 'PAUSED' ? 'หยุด ad group แล้ว' : 'เปิด ad group แล้ว'),
+    })
+  }
+
+  function requestSetBid(row: AdGroupRowUI) {
+    const baht = parseFloat(bidDraft[row.adGroupId] ?? '')
+    if (!baht || baht <= 0) { setMsg({ ok: false, text: 'ระบุ CPC bid (บาท) ให้ถูกต้อง' }); return }
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันปรับ CPC bid?',
+      detail: [`${row.name}: ฿${(row.cpcBidMicros / 1_000_000).toLocaleString()} → ฿${baht.toLocaleString()}`],
+      confirmLabel: 'ปรับ bid',
+      tone: 'blue',
+      run: () => mutate(
+        [{ op: 'set_bid', adGroupResourceName: row.adGroupResourceName, cpcBidMicros: Math.round(baht * 1_000_000) }],
+        'ปรับ CPC bid แล้ว'
+      ).then(() => setBidDraft(prev => ({ ...prev, [row.adGroupId]: '' }))),
+    })
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center gap-2 mb-3">
+        <Zap className="w-4 h-4 text-orange-500"/>
+        <p className="font-semibold text-sm text-gray-900">Ad Groups (bid + เปิด/หยุด รายกลุ่ม)</p>
+        {rows.length > 0 && <span className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-500 rounded-full">{rows.length}</span>}
+        <button onClick={load} disabled={loading} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+          <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')}/>รีเฟรช
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+      </div>
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+      {loading && rows.length === 0 && (
+        <div className="flex items-center gap-2 py-3 text-gray-400 text-sm"><Loader2 className="w-4 h-4 animate-spin"/>กำลังโหลด ad groups...</div>
+      )}
+      {!loading && !error && rows.length === 0 && <p className="text-sm text-gray-400 py-1">ไม่มี ad group ในแคมเปญนี้</p>}
+
+      {rows.length > 0 && (
+        <div className="rounded-lg border border-gray-100 overflow-hidden">
+          {rows.map(r => (
+            <div key={r.adGroupId} className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-gray-50 last:border-b-0">
+              <span className={cn('flex-1 min-w-[140px] truncate text-sm', r.status === 'PAUSED' ? 'text-gray-400' : 'text-gray-800')}>{r.name}</span>
+              <span className={cn('px-1.5 py-0.5 text-[10px] font-semibold rounded', r.status === 'ENABLED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>{r.status}</span>
+              <button onClick={() => requestSetStatus(r)} className="text-gray-500 hover:text-gray-800" title={r.status === 'ENABLED' ? 'หยุด ad group' : 'เปิด ad group'}>
+                {r.status === 'ENABLED' ? <ToggleLeft className="w-4 h-4"/> : <ToggleRight className="w-4 h-4"/>}
+              </button>
+              <span className="text-[11px] text-gray-400 w-24 text-right">CPC ฿{(r.cpcBidMicros / 1_000_000).toLocaleString()}</span>
+              <input type="number" min="0" step="0.5" value={bidDraft[r.adGroupId] ?? ''}
+                onChange={e => setBidDraft(prev => ({ ...prev, [r.adGroupId]: e.target.value }))}
+                placeholder="bid ใหม่ (บาท)"
+                className="w-28 px-2 py-1 text-xs border border-gray-200 rounded-lg"/>
+              <button onClick={() => requestSetBid(r)}
+                className="px-2.5 py-1 text-[11px] font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">ปรับ bid</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-1.5 text-[10px] text-gray-400">CPC bid มีผลเฉพาะ strategy แบบ manual/enhanced — ถ้าแคมเปญใช้ smart bidding (tCPA/tROAS) Google จะไม่ใช้ค่านี้</p>
+    </div>
+  )
+}
+
+// ─── PMax asset group images (list from asset-groups API, mutate via new route) ─
+
+const IMAGE_FIELD_LABEL: Record<string, string> = {
+  MARKETING_IMAGE: 'Landscape (1.91:1)',
+  SQUARE_MARKETING_IMAGE: 'Square (1:1)',
+  PORTRAIT_MARKETING_IMAGE: 'Portrait (4:5)',
+  LOGO: 'Logo (1:1)',
+  LANDSCAPE_LOGO: 'Logo (4:1)',
+}
+
+function AssetGroupImagesSection({ campaign, customerId, confirm }: {
+  campaign: CampaignSummary
+  customerId: string
+  confirm: (p: PendingConfirm) => void
+}) {
+  const [groups, setGroups] = useState<AssetGroup[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [activeGroupRn, setActiveGroupRn] = useState('')
+  const [newFieldType, setNewFieldType] = useState('MARKETING_IMAGE')
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/campaign-edit/asset-groups?customerId=${customerId}&campaignId=${campaign.campaignId}`)
+      const data = await res.json() as { assetGroups?: AssetGroup[]; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'โหลด asset groups ไม่สำเร็จ')
+      setGroups(data.assetGroups ?? [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'โหลด asset groups ไม่สำเร็จ')
+    } finally {
+      setLoading(false)
+    }
+  }, [customerId, campaign.campaignId])
+
+  useEffect(() => { load() }, [load])
+
+  const activeGroup = groups.find(g => g.assetGroupResourceName === (activeGroupRn || groups[0]?.assetGroupResourceName))
+  const allImages = activeGroup ? [...activeGroup.images, ...activeGroup.logos] : []
+
+  async function mutate(operations: Record<string, unknown>[], successText: string) {
+    const res = await fetch('/api/campaign-edit/asset-group-assets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId, operations }),
+    })
+    const data = await res.json() as { success?: boolean; message?: string; error?: string }
+    if (res.ok && data.success) {
+      setMsg({ ok: true, text: data.message ?? `${successText}` })
+      await load()
+    } else {
+      setMsg({ ok: false, text: data.error ?? 'ปรับรูปไม่สำเร็จ' })
+    }
+  }
+
+  async function handleFile(file: File) {
+    if (!activeGroup) return
+    setUploading(true)
+    setMsg(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/upload/image', { method: 'POST', body: fd })
+      const data = await res.json() as { url?: string; error?: string }
+      if (!res.ok || !data.url) throw new Error(data.error ?? 'อัปโหลดรูปไม่สำเร็จ')
+      const url = data.url
+      confirm({
+        title: 'ยืนยันเพิ่มรูปเข้า Asset Group?',
+        detail: [
+          `Asset Group: ${activeGroup.name}`,
+          `ประเภท: ${IMAGE_FIELD_LABEL[newFieldType] ?? newFieldType}`,
+          `ไฟล์: ${file.name} (${Math.round(file.size / 1024)} KB)`,
+        ],
+        confirmLabel: 'เพิ่มรูป',
+        tone: 'emerald',
+        run: () => mutate(
+          [{ op: 'link', assetGroupResourceName: activeGroup.assetGroupResourceName, fieldType: newFieldType, imageUrl: url, assetName: file.name }],
+          'เพิ่มรูปแล้ว'
+        ),
+      })
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'อัปโหลดรูปไม่สำเร็จ' })
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  function requestUnlink(img: { resourceName: string; assetName: string; fieldType: string }) {
+    if (!activeGroup) return
+    confirm({
+      title: 'ยืนยันถอดรูปออกจาก Asset Group?',
+      detail: [
+        `Asset Group: ${activeGroup.name}`,
+        `รูป: ${img.assetName || img.resourceName} (${IMAGE_FIELD_LABEL[img.fieldType] ?? img.fieldType})`,
+        'หมายเหตุ: ถ้าถอดแล้วต่ำกว่าขั้นต่ำของ PMax (ต้องมีรูปอย่างน้อย 1 ต่อประเภทหลัก) Google จะปฏิเสธ',
+      ],
+      confirmLabel: 'ถอดรูป',
+      tone: 'red',
+      run: () => mutate(
+        [{ op: 'unlink', assetGroupResourceName: activeGroup.assetGroupResourceName, assetResourceName: img.resourceName, fieldType: img.fieldType }],
+        'ถอดรูปแล้ว'
+      ),
+    })
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center gap-2 mb-3">
+        <ImageIcon className="w-4 h-4 text-orange-500"/>
+        <p className="font-semibold text-sm text-gray-900">รูปภาพใน Asset Groups</p>
+        <button onClick={load} disabled={loading} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700">
+          <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')}/>รีเฟรช
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+      </div>
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+      {loading && groups.length === 0 && (
+        <div className="flex items-center gap-2 py-3 text-gray-400 text-sm"><Loader2 className="w-4 h-4 animate-spin"/>กำลังโหลด asset groups...</div>
+      )}
+      {!loading && !error && groups.length === 0 && <p className="text-sm text-gray-400 py-1">ไม่มี asset group ในแคมเปญนี้</p>}
+
+      {groups.length > 0 && (
+        <>
+          <select value={activeGroup?.assetGroupResourceName ?? ''} onChange={e => setActiveGroupRn(e.target.value)}
+            className="mb-3 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-white">
+            {groups.map(g => <option key={g.assetGroupResourceName} value={g.assetGroupResourceName}>{g.name} ({g.status})</option>)}
+          </select>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-3">
+            {allImages.map(img => (
+              <div key={`${img.resourceName}-${img.fieldType}`} className="rounded-lg border border-gray-100 overflow-hidden group relative">
+                {img.url
+                  ? <img src={img.url} alt={img.assetName} className="w-full h-20 object-cover"/>
+                  : <div className="w-full h-20 bg-gray-50 flex items-center justify-center"><ImageIcon className="w-5 h-5 text-gray-200"/></div>}
+                <button onClick={() => requestUnlink(img)}
+                  className="absolute top-1 right-1 p-0.5 bg-white/90 rounded-full text-gray-400 hover:text-red-500 shadow"
+                  title="ถอดรูปออก">
+                  <X className="w-3.5 h-3.5"/>
+                </button>
+                <p className="px-1.5 py-1 text-[9px] text-gray-500 truncate">{IMAGE_FIELD_LABEL[img.fieldType] ?? img.fieldType}</p>
+              </div>
+            ))}
+            {allImages.length === 0 && <p className="col-span-full text-xs text-gray-400">ยังไม่มีรูปใน asset group นี้</p>}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={newFieldType} onChange={e => setNewFieldType(e.target.value)}
+              className="px-2 py-1.5 text-xs border border-gray-200 rounded-lg bg-white">
+              {Object.entries(IMAGE_FIELD_LABEL).map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+            </select>
+            <button onClick={() => fileRef.current?.click()} disabled={uploading || !activeGroup}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white rounded-lg transition-colors">
+              {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <Plus className="w-3.5 h-3.5"/>}
+              อัปโหลดรูปใหม่
+            </button>
+            <input ref={fileRef} type="file" accept="image/*" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }}/>
+            <span className="text-[10px] text-gray-400">JPG/PNG ≤5MB — สัดส่วนต้องตรงประเภทที่เลือก ไม่งั้น Google ปฏิเสธ</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 
 function CampaignEditorPage() {
@@ -1447,6 +2524,14 @@ function CampaignEditorPage() {
   const [campaignsLoading, setCampaignsLoading] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
+
+  // Campaign list filter — free-text name search + status
+  const [filterText, setFilterText] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ENABLED' | 'PAUSED'>('ALL')
+
+  // Re-approve gate: every push (status/bidding/keywords) opens this modal first,
+  // showing exactly what will change; nothing hits Google Ads until ยืนยัน.
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null)
 
   const [showBudgetModal, setShowBudgetModal] = useState(false)
   const [statusTogglingIds, setStatusTogglingIds] = useState<Set<string>>(new Set())
@@ -1506,7 +2591,9 @@ function CampaignEditorPage() {
   }
 
   function selectAll() {
-    const ids = campaigns.map(c => c.campaignId)
+    // Only what passes the current filter — filtering then Select All is the
+    // natural "act on this subset" flow.
+    const ids = visibleCampaigns.map(c => c.campaignId)
     setSelectedIds(new Set(ids))
     if (ids.length > 0 && !activeTabId) setActiveTabId(ids[0])
   }
@@ -1517,6 +2604,25 @@ function CampaignEditorPage() {
   }
 
   const selectedCampaigns = campaigns.filter(c => selectedIds.has(c.campaignId))
+
+  // List actually shown (and targeted by Select All) after name/status filters.
+  const visibleCampaigns = campaigns.filter(c => {
+    if (statusFilter !== 'ALL' && c.status !== statusFilter) return false
+    if (filterText.trim() && !c.campaignName.toLowerCase().includes(filterText.trim().toLowerCase())) return false
+    return true
+  })
+
+  // Reapprove gate for enable/pause: show what will change, push only after ยืนยัน.
+  function requestToggleStatus(status: 'ENABLED' | 'PAUSED') {
+    if (!selectedCampaigns.length) return
+    setPendingConfirm({
+      title: status === 'ENABLED' ? 'ยืนยันเปิด (Enable) campaigns?' : 'ยืนยันหยุด (Pause) campaigns?',
+      detail: selectedCampaigns.map(c => `${c.campaignName} — ${c.status} → ${status}`),
+      confirmLabel: status === 'ENABLED' ? `เปิด ${selectedCampaigns.length} campaigns` : `หยุด ${selectedCampaigns.length} campaigns`,
+      tone: status === 'ENABLED' ? 'emerald' : 'amber',
+      run: () => toggleStatusForSelected(status),
+    })
+  }
 
   // Status toggle for selected campaigns — all requests fire in parallel
   async function toggleStatusForSelected(status: 'ENABLED' | 'PAUSED') {
@@ -1617,7 +2723,11 @@ function CampaignEditorPage() {
             <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-sm text-gray-900">Campaigns</span>
-                {campaigns.length > 0 && <span className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-500 rounded-full">{campaigns.length}</span>}
+                {campaigns.length > 0 && (
+                  <span className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-500 rounded-full">
+                    {visibleCampaigns.length === campaigns.length ? campaigns.length : `${visibleCampaigns.length}/${campaigns.length}`}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={selectAll} className="text-xs text-blue-600 hover:text-blue-700 font-medium">Select All</button>
@@ -1625,6 +2735,44 @@ function CampaignEditorPage() {
                 <button onClick={deselectAll} className="text-xs text-gray-500 hover:text-gray-700">Deselect All</button>
               </div>
             </div>
+
+            {/* Filter row: name search + status */}
+            {campaigns.length > 0 && (
+              <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50/60 flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[180px]">
+                  <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2"/>
+                  <input
+                    value={filterText}
+                    onChange={e => setFilterText(e.target.value)}
+                    placeholder="ค้นหาชื่อ campaign..."
+                    className="w-full pl-8 pr-8 py-1.5 text-xs border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {filterText && (
+                    <button onClick={() => setFilterText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
+                      <X className="w-3.5 h-3.5"/>
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {(['ALL', 'ENABLED', 'PAUSED'] as const).map(s => (
+                    <button
+                      key={s}
+                      onClick={() => setStatusFilter(s)}
+                      className={cn(
+                        'px-2.5 py-1.5 text-[11px] font-medium rounded-lg border transition-colors',
+                        statusFilter === s
+                          ? s === 'ENABLED' ? 'bg-emerald-600 border-emerald-600 text-white'
+                            : s === 'PAUSED' ? 'bg-amber-500 border-amber-500 text-white'
+                            : 'bg-gray-800 border-gray-800 text-white'
+                          : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                      )}
+                    >
+                      {s === 'ALL' ? 'ทั้งหมด' : s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {campaignsLoading && (
               <div className="flex items-center gap-2 px-4 py-6 text-gray-400 text-sm">
@@ -1636,8 +2784,12 @@ function CampaignEditorPage() {
               <div className="px-4 py-6 text-center text-gray-400 text-sm">ไม่พบ campaigns</div>
             )}
 
+            {!campaignsLoading && campaigns.length > 0 && visibleCampaigns.length === 0 && (
+              <div className="px-4 py-6 text-center text-gray-400 text-sm">ไม่มี campaign ตรงกับ filter — ลองแก้คำค้นหรือเปลี่ยน status</div>
+            )}
+
             <div className="divide-y divide-gray-50">
-              {campaigns.map(c => {
+              {visibleCampaigns.map(c => {
                 const selected = selectedIds.has(c.campaignId)
                 const toggling = statusTogglingIds.has(c.campaignId)
                 return (
@@ -1682,14 +2834,14 @@ function CampaignEditorPage() {
                 <span className={cn('text-xs font-medium', statusResult.ok ? 'text-emerald-600' : 'text-red-600')}>{statusResult.message}</span>
               )}
               <button
-                onClick={() => toggleStatusForSelected('ENABLED')}
+                onClick={() => requestToggleStatus('ENABLED')}
                 disabled={statusTogglingIds.size > 0}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors disabled:opacity-50"
               >
                 <ToggleRight className="w-3.5 h-3.5"/>Enable All
               </button>
               <button
-                onClick={() => toggleStatusForSelected('PAUSED')}
+                onClick={() => requestToggleStatus('PAUSED')}
                 disabled={statusTogglingIds.size > 0}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors disabled:opacity-50"
               >
@@ -1744,6 +2896,25 @@ function CampaignEditorPage() {
                     <span className="text-xs text-gray-400 ml-auto">฿{(campaign.dailyBudgetMicros / 1_000_000).toLocaleString()}/day</span>
                   </div>
                   <CampaignEditorPanel campaign={campaign} customerId={selectedCustomer}/>
+                  {/* Deeper levels — bidding, ad groups, keywords, extensions, audiences,
+                      PMax images — every push goes through the reapprove modal.
+                      Keyed by campaign so form/AI state resets when switching tabs. */}
+                  <BiddingSection key={`bid-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
+                  {(campaign.type === 'SEARCH' || campaign.type === 'DISPLAY') && (
+                    <AdGroupBidsSection key={`ag-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
+                  )}
+                  {campaign.type === 'SEARCH' && (
+                    <KeywordsSection key={`kw-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
+                  )}
+                  {(campaign.type === 'SEARCH' || campaign.type === 'DISPLAY' || campaign.type === 'PERFORMANCE_MAX' || campaign.type === 'DEMAND_GEN') && (
+                    <ExtensionsSection key={`ext-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
+                  )}
+                  {campaign.type !== 'PERFORMANCE_MAX' && (
+                    <AudienceSection key={`aud-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
+                  )}
+                  {campaign.type === 'PERFORMANCE_MAX' && (
+                    <AssetGroupImagesSection key={`img-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
+                  )}
                 </div>
               )
             })()}
@@ -1759,6 +2930,11 @@ function CampaignEditorPage() {
           onClose={() => setShowBudgetModal(false)}
           onApply={applyBudgetToSelected}
         />
+      )}
+
+      {/* Reapprove modal — every status/bidding/keyword push passes through here */}
+      {pendingConfirm && (
+        <ConfirmActionModal pending={pendingConfirm} onClose={() => setPendingConfirm(null)}/>
       )}
     </AppShell>
   )

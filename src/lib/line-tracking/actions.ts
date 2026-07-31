@@ -158,6 +158,62 @@ export async function testConnectionAction(formData: FormData) {
  * so this fetches the client site and looks for embed.js bound to THIS project
  * slug. The verdict travels back in the query string, so no schema change.
  */
+/**
+ * Look inside the site's published GTM container(s) for our embed snippet.
+ * Returns:
+ *  - "okgtm"    — snippet found in a container, bound to THIS project slug
+ *  - "wrongslug"— snippet found in a container but bound to another project
+ *  - "gtmnotag" — site loads GTM but no container carries the snippet
+ *                 (typically: tag added in GTM but not Published yet)
+ *  - "missing"  — no GTM on the page at all
+ * Inside the served container the tag HTML is JSON-escaped — quotes become \",
+ * slashes \/ and angle brackets < — and GTM even rewrites the script's src
+ * attribute to data-gtmsrc. Verified live against convertcake.com's container
+ * (GTM-P7PCL3P): the binding there appears as window.LINEHubProject=\"convert-cake\"
+ * with NO ?project= on the src at all. So the slug match must accept every
+ * binding form (src query, data-project, LINEHubProject global) with optionally
+ * escaped quotes — a plain data-project="slug" check finds nothing and would
+ * misreport a correct install as wrongslug.
+ */
+async function scanGtmContainers(
+  html: string,
+  slug: string
+): Promise<"okgtm" | "wrongslug" | "gtmnotag" | "missing"> {
+  const ids = [...new Set(html.match(/GTM-[A-Z0-9]{4,}/g) ?? [])].slice(0, 3);
+  if (ids.length === 0) return "missing";
+
+  const containers = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const res = await fetch(`https://www.googletagmanager.com/gtm.js?id=${id}`, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(6_000),
+        });
+        return res.ok ? await res.text() : "";
+      } catch {
+        return "";
+      }
+    })
+  );
+
+  // \\?["'] = an optionally backslash-escaped quote (how quotes survive inside
+  // the container's JSON-encoded tag HTML).
+  const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const slugBound = new RegExp(
+    `embed\\.js\\?project=${escaped}` +
+      `|data-project=\\\\?["']${escaped}` +
+      `|LINEHubProject\\s*=\\s*\\\\?["']${escaped}`
+  );
+
+  let sawEmbed = false;
+  for (const js of containers) {
+    if (!js.includes("embed.js")) continue;
+    sawEmbed = true;
+    if (slugBound.test(js)) return "okgtm";
+  }
+  return sawEmbed ? "wrongslug" : "gtmnotag";
+}
+
 export async function testEmbedAction(formData: FormData) {
   await requireStaff();
   const projectId = String(formData.get("projectId"));
@@ -172,7 +228,8 @@ export async function testEmbedAction(formData: FormData) {
   const site = project.websiteUrl?.trim();
   if (!site) redirect(`${base}?embedTest=nourl`);
 
-  let verdict: "ok" | "wrongslug" | "missing" | "unreachable";
+  let verdict: "ok" | "oktraffic" | "okgtm" | "gtmnotag" | "wrongslug" | "missing" | "unreachable";
+  let html = "";
   try {
     const url = /^https?:\/\//i.test(site) ? site : `https://${site}`;
     const res = await fetch(url, {
@@ -185,17 +242,39 @@ export async function testEmbedAction(formData: FormData) {
     if (!res.ok) {
       verdict = "unreachable";
     } else {
-      const html = await res.text();
+      html = await res.text();
       const hasScript = html.includes("/embed.js");
       const hasSlug =
         html.includes(`/embed.js?project=${project.slug}`) ||
         html.includes(`data-project="${project.slug}"`) ||
-        html.includes(`data-project='${project.slug}'`);
+        html.includes(`data-project='${project.slug}'`) ||
+        // Two-line install variant: window.LINEHubProject="slug" + bare embed.js tag
+        new RegExp(`LINEHubProject\\s*=\\s*["']${project.slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(html);
       verdict = hasScript && hasSlug ? "ok" : hasScript ? "wrongslug" : "missing";
     }
   } catch {
     // DNS failure, TLS error, timeout — all "we could not read the page".
     verdict = "unreachable";
+  }
+
+  // The scan reads server-rendered HTML only, so it cannot see a snippet injected
+  // at runtime — GTM Custom HTML being the documented install path on real sites
+  // (see src/app/embed.js/route.ts). Recorded clicks prove the code runs, and the
+  // checklist badge already says so; without this override the page would show
+  // "✅ 966 clicks" and "❌ code not found" side by side about the same install.
+  if (verdict !== "ok") {
+    const clicks = await prisma.adClick.count({ where: { projectId } });
+    if (clicks > 0) {
+      verdict = "oktraffic";
+    } else if (verdict === "missing") {
+      // Fresh GTM install: no tag in raw HTML AND no clicks yet — the common state
+      // right after setup. Published GTM containers are public JS, and a Custom
+      // HTML tag's markup is embedded in that JS verbatim (only <, > and quotes
+      // are escaped), so fetching the container tells us whether the snippet is
+      // actually installed — and catches the #1 GTM mistake: saved but never
+      // published (an unpublished tag is absent from the served container).
+      verdict = await scanGtmContainers(html, project.slug);
+    }
   }
 
   revalidatePath(base);
@@ -210,10 +289,15 @@ export async function updateConversionRuleAction(formData: FormData) {
   const ruleId = String(formData.get("ruleId"));
   await requireOwnedBy("rule", ruleId, projectId);
 
-  // Rebuild platformsJson from the dynamic per-platform fields (p_<id>, evt_<id>).
+  // Rebuild platformsJson from the dynamic per-platform fields.
+  // Event name resolution: the free-text Custom box (evtcustom_<id>) OVERRIDES
+  // the standard-event dropdown (evt_<id>) when non-empty — so users either pick
+  // a standard event or type their own, matching events already set up in that
+  // platform's account.
   const platforms: Record<string, { enabled: boolean; eventName: string }> = {};
   for (const p of PLATFORMS) {
-    const eventName = String(formData.get(`evt_${p.id}`) ?? "").trim();
+    const custom = String(formData.get(`evtcustom_${p.id}`) ?? "").trim();
+    const eventName = custom || String(formData.get(`evt_${p.id}`) ?? "").trim();
     if (!eventName) continue; // no event for this status (e.g. LOST)
     platforms[p.id] = {
       enabled: formData.get(`p_${p.id}`) === "on",
@@ -230,6 +314,7 @@ export async function updateConversionRuleAction(formData: FormData) {
     },
   });
   revalidatePath(`/line-tracking/projects/${projectId}/setup`);
+  revalidatePath(`/line-tracking/projects/${projectId}/settings/conversion-mapping`);
 }
 
 /**

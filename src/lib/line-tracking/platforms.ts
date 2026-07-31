@@ -91,6 +91,7 @@ export const PLATFORMS: PlatformDef[] = [
     realImplemented: true,
     send: s(sendMicrosoft as AnySend),
     events: { NEW: "Lead", CONTACTED: "Contact", QUALIFIED: "QualifiedLead", QUOTED: "QuoteSent", WON: "Purchase", PAID: "Purchase" },
+    blockEvent: "line_block",
     defaultOn: ADS_DEFAULT_ON,
   },
   {
@@ -100,6 +101,7 @@ export const PLATFORMS: PlatformDef[] = [
     realImplemented: true,
     send: s(sendX as AnySend),
     events: { NEW: "Lead", CONTACTED: "Contact", QUALIFIED: "QualifiedLead", QUOTED: "Quote", WON: "Purchase", PAID: "Purchase" },
+    blockEvent: "line_block",
     defaultOn: ADS_DEFAULT_ON,
   },
   {
@@ -113,6 +115,23 @@ export const PLATFORMS: PlatformDef[] = [
     defaultOn: ADS_DEFAULT_ON,
   },
 ];
+
+/**
+ * Standard events per platform — options for the Conversion Mapping event
+ * selector. GA4/Meta/TikTok/Snapchat lists follow each platform's official
+ * standard-event names; LINE Ads / Microsoft / X conversions are account-defined
+ * so these are sensible defaults. Custom names are always allowed via the
+ * free-text override next to the selector.
+ */
+export const PLATFORM_STANDARD_EVENTS: Record<PlatformId, string[]> = {
+  ga4: ["generate_lead", "contact", "qualified_lead", "working_lead", "quote_sent", "close_convert_lead", "purchase", "sign_up", "begin_checkout", "add_to_cart", "add_payment_info", "refund", "line_block"],
+  meta: ["Lead", "Contact", "Purchase", "CompleteRegistration", "SubmitApplication", "Schedule", "StartTrial", "Subscribe", "InitiateCheckout", "AddToCart", "AddPaymentInfo", "ViewContent", "Search", "line_block"],
+  tiktok: ["SubmitForm", "Contact", "CompleteRegistration", "CompletePayment", "PlaceAnOrder", "InitiateCheckout", "AddToCart", "AddPaymentInfo", "ViewContent", "ClickButton", "Subscribe", "Download", "Search", "line_block"],
+  line_ads: ["add_friend", "message", "qualified", "quote", "conversion", "purchase", "line_block"],
+  microsoft: ["Lead", "Contact", "QualifiedLead", "QuoteSent", "Purchase", "SignUp", "line_block"],
+  x: ["Lead", "Contact", "QualifiedLead", "Quote", "Purchase", "SignUp", "line_block"],
+  snapchat: ["SIGN_UP", "CONTACT", "SUBMIT_APPLICATION", "PURCHASE", "START_CHECKOUT", "ADD_CART", "VIEW_CONTENT", "SUBSCRIBE", "LOGIN", "SEARCH", "START_TRIAL", "line_block"],
+};
 
 export const PLATFORM_BY_ID: Record<string, PlatformDef> = Object.fromEntries(
   PLATFORMS.map((p) => [p.id, p])

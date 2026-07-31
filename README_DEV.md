@@ -1,5 +1,8 @@
 # ส่งงาน dev — LINE Tracking: Webhook timeout + ปุ่ม Test + แก้หน้าช้า + Client login เห็นเมนู staff
 
+## 🚨 สำคัญที่สุดในชุดนี้: หัวข้อ 16 — middleware ที่ deploy อยู่บล็อก LINE webhook (Lead ไม่เข้า)
+และ embed.js/ลิงก์ tracking ทั้งหมด **deploy ชุดนี้โดยเร็วที่สุด** แล้วเช็คตามหัวข้อ 16
+
 ## ⚡ อ่านแค่นี้ก็ทำได้ (3 ขั้น)
 
 **ขั้นที่ 1 — วางไฟล์ทับ**
@@ -26,7 +29,7 @@ npm run build
 
 ---
 
-รวมงานที่ยังไม่ได้ deploy ไว้ในชุดเดียว — ทั้งหมด **16 ไฟล์** (10 หัวข้อ ดูด้านล่าง)
+รวมงานที่ยังไม่ได้ deploy ไว้ในชุดเดียว — ทั้งหมด **49 ไฟล์** (16 หัวข้อ ดูด้านล่าง)
 
 > รอบแก้ keyword/AI (ย้ายไป Vertex OIDC) **deploy ไปแล้ว** ไม่รวมอยู่ในชุดนี้
 
@@ -404,29 +407,333 @@ Snippet เก่า (`data-project="slug"`) **ยังใช้ได้เห
 
 ทำงานเฉพาะฝั่ง Gemini (ตัวหลัก) เท่านั้น — ถ้า fallback ไป Vision หรือ OCR.space จะไม่มีค่า suspicious (เป็น undefined ไม่ใช่ false — ไม่ได้แปลว่าตรวจสอบแล้วว่าไม่น่าสงสัย แค่ไม่ได้ประเมิน)
 
+### เพิ่มเติม — เจอสาเหตุจริงแล้วจาก log จริงหลัง deploy (2026-07-24)
+ทดสอบส่งสลิปจริงหลัง deploy รอบก่อน แล้ว log ขึ้นตามที่คาดไว้ (การันตี log แล้วทำงานได้จริง) เจอ 2 ปัญหาซ้อนกัน:
+
+1. **Cloud Vision API ยังไม่เปิดใช้บน GCP project ที่ใช้จริง** — error ที่ log ขึ้นตรงๆ: `Cloud Vision API has not been used in project 457755368033 before or it is disabled` → **นี่คือ action ที่ต้องทำนอกโค้ด**: เข้า https://console.developers.google.com/apis/api/vision.googleapis.com/overview?project=457755368033 (ลิงก์ตรงจาก error message) แล้วกด Enable — ทำแล้ว Vision fallback จะใช้งานได้ทันที ไม่ต้อง deploy ใหม่
+
+2. **Gemini เองก็ล้มเหลว** ด้วย error เดิม `ไม่พบ JSON ในคำตอบ` — ยังไม่รู้สาเหตุแน่ชัดว่า Gemini ตอบว่าอะไรมา (safety block? ตอบเป็นข้อความธรรมดาแทน JSON? response ว่างเปล่า?) เพราะ error message เดิมไม่ได้โชว์เนื้อหาที่ Gemini ตอบมาจริง
+
+   **แก้แล้ว**: ปรับ `ocrGemini()` ให้ error message ที่ log ออกมาบอกรายละเอียดจริง — ถ้า Gemini บล็อกเพราะ safety จะขึ้น `blocked: <เหตุผล>`, ถ้าตอบมาไม่ครบ (`finishReason` ไม่ใช่ `STOP`) จะขึ้น `finishReason: <ค่า>`, ถ้าตอบมาเป็นข้อความธรรมดาที่ไม่ใช่ JSON จะโชว์ข้อความนั้นมาเลย (300 ตัวอักษรแรก) — **หลัง deploy รอบนี้แล้วส่งสลิปทดสอบใหม่ log จะบอกได้ทันทีว่า Gemini ล้มเหลวเพราะอะไรกันแน่**
+
+ไฟล์ที่แก้เพิ่ม: `src/lib/line-tracking/services/ocrService.ts` (จุดเดียว — ปรับ error message ให้ละเอียดขึ้น ไม่เปลี่ยน logic การอ่าน)
+
+**สรุปสิ่งที่ต้องทำ 2 อย่างคู่กัน:**
+- เปิด Cloud Vision API ตามลิงก์ข้างบน (ไม่ต้องรอ deploy) → แก้ fallback ให้ใช้งานได้ก่อนเลย
+- Deploy โค้ดชุดนี้ → ส่งสลิปทดสอบอีกรอบ → เอา error message ใหม่จาก log มาดูกันว่า Gemini ติดอะไรกันแน่
+
 ไฟล์ที่แก้เพิ่ม: `src/lib/line-tracking/services/ocrService.ts`
 
 ---
 
-# ไฟล์ในชุดนี้ (16 ไฟล์)
+## 11) ปุ่ม Test ข้อ 1 ขัดแย้งกับตัวเลข click (✅ 966 ครั้ง แต่ Test ตอบ ❌ ไม่พบโค้ด)
+
+### อาการ
+หน้า Setup ข้อ 1 แสดง "ตรวจพบ click จริงแล้ว 966 ครั้ง" (เขียว) แต่กด 🔍 Test แล้วได้
+"❌ เปิดเว็บได้ แต่ไม่พบโค้ด Tracking" — สองข้อความค้านกันเองบนการ์ดเดียว
+
+### Root cause
+สองเช็คใช้คนละวิธี: ตัวเลข click นับจาก `AdClick` ใน DB (traffic จริงที่ยิงเข้า `/api/track`)
+ส่วนปุ่ม Test fetch HTML ดิบจาก server แล้วหา string `/embed.js` — เว็บที่ติดตั้งผ่าน
+**GTM inject สคริปต์ตอน runtime** HTML ดิบจึงไม่มีแท็กนี้ (convertcake.com คือเคสนี้ ดูหัวข้อ 7/9)
+สแกนเลยตอบ "missing" ทั้งที่โค้ดทำงานและส่ง click อยู่จริง
+
+### สิ่งที่แก้
+- `testEmbedAction`: ถ้าสแกน HTML ไม่เจอ (missing/wrongslug/unreachable) ให้เช็ค `adClick.count`
+  ของโปรเจกต์ก่อนตัดสิน — ถ้ามี click จริง ตอบ verdict ใหม่ `oktraffic` (เขียว):
+  "โค้ดทำงานอยู่จริง แค่สแกนมองไม่เห็นเพราะติดผ่าน GTM" → traffic จริงชนะผลสแกนเสมอ
+- **เคสเริ่มโปรเจกต์ใหม่ (ติดผ่าน GTM แต่ยังไม่มี click):** สแกนต่อเข้าไปใน GTM container
+  (`googletagmanager.com/gtm.js?id=GTM-…` เป็นไฟล์ public) — Custom HTML tag ที่ Publish แล้ว
+  จะอยู่ในไฟล์นี้ → verdict ใหม่ `okgtm` (เขียว: เจอโค้ดใน GTM + slug ถูก) และ `gtmnotag`
+  (เหลือง: เว็บใช้ GTM แต่ไม่เจอโค้ดใน container ที่ publish — จับเคส "ลืมกด Publish" ได้ด้วย)
+- จุดสำคัญที่เทสกับของจริงแล้วเจอ: ใน container GTM จะ escape เครื่องหมายคำพูดเป็น `\"`,
+  slash เป็น `\/` และบางเว็บผูกโปรเจกต์ผ่าน `window.LINEHubProject="slug"` แทน `?project=` —
+  ตัวเช็ค slug จึงเป็น regex ครอบทุกรูปแบบ (src query / data-project / LINEHubProject ± escaped)
+- ข้อความ `missing` (กรณี click = 0 และไม่ใช่ GTM) เพิ่มคำอธิบายเคส GTM + วิธีเช็คด้วยลิงก์ ?utm_source=
+
+### เทสกับเว็บจริงแล้ว (30 ก.ค.)
+| เว็บ | slug | ผล |
+|---|---|---|
+| convertcake.com (GTM-P7PCL3P) | convert-cake | ✅ okgtm (ผูกผ่าน `window.LINEHubProject`) |
+| laposhclinic.com (GTM-T83M5KDL) | la-posh | ✅ okgtm — เคส "GTM + ยังไม่มี click" ที่เคยขึ้น ❌ หลอก |
+| convertcake.com | slug ผิด | ⚠️ wrongslug (ตรวจจับ slug ไม่ตรงได้จริง) |
+
+หมายเหตุ: slug จริงของโปรเจกต์ La Posh คือ `la-posh` (มีขีด) — ถ้าในระบบตั้งเป็นอย่างอื่น
+ปุ่ม Test จะฟ้อง wrongslug ซึ่งถูกต้องแล้ว (ให้แก้ slug ให้ตรงกัน)
+
+ไฟล์: `src/lib/line-tracking/actions.ts`, `src/app/line-tracking/projects/[projectId]/setup/page.tsx`,
+`vercel.json` (เพิ่ม maxDuration 60 ให้หน้า setup — กัน server action timeout ตอนสแกน GTM)
+
+---
+
+## 12) Webhook relay — รองรับลูกค้าที่มีบอท/webhook เดิมอยู่แล้ว (เลือกได้ 2 option)
+
+### ปัญหา
+LINE ตั้ง Webhook ได้ **URL เดียวต่อ channel** — ลูกค้าที่มีบอทเดิม (chatbot/ระบบตอบแชท)
+พอเอา URL ของเราไปวางทับ บอทเดิมจะหยุดรับ event ทันที ทำให้ลูกค้ากลุ่มนี้ติดตั้งไม่ได้
+
+### สิ่งที่เพิ่ม
+หน้า Connect LINE OA มีตัวเลือกโหมด Webhook ใหม่ (dropdown):
+- **Option 1 (ค่าเริ่มต้น)** — ลูกค้าไม่มีบอทเดิม: ใช้ webhook ของเราอย่างเดียว (พฤติกรรมเดิมทุกอย่าง)
+- **Option 2** — ลูกค้ามีบอทเดิม: วาง URL ของเราใน LINE เหมือนเดิม + ใส่ "Webhook URL เดิมของบอทลูกค้า"
+  → ระบบ forward **raw body + `X-Line-Signature` เดิม** ต่อให้ทุก event หลัง verify signature ผ่าน
+
+ทำไมใช้ได้: ลายเซ็นคือ HMAC-SHA256 ของ raw bytes ด้วย channel secret ซึ่งบอทเดิมใช้ secret
+ตัวเดียวกัน (channel เดียวกัน) — forward raw bytes เดิมไม่แตะต้อง บอทปลายทาง verify ผ่าน
+เหมือน LINE ยิงตรง และ `replyToken` ใช้ตอบแชทได้ปกติ (ระบบเราไม่ได้ใช้ replyToken แย่งกัน)
+
+รายละเอียด implementation:
+- forward วิ่งใน `waitUntil` (นอก critical path — ACK LINE ภายใน ~1s เหมือนเดิม), timeout 10s, retry 2 ครั้ง
+- ถ้า forward ล้มเหลว: เขียน `WebhookLog` status FAILED โผล่ในแผง "📡 Webhook ล่าสุด" หน้า Setup
+  (LINE ไม่ retry ให้เพราะเรา ACK ไปแล้ว — event รอบนั้นหายเฉพาะฝั่งบอทลูกค้า ฝั่ง tracking เราปกติ)
+- Guard: forwardUrl ต้องเป็น https และห้ามชี้กลับเข้า `/api/webhooks/line` (กัน loop)
+- เก็บใน `configJson` ของ `ProjectConnection` (field `webhookMode` + `forwardUrl`) — **ไม่ต้อง migrate DB**
+- `connectors.ts` เข้าชุดนี้ด้วยเพราะเพิ่ม field ใน `LineConfig` + LINE meta + รองรับ field แบบ dropdown
+
+ไฟล์: `src/lib/line-tracking/connectors.ts` (ใหม่ในชุด), `src/app/api/webhooks/line/[projectId]/route.ts`,
+`src/components/line-tracking/ConnectionCard.tsx`, `src/lib/line-tracking/connector-guide.ts`
+
+---
+
+## 13) Campaign Adjustment — filter + reapprove ก่อน push + ปรับ Bidding/Keywords (มี AI)
+
+หน้า `/campaign-editor` (หัวข้อบนหน้าคือ "Campaign Adjustment") + หน้า `/campaign-adjustment/[planId]`
+
+### 13.1 Filter รายการแคมเปญ (ทั้งสองหน้า)
+- ช่องค้นหาชื่อ campaign + ปุ่มกรอง status (ทั้งหมด / ENABLED / PAUSED)
+- ตัวเลขแสดง "ที่เห็น/ทั้งหมด" · **Select All เลือกเฉพาะที่ผ่าน filter** (กรองก่อนแล้วค่อยเลือกทั้งชุด)
+
+### 13.2 Reapprove ก่อน push จริง (แก้ "กด Pause แล้ว paused ทันที")
+- ปุ่ม Enable All / Pause All ไม่ยิงทันทีอีกแล้ว — เปิด **modal ยืนยัน** แสดงรายการว่า
+  campaign ไหนจะเปลี่ยนจากอะไรเป็นอะไร ต้องกดยืนยันก่อนระบบถึง push ไป Google Ads
+- การปรับ Bidding และ Keywords ทุกรายการ (ข้อ 13.3) ก็ผ่าน modal เดียวกันหมด
+- ปรับงบยังใช้ BudgetModal เดิม (มีขั้นยืนยัน + แสดงรายการอยู่แล้ว)
+
+### 13.3 ปรับระดับอื่นเพิ่มจากเดิม (เดิม: เปิด/ปิด, งบ, text ads)
+- **Bidding (ทุก campaign):** ปรับ Target CPA / Target ROAS ผ่าน action `edit_campaign_bidding`
+  ที่มีอยู่แล้วใน API — แสดง strategy ปัจจุบันของ campaign (เพิ่ม `bidding_strategy_type`
+  ใน GAQL ของ campaigns route) + เตือนถ้าเลือก strategy ไม่ตรงกับที่ campaign ใช้จริง
+- **Keywords (SEARCH campaigns):** section ใหม่ใต้ตัวแก้ ads —
+  ดู keyword ทุก ad group (match type / status / negative) · พัก/เปิด/ลบทีละคำ ·
+  เพิ่มหลายคำพร้อมกัน (เลือก match type + ad group) ·
+  **AI แนะนำ** (route ใหม่ `keyword-suggest` — ใช้ `safeCallAI` provider เดิม **ไม่แตะโค้ด AI/OIDC**):
+  อิงจาก keyword ที่รันอยู่ + ad copy จริงของแคมเปญ + คำสั่งที่พิมพ์ เสนอคำเพิ่ม (ติ๊กเลือกได้)
+  และชี้คำที่ควรพัก/ลบพร้อมเหตุผล
+- API ใหม่ `campaign-edit/keywords`: GET (GAQL `keyword_view` ต่อ campaign) + POST
+  (adGroupCriteria:mutate — add / set_status / remove, สูงสุด 100 รายการ/ครั้ง)
+
+### 13.4 รอบเพิ่มเติม (31 ก.ค.): Extensions / Audiences / Ad group / รูป PMax — ครบทุกระดับแล้ว
+- **Extensions (SEARCH/DISPLAY/PMAX/DEMAND_GEN):** ดู-เพิ่ม-ถอด Sitelink (ข้อความ≤25 + URL +
+  คำอธิบาย 2 บรรทัด≤35) และ Callout (≤25) ระดับแคมเปญ — route ใหม่ `extensions`:
+  สร้าง asset + link เป็น **atomic เดียว** ผ่าน `googleAds:mutate` + temp resource name
+  (ไม่มี asset ค้างถ้า link fail) · ถอด = unlink (asset ยังอยู่ใน library เหมือน Google UI)
+- **Audiences (ทุกประเภทยกเว้น PMax):** ดู user list ที่ผูกกับแคมเปญ + เพิ่มจาก dropdown
+  รายชื่อ user list ทั้งบัญชี (โชว์ขนาด list) + bid modifier + ถอด — route ใหม่ `audiences`
+  (campaignCriteria:mutate type USER_LIST) · PMax ไม่โชว์เพราะ audience อยู่ที่ asset group signal
+- **Ad group (SEARCH/DISPLAY):** ตาราง ad group ทุกกลุ่ม — เปิด/หยุดรายกลุ่ม + ปรับ CPC bid
+  รายกลุ่ม (มี hint ว่า smart bidding ไม่ใช้ค่านี้) — route ใหม่ `ad-groups` (adGroups:mutate)
+- **รูประดับ Asset Group (PMax):** เลือก asset group → เห็น thumbnail รูป/โลโก้ทุกใบ
+  (list จาก `asset-groups` route เดิม) → ถอดรูป / อัปโหลดรูปใหม่ (เลือกประเภท Landscape/Square/
+  Portrait/Logo) — route ใหม่ `asset-group-assets`: รับ URL จาก `/api/upload/image` เดิม
+  (ซึ่งคืนแค่ `{url}` ไม่มี asset resource) → โหลดรูป server-side → สร้าง ImageAsset + ผูกเข้า
+  asset group แบบ atomic · unlink สร้าง resource name จากรูปแบบมาตรฐาน `{agId}~{assetId}~{fieldType}`
+  · ถ้าถอดต่ำกว่าขั้นต่ำ PMax Google จะปฏิเสธเอง (ข้อความ error ส่งถึง UI)
+- ทุก action ผ่าน **modal reapprove** เดียวกับ 13.2 ทั้งหมด
+
+### 13.5 โหมดจริงเท่านั้น — ตัด mock ออกทั้งเส้นทาง Campaign Adjustment (31 ก.ค.)
+ทุก route ในเส้นทางนี้**ยิง Google Ads API จริงเสมอ** ไม่สน env `MOCK_GOOGLE_ADS` อีกต่อไป:
+- ตัด `isMockMode()` + mock data ออกจาก: `campaign-adjustments` (push status/งบ/bidding +
+  4 action ของหน้า plan), `campaign-edit/campaigns`, `ads`, `asset-groups`, `pmax-update`,
+  `shopping-products`, `keywords`, `extensions`, `audiences`, `ad-groups`, `asset-group-assets`
+  — 5 ไฟล์ (adjustments/ads/asset-groups/pmax-update/shopping-products) เดิมอยู่ใน repo
+  จึงถูกดึงเข้าชุดนี้เพื่อแก้ (+5 ไฟล์)
+- `keyword-suggest`: ถ้า AI provider ล่ม จะตอบ "ยังไม่มีคำแนะนำ" ตรง ๆ — **ไม่สร้างคำแนะนำ
+  สำรองปลอม**อีกแล้ว (ป้องกันคำ template หลุดไป push จริง)
+- UI สองหน้า (editor + [planId]) ลบการแสดงผล "(Mock)" ออกหมด
+- ถ้า credentials Google Ads ไม่ครบ จะได้ **error ชัดเจน** แทน mock เงียบ ๆ
+- ขอบเขต: แตะเฉพาะเส้นทาง campaign adjustment — ฟีเจอร์อื่นที่ใช้ `isMockMode()`
+  (push-blueprint, automation ฯลฯ) ไม่ถูกแตะ
+
+### ที่มีอยู่แล้ว (ไม่แตะ)
+- เปลี่ยนรูป GDN + เพิ่ม PMax Asset Group → หน้า `/campaign-adjustment/[planId]`
+- แก้ text ads ทุกประเภท (RSA/RDA/PMax/Demand Gen/App) + AI → หน้า editor เดิม
+
+ไฟล์: `src/app/campaign-editor/page.tsx`, `src/app/campaign-adjustment/[planId]/page.tsx`,
+`src/app/api/campaign-edit/campaigns/route.ts` + route ใหม่ 6 ตัว: `keywords`, `keyword-suggest`,
+`extensions`, `audiences`, `ad-groups`, `asset-group-assets`
+
+---
+
+## 14) รอบ 31 ก.ค. (ชุดที่ 2): Tools hub / Line Tracking settings / Filters / Monthly budget
+
+### 14.1 เอาหน้า /tools ออก
+- Sidebar: แถว "Tools" เปลี่ยนจากลิงก์เป็นปุ่มกาง dropdown อย่างเดียว (เมนูย่อยทุกตัวยังอยู่ครบ)
+- `/tools` เปลี่ยนเป็น redirect → `/dashboard` (กัน bookmark เก่าค้าง) — **ไม่แตะหน้าอื่น** ทุก tool เข้าได้ปกติ
+
+### 14.2 Conversion Mapping — แก้ชื่อ event ได้ (Standard / Custom)
+- แต่ละ platform ในแต่ละสถานะ: dropdown **Standard events** ของ platform นั้น
+  (`PLATFORM_STANDARD_EVENTS` ใน platforms.ts — GA4/Meta/TikTok/Snapchat ตามชื่อ official,
+  LINE Ads/Microsoft/X เป็น default แนะนำเพราะ event เป็นแบบ account กำหนดเอง)
+- ช่อง **Custom พิมพ์เอง** ข้าง dropdown — กรอกเมื่อไหร่ชนะ dropdown (กัน event ซ้ำกับที่มีในบัญชี)
+- ระบบยัง set default ให้เหมือนเดิม — ไม่แตะอะไรก็ทำงานเท่าเดิมเป๊ะ (ค่าปัจจุบันถูก pre-select)
+
+### 14.3 แยก Client Login + Conversion Mapping เป็น Settings sub pages (ต่อโปรเจกต์)
+- ใหม่: `/line-tracking/projects/{id}/settings` (hub) + `/settings/client-login` (เฉพาะแอดมิน)
+  + `/settings/conversion-mapping`
+- Setup Wizard: สองส่วนนี้กลายเป็นการ์ดลิงก์ไป Settings + ปุ่ม ⚙️ Settings บน header
+
+### 14.4 🚫 line_block ส่งได้ทุก platform
+- เพิ่ม `blockEvent: "line_block"` ให้ Microsoft + X (ครบ 7 platform แล้ว) — `enqueueBlockConversion`
+  ยิงให้ทุก platform ที่เชื่อมต่อโดยอัตโนมัติเมื่อลูกค้าบล็อก OA
+- ตารางอ้างอิง event ใน settings/conversion-mapping มีแถว 🚫 line_block ต่อ platform แล้ว
+
+### 14.5 Reports — filter เฉพาะแคมเปญ Active
+- plumb `campaign.status` ผ่าน `reporting.ts` → `performance-reader.ts` → weekly API → หน้า Reports
+- ปุ่ม "✓ เฉพาะ Active / รวม Paused" (default = Active) — มีผลทั้งตาราง กราฟ export และ context AI
+- หมายเหตุ: snapshot เก่าที่ sync ไว้ใน DB ไม่มี status → ถือเป็น ENABLED (live pull มีครบ)
+
+### 14.6 Campaign Monitor (/dashboard) — filter + เปลี่ยน bidding type
+- ปุ่มกรอง Active / Paused / ทั้งหมด (default = Active ตัดหาง PAUSED ยาว ๆ)
+- Modal แก้แคมเปญ: เพิ่ม **เลือก Bidding Strategy** (tCPA / MaxConv / tROAS / MaxConvValue) —
+  เปลี่ยน type ได้จริงผ่าน `changeStrategy` ใหม่ใน campaign-adjustments API (updateMask ทั้ง
+  bidding scheme) + คำเตือน learning period + confirm ก่อน push · หน้า campaign-editor
+  (Bidding section) ใช้ความสามารถเดียวกันนี้ด้วย
+
+### 14.7 Morning-brief — Monthly Budget Progress (ต่อ account)
+- API ใหม่ `morning-brief/monthly-budget`: MTD spend ราย account (GAQL THIS_MONTH)
+- การ์ดต่อ account ตามดีไซน์ที่กำหนด: งบทั้งหมด / ใช้ไปแล้ว % + บาท / คงเหลือ ·
+  เส้น progress ซ้าย→ขวา มีธง 🏁 ที่ 100% จุดสีเขียว = ตอนนี้ จุดส้ม/แดง = คาดการณ์สิ้นเดือน
+  (run-rate: spend ÷ วันที่ผ่านมา × วันทั้งเดือน) · บอกเกิน/ขาดเป็น % และบาท ·
+  ป้ายแนวโน้ม: ⚠️ เกินงบ / ✓ ตามแผน / 💤 ต่ำกว่าแผน
+- **งบเดือนตั้งเองต่อ account เก็บใน localStorage ของเบราว์เซอร์** (ไม่มี migration DB) —
+  ข้อจำกัด: ตั้งใหม่ต่อเครื่อง/เบราว์เซอร์ ถ้าอยากให้ทีมเห็นค่าเดียวกันต้องย้ายลง DB รอบหน้า
+
+### 14.8 คำตอบข้อ "ไม่มีเว็บไซต์ track ได้ไหม" (ไม่ต้องแก้โค้ด)
+- ได้ — ใช้ลิงก์ `/go/{slug}?utm_source=...` (มีอยู่แล้ว): บันทึก click ฝั่ง server →
+  redirect เข้า LINE add-friend ทันที → follow event ถูก attribute ด้วย window 3 ชม.
+  (หรือแม่น 1:1 ถ้าเปิดโหมด LINE Login) · click จาก /go นับเป็น AdClick ทำให้ checklist ผ่านเอง
+- ลิงก์ lin.ee ที่สร้างจาก Gain Friends ใน LINE OA Manager ตรง ๆ → ระบบเรา**วัดที่มาไม่ได้**
+  (ไม่ผ่านเรา) — ใช้ /go เป็นตัวหน้าแล้วมัน redirect ไป lin.ee เดิมให้แทน
+
+---
+
+## 15) LIFF tracking link + Monthly budget ลง DB กลาง (รอบ 31 ก.ค. ชุดที่ 3)
+
+### 15.1 LIFF — วัดคน add จาก "ลิงก์โดเมน LINE" (FB post / ยิงแอดเข้า LINE ตรง ๆ)
+
+**เหตุผล:** ลิงก์ lin.ee ที่สร้างจาก OA Manager วิ่งตรงเข้า LINE — ระบบไม่มีทางรู้ที่มา
+LIFF แก้ตรงนี้: ลิงก์ `https://liff.line.me/{liffId}?src=fb-post` เป็น**โดเมน LINE แท้**
+เปิดในแอป LINE → หน้า LIFF ของเราบันทึก click + LINE userId (verify token กับ LINE ฝั่ง server
+— ไม่เชื่อ userId จาก client) → เด้งต่อไปหน้า add friend ทันที → พอ follow event เข้า webhook
+ระบบหยิบ click ที่ผูกกับ user คนนั้นเป๊ะ ๆ (**1:1 แม่นกว่า 3h-window**)
+
+**เป็น optional สมบูรณ์ — เลือกได้ 3 ระดับต่อลูกค้า:**
+| ระดับ | เชื่อมอะไร | วัดอะไรได้ |
+|---|---|---|
+| 1 | LINE OA อย่างเดียว (Messaging) | Lead เข้าปกติ แต่ add ที่ไม่ผ่านเว็บ = ไม่รู้ที่มา |
+| 2 | + เว็บ embed / ลิงก์ /go | วัดจากเว็บ + โฆษณาที่ผ่าน /go (3h window) |
+| 3 | + LIFF (ต้องมี Login channel) | วัดลิงก์โดเมน LINE ตรง ๆ แบบรายคน 1:1 |
+
+โปรเจกต์ที่ไม่ใส่ LIFF ID → ไม่มีอะไรเปลี่ยนเลย (หน้า /liff จะ redirect เฉย ๆ ถ้าถูกเรียก)
+
+**วิธีตั้ง (ต่อโปรเจกต์ · อยู่ในคู่มือหน้า Connect LINE แล้ว):**
+1. LINE Developers → Provider ของลูกค้า → สร้าง/เปิด **LINE Login channel**
+2. แท็บ LIFF → Add → **Endpoint URL = `{โดเมนระบบ}/liff/{slug}`** · Scope: `profile`
+3. เอา **LIFF ID** มาวางช่อง LIFF ID ในฟอร์ม Connect LINE → การ์ดจะโชว์ลิงก์พร้อม copy
+4. แจกลิงก์ `https://liff.line.me/{liffId}?src=ชื่อช่องทาง` (เปลี่ยน src ต่อช่องทาง)
+
+**Fail-open:** อะไรพังก็ตาม (SDK/token/API) ผู้ใช้ถูกส่งต่อไป add friend เสมอ — tracking
+ห้ามขวางการ add · Lead ไม่ถูกสร้างตอนเปิดลิงก์ (กัน Lead ผี) — สร้างตอน follow จริงเท่านั้น
+
+**leadService (แก้แบบ additive):** ก่อน fallback ไป 3h-window ให้เช็ค click ที่ stamp ไว้บน
+LineUser ก่อน (LIFF/LINE Login ใช้ร่วมกัน) — ถ้าไม่มีก็ทำงานแบบเดิมทุกประการ
+
+### 15.2 Monthly budget ย้ายจาก localStorage → DB กลาง (ทั้งทีมเห็นค่าเดียวกัน)
+- ตาราง `AccountMonthlyBudget` (customer_id PK, budget_baht, updated_at) — **สร้างเอง
+  อัตโนมัติ**ด้วย `CREATE TABLE IF NOT EXISTS` ผ่าน connection ของแอปตอนเรียกครั้งแรก
+  → ไม่ต้องแก้ prisma schema ไม่ต้อง migrate ไม่ต้องรัน SQL เอง
+- API `monthly-budget`: GET คืน spend + budget ต่อ account · PUT บันทึกงบ (upsert)
+- หน้า morning-brief ตัด localStorage ออกหมด — งบที่ตั้งเห็นเหมือนกันทุกเครื่อง/ทุกคน
+
+---
+
+## 16) 🚨 ด่วนที่สุด — middleware บน production บล็อก Line Tracking ทั้งระบบอยู่ตอนนี้
+
+### อาการ (ตรวจกับ production จริง 31 ก.ค.)
+- `GET /embed.js` → **302 ไปหน้า login** = เว็บลูกค้าโหลดสคริปต์ไม่ได้ → click ไม่เข้าเลย
+- `POST /api/webhooks/line/{id}` → **401** = **LINE webhook โดนปฏิเสธ → Lead ไม่เข้าระบบ**
+- `/go/…`, `/t/…`, `/line/start` → 302 login = ลิงก์ในโฆษณา/tracking link ตายหมด
+
+### Root cause
+ชุดแก้ auth (plans-ads fix) เขียน `src/middleware.ts` ใหม่เป็นแบบ edge-safe (ถูกต้อง)
+แต่**ทำรายการยกเว้น route สาธารณะของ Line Tracking หายไปทั้งชุด** (PUBLIC_TRACKING_PREFIXES
++ ระบบ cookie ของ client viewer) — deploy แล้วทุก request ที่ไม่มี session โดนไล่ไป login
+
+### สิ่งที่แก้ — middleware ฉบับรวม (ไฟล์นี้ทับของทุกชุดก่อนหน้า)
+- ฐาน edge-safe เดิมของชุด auth (NextAuth จาก `auth.config.ts` — ห้าม import prisma) ✓ คงไว้
+- คืน `PUBLIC_TRACKING_PREFIXES` ครบ + เพิ่ม `/liff/`, `/api/liff/` ของหัวข้อ 15
+- คืน logic client-viewer cookie (`clientToken.ts` เป็น jose ล้วน — edge-safe อยู่แล้ว)
+- แนบ `src/lib/auth.config.ts` มาในชุดด้วย (ก๊อปเดิมจากชุด plans-ads ไม่แก้อะไร) เผื่อ repo ยังไม่มี
+
+### หลัง deploy ต้องเช็คทันที
+`curl -I https://<domain>/embed.js` ต้องได้ **200** (ไม่ใช่ 302) และเปิด
+`/api/webhooks/line/{projectId}` ใน browser ต้องได้ JSON version probe (ไม่ใช่ 401)
+แล้วกด Verify ใน LINE Developers + ทัก OA จริง 1 ครั้งดู Lead เข้า
+
+---
+
+# ไฟล์ในชุดนี้ (49 ไฟล์)
 
 ```
 vercel.json                                                  ← maxDuration webhook + regions bom1
-src/app/api/webhooks/line/[projectId]/route.ts               ← ตอบ 200 ทันที + waitUntil + log OCR fail
+src/app/api/webhooks/line/[projectId]/route.ts               ← ตอบ 200 ทันที + waitUntil + log OCR fail + forward relay (หัวข้อ 12)
 src/app/api/line-tracking/client-login/route.ts              ← ลบคุกกี้ staff ให้ได้จริง
-src/components/line-tracking/ConnectionCard.tsx              ← Webhook URL มีโดเมน + กัน autofill
-src/lib/line-tracking/actions.ts                             ← + testEmbedAction() + รู้จัก embed.js?project=
+src/components/line-tracking/ConnectionCard.tsx              ← + dropdown โหมด Webhook (12) + โชว์ลิงก์ LIFF (15.1)
+src/lib/line-tracking/actions.ts                             ← + testEmbedAction/oktraffic (11) + custom event ชนะ dropdown (14.2)
+src/lib/line-tracking/connectors.ts                          ← ใหม่ในชุด: LineConfig + webhookMode/forwardUrl + field แบบ dropdown (หัวข้อ 12)
 src/lib/line-tracking/services/projectService.ts             ← ยุบ query ด้วย groupBy
 src/lib/line-tracking/services/ocrService.ts                 ← อ่านสลิปด้วย Gemini ก่อน (fallback Vision → OCR.space)
 src/app/line-tracking/projects/[projectId]/page.tsx          ← รวมเป็นรอบเดียว
-src/app/line-tracking/projects/[projectId]/setup/page.tsx    ← + ปุ่ม Test + แผง Webhook ล่าสุด + snippet ใหม่
+src/app/line-tracking/projects/[projectId]/setup/page.tsx    ← + ปุ่ม Test + oktraffic (11) + ย้าย 2 ส่วนไป Settings (14.3)
 src/app/line-tracking/projects/[projectId]/funnel/page.tsx   ← รวมเป็นรอบเดียว
 src/app/line-tracking/projects/[projectId]/conversions/page.tsx ← รวมเป็นรอบเดียว
 src/app/line-tracking/projects/[projectId]/sheet/page.tsx    ← รวมเป็นรอบเดียว
 src/app/line-tracking/projects/[projectId]/tracking-links/page.tsx ← snippet ใหม่ (?project=slug)
-src/lib/line-tracking/connector-guide.ts                     ← ขั้นตอนตั้ง LINE: + Use webhook + OA Manager
+src/lib/line-tracking/connector-guide.ts                     ← + ขั้นตอน Option 2 (12) + ขั้นตอนตั้ง LIFF (15.1)
 src/app/line-tracking/guide/page.tsx                         ← คู่มือในระบบ: + OA Manager + snippet ใหม่
 src/app/embed.js/route.ts                                    ← หาแท็กตัวเองให้เจอเมื่อฝังผ่าน GTM + ?project= กันหลุดถาวร
+src/app/campaign-editor/page.tsx                             ← filter + reapprove modal + Bidding + Keywords/AI (หัวข้อ 13)
+src/app/campaign-adjustment/[planId]/page.tsx                ← filter ชื่อ + status ในลิสต์แคมเปญ (หัวข้อ 13.1)
+src/app/api/campaign-edit/campaigns/route.ts                 ← + bidding_strategy_type (หัวข้อ 13.3)
+src/app/api/campaign-edit/keywords/route.ts                  ← ใหม่: list + mutate keywords (หัวข้อ 13.3)
+src/app/api/campaign-edit/keyword-suggest/route.ts           ← ใหม่: AI แนะนำ keyword ผ่าน safeCallAI เดิม (หัวข้อ 13.3)
+src/app/api/campaign-edit/extensions/route.ts                ← ใหม่: Sitelink/Callout list+add+remove (หัวข้อ 13.4)
+src/app/api/campaign-edit/audiences/route.ts                 ← ใหม่: Audience USER_LIST list+add+remove (หัวข้อ 13.4)
+src/app/api/campaign-edit/ad-groups/route.ts                 ← ใหม่: ad group bid + เปิด/หยุดรายกลุ่ม (หัวข้อ 13.4)
+src/app/api/campaign-edit/asset-group-assets/route.ts        ← ใหม่: เพิ่ม/ถอดรูป PMax asset group (หัวข้อ 13.4)
+src/app/api/campaign-adjustments/route.ts                    ← ตัด mock — push status/งบ/bidding จริงเสมอ (หัวข้อ 13.5)
+src/app/api/campaign-edit/ads/route.ts                       ← ตัด mock — list/แก้ text ads จริงเสมอ (หัวข้อ 13.5)
+src/app/api/campaign-edit/asset-groups/route.ts              ← ตัด mock — list asset group จริงเสมอ (หัวข้อ 13.5)
+src/app/api/campaign-edit/pmax-update/route.ts               ← ตัด mock (หัวข้อ 13.5)
+src/app/api/campaign-edit/shopping-products/route.ts         ← ตัด mock (หัวข้อ 13.5)
+src/components/layout/Sidebar.tsx                            ← Tools = dropdown อย่างเดียว (14.1)
+src/app/tools/page.tsx                                       ← redirect → /dashboard (14.1)
+src/lib/line-tracking/platforms.ts                           ← + PLATFORM_STANDARD_EVENTS + blockEvent ครบ 7 (14.2/14.4)
+src/components/line-tracking/ConversionRuleRow.tsx           ← dropdown standard + ช่อง custom (14.2)
+src/app/line-tracking/projects/[projectId]/settings/page.tsx                    ← ใหม่: settings hub (14.3)
+src/app/line-tracking/projects/[projectId]/settings/client-login/page.tsx       ← ใหม่ (14.3)
+src/app/line-tracking/projects/[projectId]/settings/conversion-mapping/page.tsx ← ใหม่ + แถว line_block (14.3/14.4)
+src/lib/google-ads/reporting.ts                              ← + campaign.status ใน GAQL (14.5)
+src/lib/google-ads/performance-reader.ts                     ← ส่ง status ผ่าน snapshot (14.5)
+src/app/reports/page.tsx                                     ← ปุ่มเฉพาะ Active + derived report (14.5)
+src/app/dashboard/page.tsx                                   ← filter status + เปลี่ยน bidding type ใน modal (14.6)
+src/app/morning-brief/page.tsx                               ← Monthly Budget Progress ต่อ account (14.7)
+src/app/api/morning-brief/monthly-budget/route.ts            ← ใหม่: MTD spend + งบเดือนใน DB กลาง (14.7/15.2)
+src/app/liff/[projectSlug]/page.tsx                          ← ใหม่: LIFF entry — บันทึก click แล้วพาไป add friend (15.1)
+src/app/api/liff/[projectSlug]/route.ts                      ← ใหม่: verify LIFF token + record click + stamp user (15.1)
+src/lib/line-tracking/services/leadService.ts                ← additive: หยิบ click ที่ผูกกับ user ก่อน 3h-window (15.1)
+src/middleware.ts                                            ← 🚨 ฉบับรวม: edge-safe + คืน public tracking + /liff (16)
+src/lib/auth.config.ts                                       ← ก๊อปเดิมจากชุด plans-ads (ไม่แก้) — ให้ middleware build ได้ (16)
 ```
 
 ทุกไฟล์อยู่ใน **LINE Tracking + webhook เท่านั้น** ยกเว้น `vercel.json` (ระดับโปรเจกต์)
@@ -452,6 +759,31 @@ npm run build
 3. หน้า Setup ข้อ 1 → กด **🔍 Test** → ต้องขึ้นผลลัพธ์ (ไม่ใช่ error)
 4. หน้า Project Overview → **เช็คว่าตัวเลขทุกช่องตรงกับก่อน deploy** (KPI, donut, ตารางแยกช่องทาง, funnel)
 5. จับเวลาโหลดหน้า Overview / Setup → ต้องเร็วขึ้นชัดเจน
+6. **หัวข้อ 11:** โปรเจกต์ที่มี click แล้ว (เช่น convert-cake 966 ครั้ง) → กด 🔍 Test → ต้องได้ข้อความเขียว
+   "โค้ดทำงานอยู่จริง…" ไม่ใช่ ❌ ไม่พบโค้ด (ข้อความ ❌ จะขึ้นเฉพาะโปรเจกต์ที่ click = 0 จริง ๆ)
+7. **หัวข้อ 12:** หน้า Connect LINE OA ต้องเห็น dropdown "โหมด Webhook" + ช่อง "Webhook URL เดิมของบอทลูกค้า"
+   → เลือก Option 2 ใส่ URL บอททดสอบ (เช่น webhook.site) → Save → ทัก OA 1 ครั้ง →
+   ปลายทางต้องได้รับ POST พร้อม header `x-line-signature` และ Lead ยังเข้าระบบเราปกติ
+   → ลองใส่ URL ผิด ๆ แล้วทัก OA → แผง "📡 Webhook ล่าสุด" ต้องมีรายการ FAILED บอกว่า forward ไม่สำเร็จ
+8. **หัวข้อ 13:** `/campaign-editor` → พิมพ์ค้นหา + กดกรอง PAUSED → ลิสต์ต้องกรองจริง และ
+   Select All ต้องเลือกเฉพาะที่เห็น → เลือกแคมเปญแล้วกด Pause All → **ต้องมี modal ยืนยันก่อน**
+   (กดยกเลิกต้องไม่มีอะไรเปลี่ยน) → แท็บแคมเปญ SEARCH ต้องมี section Bidding + Keywords →
+   ลองพัก keyword 1 คำ (ผ่าน modal) + กด AI แนะนำ — คำแนะนำต้องมาจาก AI จริง (ถ้า provider ล่ม
+   จะขึ้นข้อความ "ยังไม่มีคำแนะนำ" ตรง ๆ ไม่มีคำ template)
+9. **หัวข้อ 13.4:** แท็บ SEARCH ต้องมี section Ad Groups / Extensions / Audiences เพิ่ม —
+   ลองเพิ่ม Callout 1 อัน + ปรับ CPC bid 1 กลุ่ม (ทุกอันต้องผ่าน modal ยืนยัน) →
+   แท็บ PMax ต้องเห็น thumbnail รูปใน asset group + ลองอัปโหลดรูป Square 1 ใบ →
+   เช็คใน Google Ads UI ว่ารายการที่ push ไปโผล่จริง — **ระบบยิงจริงเสมอ ไม่มี mock แล้ว**
+   เทสกับแคมเปญที่ PAUSED อยู่ก่อน แล้วลบ/ย้อนรายการทดสอบใน Google Ads UI หลังเทสเสร็จ
+10. **หัวข้อ 14:** เมนู Tools ต้องกางเมนูย่อยอย่างเดียว (คลิกแล้วไม่เด้งไปหน้า hub, /tools เด้งไป
+   /dashboard) → Line Tracking: หน้า Setup มีปุ่ม ⚙️ Settings + step Conversion Mapping เป็นลิงก์
+   → settings/conversion-mapping แก้ event เป็น custom แล้ว Save ต้องเก็บค่า → Reports + Campaign
+   Monitor มีปุ่มกรอง Active (default) → Monitor แก้แคมเปญเปลี่ยน strategy ต้องมี confirm →
+   Morning-brief ใส่งบเดือน 1 account ต้องเห็นเส้น progress + จุดคาดการณ์ + ป้ายแนวโน้ม
+11. **หัวข้อ 15:** งบเดือนที่ตั้งใน morning-brief ต้องเห็นเหมือนกันจากเครื่อง/บัญชีอื่น (อยู่ใน DB แล้ว)
+   → โปรเจกต์ที่ใส่ LIFF ID: เปิดลิงก์ liff.line.me จากมือถือ → ต้องเด้งถึงหน้า add friend ลื่น ๆ
+   และมี AdClick ใหม่ (source ตาม ?src=) → add เพื่อนจริง → Lead ต้องผูกกับ click นั้น (1:1)
+   → โปรเจกต์ที่ไม่ใส่ LIFF ID ต้องไม่มีอะไรเปลี่ยน
 
 > จุดเดียวที่อาจต่างแบบไม่มีผล: ตารางแยกช่องทาง ถ้ามี 2 ช่องทางที่ lead **เท่ากันเป๊ะ** ลำดับบน-ล่างอาจสลับกัน (ของเดิมก็ไม่ได้กำหนดลำดับ tie ไว้)
 
@@ -459,9 +791,27 @@ npm run build
 
 # ยืนยันแล้วฝั่งเรา
 
-- `npx tsc --noEmit` → 0 error
-- `npm run build` → `✓ Compiled successfully` ครบทุก route
+- `npx tsc --noEmit` → 0 error *(รอบหัวข้อ 1–10)*
+- `npm run build` → `✓ Compiled successfully` ครบทุก route *(รอบหัวข้อ 1–10)*
 - `vercel.json` → valid JSON
+
+**หัวข้อ 11–13 (รอบเพิ่มเติม 30 ก.ค.) — สิ่งที่ทดสอบจริงแล้ว:**
+- สแกน GTM container กับเว็บจริง: convertcake.com → `okgtm`, laposhclinic.com (`la-posh`) → `okgtm`,
+  slug ผิด → `wrongslug` (รัน logic ชุดเดียวกับใน `testEmbedAction` ผ่าน Node script)
+- Webhook relay: จำลอง LINE ยิง payload ไทย+อีโมจิ → forward ไป server ทดสอบที่ verify
+  HMAC-SHA256 แบบเดียวกับ LINE SDK → **body ตรงทุก byte + ลายเซ็นผ่าน + x-line-retry-key ครบ**,
+  retry ทำงาน (รอบแรก 500 → ส่งสำเร็จรอบ 2), guard ปฏิเสธ http / URL วน loop / URL เสีย
+
+⚠️ ที่ตรวจไม่ได้จากเครื่องนี้: `tsc` + `next build` (ไม่มี repo เต็ม — ไม่มี `prisma/schema.prisma` +
+`tsconfig.json`) — ทุกไฟล์ผ่าน esbuild syntax check แล้ว แต่ **dev ต้องรัน `npx tsc --noEmit` +
+`npm run build` ใน repo จริงก่อน deploy** (ตามขั้น Deploy อยู่แล้ว) · ส่วน UI หัวข้อ 13 ยังไม่ได้
+เปิดในเบราว์เซอร์จริง — เทสตามข้อ 8–9 ใน "เทสหลัง deploy"
+
+⚠️ หัวข้อ 13.4: payload ของ `googleAds:mutate` / `campaignCriteria:mutate` / `adGroups:mutate` /
+`assetGroupAssets` เขียนตามสเปค Google Ads API v21 (REST) และตาม pattern ของ route เดิมในโปรเจกต์
+แต่**ยังไม่ได้ยิงกับบัญชีจริงจากเครื่องนี้** — และตั้งแต่หัวข้อ 13.5 **ไม่มี mock ให้เทสแล้ว**
+ทุก request ไปบัญชีจริง: เทสกับแคมเปญที่ PAUSED / รายการเล็ก ๆ ก่อน แล้วเก็บกวาดใน
+Google Ads UI หลังเทส ก่อนปล่อยให้ใช้กับแคมเปญลูกค้าที่รันอยู่
 
 **ยังไม่ได้ทดสอบกับ DB จริง** — ความถูกต้องของตัวเลขตรวจจากตรรกะ ไม่ใช่จากการรันกับ production
 ตัวเลข "เร็วขึ้นเท่าไหร่" เป็นการประมาณจากระยะทางเครือข่าย ยังไม่ได้วัดของจริง

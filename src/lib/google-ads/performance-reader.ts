@@ -4,6 +4,8 @@ import { getCampaignPerformance } from './reporting'
 export interface CampaignSnapshot {
   campaignId?:      string
   campaignName:     string
+  /** ENABLED / PAUSED — from live pulls; stored snapshots may omit it. */
+  status?:          string
   cost:             number
   impressions:      number
   clicks:           number
@@ -26,6 +28,7 @@ export async function pullCampaignPerformance(
   return (raw as Array<{
     campaignId?: string
     campaignName: string
+    status?: string
     cost: number
     impressions: number
     clicks: number
@@ -37,6 +40,7 @@ export async function pullCampaignPerformance(
   }>).map((r) => ({
     campaignId:     r.campaignId,
     campaignName:   r.campaignName,
+    status:         r.status,
     cost:           r.cost,
     impressions:    r.impressions,
     clicks:         r.clicks,

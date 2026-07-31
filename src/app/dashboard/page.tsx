@@ -105,10 +105,6 @@ function hasCpaAlert(c: MonitorCampaign): boolean {
 const CPA_STRATEGIES  = new Set(['TARGET_CPA', 'MAXIMIZE_CONVERSIONS'])
 const ROAS_STRATEGIES = new Set(['TARGET_ROAS', 'MAXIMIZE_CONVERSION_VALUE'])
 
-function canEditBidding(strategy: string): boolean {
-  return CPA_STRATEGIES.has(strategy) || ROAS_STRATEGIES.has(strategy)
-}
-
 function campaignResourceNameOf(c: MonitorCampaign): string {
   return c.campaignResourceName ?? `customers/${c.customerId.replace(/-/g, '')}/campaigns/${c.campaignId}`
 }
@@ -122,12 +118,21 @@ function EditCampaignModal({
   onClose: () => void
   onSaved: (patch: Partial<MonitorCampaign>) => void
 }) {
-  const isCpa  = CPA_STRATEGIES.has(campaign.biddingStrategy)
-  const isRoas = ROAS_STRATEGIES.has(campaign.biddingStrategy)
+  // Strategy is editable: keep the campaign's own strategy selected by default,
+  // switching it sends changeStrategy so the API rewrites the bidding scheme.
+  const STRATEGY_OPTIONS = ['MAXIMIZE_CONVERSIONS', 'TARGET_CPA', 'MAXIMIZE_CONVERSION_VALUE', 'TARGET_ROAS'] as const
+  const initialStrategy = (STRATEGY_OPTIONS as readonly string[]).includes(campaign.biddingStrategy)
+    ? campaign.biddingStrategy
+    : 'MAXIMIZE_CONVERSIONS'
+  const [strategy, setStrategy] = useState(initialStrategy)
+  const isCpa  = CPA_STRATEGIES.has(strategy)
+  const isRoas = ROAS_STRATEGIES.has(strategy)
+  const strategyChanged = strategy !== campaign.biddingStrategy
 
   const [budget, setBudget] = useState(String(campaign.dailyBudget || ''))
   const [target, setTarget] = useState(
-    isCpa ? String(campaign.targetCpa ?? '') : isRoas ? String(campaign.targetRoas ?? '') : ''
+    CPA_STRATEGIES.has(campaign.biddingStrategy) ? String(campaign.targetCpa ?? '')
+      : ROAS_STRATEGIES.has(campaign.biddingStrategy) ? String(campaign.targetRoas ?? '') : ''
   )
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
@@ -139,11 +144,18 @@ function EditCampaignModal({
     const newTarget = parseFloat(target)
 
     const budgetChanged = !isNaN(newBudget) && newBudget > 0 && newBudget !== campaign.dailyBudget
-    const targetChanged = canEditBidding(campaign.biddingStrategy) && !isNaN(newTarget) && newTarget > 0 &&
+    const targetChanged = !isNaN(newTarget) && newTarget > 0 &&
       newTarget !== (isCpa ? campaign.targetCpa ?? 0 : campaign.targetRoas ?? 0)
+    const biddingChanged = strategyChanged || targetChanged
 
-    if (!budgetChanged && !targetChanged) { setError('ไม่มีค่าที่เปลี่ยนแปลง'); return }
+    if (!budgetChanged && !biddingChanged) { setError('ไม่มีค่าที่เปลี่ยนแปลง'); return }
     if (budgetChanged && !campaign.budgetResourceName) { setError('ไม่พบ budget ของแคมเปญนี้ (ลอง Refresh)'); return }
+    // TARGET_CPA / TARGET_ROAS require an explicit target value.
+    if (biddingChanged && (strategy === 'TARGET_CPA' || strategy === 'TARGET_ROAS') && (isNaN(newTarget) || newTarget <= 0)) {
+      setError(strategy === 'TARGET_CPA' ? 'Target CPA ต้องระบุ (บาท)' : 'Target ROAS ต้องระบุ (เท่า)')
+      return
+    }
+    if (strategyChanged && !confirm(`ยืนยันเปลี่ยน bidding strategy ของ "${campaign.campaignName}"\n${campaign.biddingStrategy} → ${strategy}?\n(การเปลี่ยน strategy จะรีเซ็ตช่วงเรียนรู้ของ Google)`)) return
 
     setSaving(true)
     try {
@@ -164,7 +176,8 @@ function EditCampaignModal({
         }
         patch.dailyBudget = Math.round(newBudget)
       }
-      if (targetChanged) {
+      if (biddingChanged) {
+        const hasTarget = !isNaN(newTarget) && newTarget > 0
         const res = await fetch('/api/campaign-adjustments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -172,18 +185,19 @@ function EditCampaignModal({
             action: 'edit_campaign_bidding',
             customerId: campaign.customerId,
             campaignResourceName: campaignResourceNameOf(campaign),
-            biddingStrategyType: campaign.biddingStrategy,
-            ...(isCpa
-              ? { targetCpaMicros: Math.round(newTarget * 1_000_000) }
-              : { targetRoas: newTarget }),
+            biddingStrategyType: strategy,
+            ...(strategyChanged ? { changeStrategy: true } : {}),
+            ...(isCpa && hasTarget ? { targetCpaMicros: Math.round(newTarget * 1_000_000) } : {}),
+            ...(isRoas && hasTarget ? { targetRoas: newTarget } : {}),
           }),
         })
         if (!res.ok) {
           const d = await res.json() as { error?: string }
           throw new Error(d.error ?? 'ปรับ bidding ไม่สำเร็จ')
         }
-        if (isCpa) patch.targetCpa = newTarget
-        else patch.targetRoas = newTarget
+        patch.biddingStrategy = strategy
+        if (isCpa && hasTarget) patch.targetCpa = newTarget
+        if (isRoas && hasTarget) patch.targetRoas = newTarget
       }
       onSaved(patch)
       onClose()
@@ -214,24 +228,39 @@ function EditCampaignModal({
           />
         </div>
 
-        {canEditBidding(campaign.biddingStrategy) ? (
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1.5">
-              {isCpa ? 'Target CPA (บาท)' : 'Target ROAS (เท่า เช่น 4 = 400%)'}
-              <span className="ml-1 text-gray-400 font-normal">— strategy: {campaign.biddingStrategy}</span>
-            </label>
-            <input
-              type="number" min="0" step={isCpa ? '1' : '0.1'} value={target}
-              onChange={e => setTarget(e.target.value)}
-              placeholder={isCpa ? 'เช่น 300' : 'เช่น 4'}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-        ) : (
-          <p className="text-[11px] text-gray-400 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-            Strategy &quot;{campaign.biddingStrategy || 'ไม่ทราบ'}&quot; ไม่มี target ให้ปรับจากหน้านี้ (ปรับได้เฉพาะงบ)
-          </p>
-        )}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">
+            Bidding Strategy
+            <span className="ml-1 text-gray-400 font-normal">— ปัจจุบัน: {campaign.biddingStrategy || 'ไม่ทราบ'}</span>
+          </label>
+          <select
+            value={strategy}
+            onChange={e => setStrategy(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {STRATEGY_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          {strategyChanged && (
+            <p className="mt-1 text-[11px] text-amber-600">
+              ⚠️ จะเปลี่ยน strategy จริงใน Google Ads — แคมเปญเข้าสู่ช่วงเรียนรู้ใหม่ (learning period)
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">
+            {isCpa ? 'Target CPA (บาท)' : 'Target ROAS (เท่า เช่น 4 = 400%)'}
+            {(strategy === 'MAXIMIZE_CONVERSIONS' || strategy === 'MAXIMIZE_CONVERSION_VALUE') && (
+              <span className="ml-1 text-gray-400 font-normal">— เว้นว่างได้ (ให้ Google หาให้)</span>
+            )}
+          </label>
+          <input
+            type="number" min="0" step={isCpa ? '1' : '0.1'} value={target}
+            onChange={e => setTarget(e.target.value)}
+            placeholder={isCpa ? 'เช่น 300' : 'เช่น 4'}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
 
         {error && <p className="text-xs text-red-600">{error}</p>}
 
@@ -264,6 +293,8 @@ export default function CampaignMonitorPage() {
   const [days,       setDays]       = useState('1')
   const [search,     setSearch]     = useState('')
   const [clientTab,  setClientTab]  = useState<string>('all')
+  // Big accounts have long PAUSED tails — default to showing only what's running.
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ENABLED' | 'PAUSED'>('ENABLED')
   const [sortCol,    setSortCol]    = useState<SortCol>('spend')
   const [sortDir,    setSortDir]    = useState<SortDir>('desc')
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
@@ -347,6 +378,7 @@ export default function CampaignMonitorPage() {
   const filtered = useMemo(() => {
     let rows = campaigns
     if (clientTab !== 'all') rows = rows.filter(c => c.customerId === clientTab)
+    if (statusFilter !== 'ALL') rows = rows.filter(c => c.status === statusFilter)
     if (search.trim()) {
       const q = search.toLowerCase()
       rows = rows.filter(c => c.campaignName.toLowerCase().includes(q))
@@ -370,7 +402,7 @@ export default function CampaignMonitorPage() {
       }
       return (map[sortCol]?.() ?? 0) * mult
     })
-  }, [campaigns, clientTab, search, sortCol, sortDir])
+  }, [campaigns, clientTab, statusFilter, search, sortCol, sortDir])
 
   // KPI summary
   const tabRows = clientTab === 'all' ? campaigns : campaigns.filter(c => c.customerId === clientTab)
@@ -510,17 +542,31 @@ export default function CampaignMonitorPage() {
           </div>
         </div>
 
-        {/* ── Search + Client Tabs ── */}
+        {/* ── Search + Status filter + Client Tabs ── */}
         <div className="space-y-3">
-          <div className="relative w-56">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-300" />
-            <input
-              type="text"
-              placeholder="ค้นหา campaign..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pl-8 pr-3 py-2 text-sm rounded-xl border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
-            />
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative w-56">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-300" />
+              <input
+                type="text"
+                placeholder="ค้นหา campaign..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full pl-8 pr-3 py-2 text-sm rounded-xl border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+            {/* Status filter — default ENABLED so long paused tails stay out of the way */}
+            <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+              {([['ENABLED', 'Active'], ['PAUSED', 'Paused'], ['ALL', 'ทั้งหมด']] as const).map(([v, label]) => (
+                <button key={v}
+                  onClick={() => setStatusFilter(v)}
+                  className={cn('px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                    statusFilter === v
+                      ? v === 'ENABLED' ? 'bg-emerald-600 text-white' : v === 'PAUSED' ? 'bg-amber-500 text-white' : 'bg-gray-900 text-white'
+                      : 'text-gray-500 hover:text-gray-700')}
+                >{label}</button>
+              ))}
+            </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {[{ id: 'all', name: 'All Clients' }, ...clients].map(a => (
