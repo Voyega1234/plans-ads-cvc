@@ -28,6 +28,15 @@ export interface LiveAd {
 
 // ─── Mock data ─────────────────────────────────────────────────────────────────
 
+const AD_TYPE_MAP: Record<string, EditableAdType> = {
+  RESPONSIVE_SEARCH_AD: 'RSA',
+  RESPONSIVE_DISPLAY_AD: 'RESPONSIVE_DISPLAY',
+  APP_AD: 'APP',
+  DEMAND_GEN_MULTI_ASSET_AD: 'DEMAND_GEN_MULTI_ASSET',
+  DEMAND_GEN_VIDEO_RESPONSIVE_AD: 'DEMAND_GEN_VIDEO',
+  DEMAND_GEN_CAROUSEL_AD: 'DEMAND_GEN_CAROUSEL',
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const customerId = searchParams.get('customerId') ?? ''
