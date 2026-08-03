@@ -58,24 +58,18 @@ export async function POST(
     return NextResponse.json({ error: "project not found" }, { status: 404 });
   }
 
-  // Verify X-Line-Signature. This endpoint is public and creates LINE users and
-  // leads, so an unverified payload is an open door for forged leads — refuse
-  // rather than accept when there is no secret to check against. A LINE channel
-  // cannot be connected without the secret anyway (it is one of the two
-  // realKeys), so a project that legitimately receives webhooks always has one.
-  if (!lineConfig.messagingChannelSecret) {
-    // Log off the critical path — the rejection itself must not wait on a DB write.
-    waitUntil(
-      logWebhook(project.id, { note: "no channel secret configured" }, "REJECTED",
-        "Messaging Channel Secret ยังไม่ได้ตั้งค่า — ไม่สามารถยืนยันว่า webhook มาจาก LINE จริง")
-    );
-    return NextResponse.json({ error: "webhook not configured" }, { status: 401 });
-  }
-  const validSignature = verifyLineSignature(
-    lineConfig.messagingChannelSecret,
-    rawBody,
-    req.headers.get("x-line-signature")
-  );
+  // ── นโยบายปัจจุบัน: "ไม่ปฏิเสธเพราะลายเซ็น" (เจ้าของระบบสั่งไว้ 3 ส.ค. 2026) ──────
+  // เดิมที่นี่ตอบ 401 เมื่อไม่มี Channel Secret หรือลายเซ็นไม่ตรง ผลคือ event จริงจาก
+  // LINE ถูกตีตกด้วย (เคสจริง 3 ส.ค. 07:21 "signature rejected" ทั้งที่ใช้งานได้มาก่อน)
+  // ตอนนี้จึง **ไม่ตีกลับ** อีกต่อไป — ยังคำนวณลายเซ็นและบันทึกผลไว้ทุกครั้ง เพื่อให้
+  // ยังเห็นได้ว่า event ไหนยืนยันตัวตนได้จริง event ไหนแค่ "รับไว้โดยไม่ยืนยัน"
+  const validSignature = lineConfig.messagingChannelSecret
+    ? verifyLineSignature(
+        lineConfig.messagingChannelSecret,
+        rawBody,
+        req.headers.get("x-line-signature")
+      )
+    : false;
 
   // ── Option 2 shape #5/#6: relay ที่ส่งลายเซ็นต่อไม่ได้ ─────────────────────
   // ตัวกลางบางตัวของลูกค้า (LINE ตั้ง webhook ชี้ไปที่ตัวกลาง แล้วตัวกลาง forward
@@ -109,26 +103,21 @@ export async function POST(
     timingSafeEqual(presentedBuf, relayBuf);
 
   if (!validSignature && !validRelayToken) {
-    // Log WHAT was rejected, not just that something was. The old log stored only
-    // {"note":"signature rejected"} — with a relay in front of the webhook (Option 2)
-    // that is undiagnosable: it cannot distinguish "LINE sent it and a middlebox
-    // re-serialised the body" from "some other channel/tool is posting here with a
-    // different secret" from "no signature header at all". Live case: 4 rejections in
-    // 3.5 minutes while real follow/message events from the same OA verified fine, and
-    // ZERO image (slip) events ever arrived — so the slips were almost certainly these
-    // rejected requests, and there was no way to prove it. Keep verification ON (this
-    // endpoint is public and mints leads + ad conversions); just record enough to find
-    // the sender. Body is capped and the signature is fingerprinted, not stored.
+    // ยืนยันไม่ได้ แต่ "รับไว้" — บันทึกให้ครบว่าทำไมยืนยันไม่ได้ จะได้ตามต้นทางเจอ
+    // และถ้าวันหนึ่งอยากกลับมาเปิดการปฏิเสธอีกครั้งก็มีข้อมูลพอ (มี header มั้ย,
+    // fingerprint ของลายเซ็นที่ส่งมาเทียบกับของ secret ที่ตั้งไว้, ใครยิงมา, body ต้น ๆ)
+    // เก็บ body แบบจำกัดความยาว และเก็บลายเซ็นเป็น fingerprint ไม่ใช่ค่าเต็ม
     const sig = req.headers.get("x-line-signature");
     waitUntil(
       logWebhook(
         project.id,
         {
-          note: "signature rejected",
+          note: "signature not verified (accepted anyway)",
           hasSignatureHeader: !!sig,
           signatureFingerprint: sig ? sig.slice(0, 8) : null,
-          expectedFingerprint: createHash("sha256")
-            .update(lineConfig.messagingChannelSecret).digest("hex").slice(0, 8),
+          expectedFingerprint: lineConfig.messagingChannelSecret
+            ? createHash("sha256").update(lineConfig.messagingChannelSecret).digest("hex").slice(0, 8)
+            : null,
           userAgent: req.headers.get("user-agent"),
           forwardedFor: req.headers.get("x-forwarded-for"),
           contentType: req.headers.get("content-type"),
@@ -137,15 +126,13 @@ export async function POST(
           relayTokenConfigured: relayToken.length >= 16,
           relayTokenPresented: presentedToken.length > 0,
         },
-        "REJECTED",
+        "SUCCESS",
         sig
-          ? "Invalid X-Line-Signature — มีลายเซ็นมาแต่ไม่ตรงกับ Channel Secret ของโปรเจกต์นี้ (คนละ channel หรือมีตัวกลางแก้ body)"
-          : relayToken.length >= 16
-            ? "ไม่มี x-line-signature และ relay token ไม่ถูกต้อง — ตรวจว่าตัวกลางต่อ ?k=<relay token> ท้าย URL ครบหรือยัง"
-            : "Invalid X-Line-Signature — ไม่มี header x-line-signature ส่งมาเลย (ตัวกลาง/เครื่องมือที่ forward ไม่ได้ส่ง header ต่อ) — ถ้าตัวกลางส่ง header ต่อไม่ได้ ให้เปิด relay token ในหน้าตั้งค่า LINE"
+          ? "รับ event ไว้แล้วแต่ยืนยันลายเซ็นไม่ได้ — มีลายเซ็นมาแต่ไม่ตรงกับ Channel Secret ของโปรเจกต์นี้ (คนละ channel หรือมีตัวกลางแก้ body)"
+          : "รับ event ไว้แล้วแต่ยืนยันลายเซ็นไม่ได้ — ไม่มี header x-line-signature ส่งมาเลย (ตัวกลาง/เครื่องมือที่ forward ไม่ได้ส่ง header ต่อ)"
       )
     );
-    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+    // เดิม return 401 ตรงนี้ — ถอดออกตามที่เจ้าของระบบสั่ง event จะถูกประมวลผลต่อ
   }
 
   if (validRelayToken) {

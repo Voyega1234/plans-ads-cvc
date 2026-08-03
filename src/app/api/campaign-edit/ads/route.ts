@@ -28,6 +28,8 @@ export interface LiveAd {
 
 // ─── Mock data ─────────────────────────────────────────────────────────────────
 
+// แม็ป ad type ของ Google Ads → ชนิดที่ฟอร์มนี้แก้ได้
+// (เคยหล่นหายไปจากแพ็กเกจรอบ 31 ก.ค. ทำให้ `npm run build` พังที่ TS2304 — ห้ามลบ)
 const AD_TYPE_MAP: Record<string, EditableAdType> = {
   RESPONSIVE_SEARCH_AD: 'RSA',
   RESPONSIVE_DISPLAY_AD: 'RESPONSIVE_DISPLAY',
@@ -179,8 +181,8 @@ export async function POST(req: NextRequest) {
   const customerId = searchParams.get('customerId') ?? ''
   const adId = searchParams.get('adId') ?? ''
 
-  if (!customerId || !adId) {
-    return NextResponse.json({ error: 'customerId and adId are required' }, { status: 400 })
+  if (!customerId) {
+    return NextResponse.json({ error: 'customerId is required' }, { status: 400 })
   }
 
   const body = await req.json() as {
@@ -189,6 +191,16 @@ export async function POST(req: NextRequest) {
     longHeadlines?: string[]
     descriptions: string[]
     finalUrls: string[]
+    // สร้างใหม่ (ไม่ส่ง adId มา) — ต้องบอกว่าจะเอาไปไว้ ad group ไหน
+    adGroupResourceName?: string
+    path1?: string
+    path2?: string
+    status?: 'ENABLED' | 'PAUSED'
+  }
+
+  // ไม่มี adId = "สร้างโฆษณาใหม่" ส่วนมี adId = แก้ของเดิม (พฤติกรรมเดิม ไม่เปลี่ยน)
+  if (!adId) {
+    return createAd(customerId, body)
   }
   const adType: EditableAdType = body.adType ?? 'RSA'
   const longHeadlines = body.longHeadlines ?? []
@@ -284,6 +296,131 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, resourceName })
   } catch (err) {
     console.error('[campaign-edit/ads POST]', err)
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Unknown error' }, { status: 500 })
+  }
+}
+
+// ─── สร้างโฆษณาใหม่ (Responsive Search Ad) ─────────────────────────────────────
+//
+// เรียกเมื่อ POST มาโดยไม่มี ?adId= — สร้าง RSA ใหม่ในกลุ่มโฆษณาที่ระบุ
+// รองรับเฉพาะ RSA เพราะเป็นชนิดเดียวที่สร้างจบได้ด้วย text ล้วน ๆ ชนิดอื่น
+// (Display / Demand Gen) ต้องมี asset รูป+โลโก้ที่อัปโหลดไว้ก่อน จึงไม่รับที่นี่
+const RSA_MAX_HEADLINE = 30
+const RSA_MAX_DESCRIPTION = 90
+
+async function createAd(
+  customerId: string,
+  body: {
+    adType?: EditableAdType
+    headlines: string[]
+    descriptions: string[]
+    finalUrls: string[]
+    adGroupResourceName?: string
+    path1?: string
+    path2?: string
+    status?: 'ENABLED' | 'PAUSED'
+  }
+) {
+  const adType: EditableAdType = body.adType ?? 'RSA'
+  if (adType !== 'RSA') {
+    return NextResponse.json(
+      { error: 'ตอนนี้สร้างใหม่ได้เฉพาะ Responsive Search Ad — ชนิดอื่นต้องมีรูป/วิดีโอ ให้สร้างจากหน้า Media plan' },
+      { status: 400 }
+    )
+  }
+
+  const adGroup = (body.adGroupResourceName ?? '').trim()
+  if (!adGroup) {
+    return NextResponse.json({ error: 'ต้องระบุ adGroupResourceName ว่าจะสร้างโฆษณาในกลุ่มไหน' }, { status: 400 })
+  }
+
+  // ตัดช่องว่าง/บรรทัดว่างทิ้งก่อนนับ ผู้ใช้มักเว้นช่องไว้เฉย ๆ
+  const headlines = (body.headlines ?? []).map(h => (h ?? '').trim()).filter(h => h.length > 0)
+  const descriptions = (body.descriptions ?? []).map(d => (d ?? '').trim()).filter(d => d.length > 0)
+  const finalUrl = (body.finalUrls ?? []).map(u => (u ?? '').trim()).filter(u => u.length > 0)[0] ?? ''
+
+  // เช็คกติกาของ Google ตั้งแต่ที่นี่ จะได้บอกเป็นภาษาคนแทนที่จะปล่อยให้
+  // Google ตีกลับมาเป็น error code ที่ผู้ใช้อ่านไม่รู้เรื่อง
+  if (headlines.length < 3) {
+    return NextResponse.json({ error: `ต้องมีพาดหัวอย่างน้อย 3 อัน (ตอนนี้มี ${headlines.length})` }, { status: 400 })
+  }
+  if (headlines.length > 15) {
+    return NextResponse.json({ error: 'พาดหัวได้มากสุด 15 อัน' }, { status: 400 })
+  }
+  if (descriptions.length < 2) {
+    return NextResponse.json({ error: `ต้องมีคำอธิบายอย่างน้อย 2 อัน (ตอนนี้มี ${descriptions.length})` }, { status: 400 })
+  }
+  if (descriptions.length > 4) {
+    return NextResponse.json({ error: 'คำอธิบายได้มากสุด 4 อัน' }, { status: 400 })
+  }
+  for (let i = 0; i < headlines.length; i++) {
+    if (headlines[i].length > RSA_MAX_HEADLINE) {
+      return NextResponse.json({ error: `พาดหัวอันที่ ${i + 1} ยาว ${headlines[i].length} ตัวอักษร เกิน ${RSA_MAX_HEADLINE}` }, { status: 400 })
+    }
+  }
+  for (let i = 0; i < descriptions.length; i++) {
+    if (descriptions[i].length > RSA_MAX_DESCRIPTION) {
+      return NextResponse.json({ error: `คำอธิบายอันที่ ${i + 1} ยาว ${descriptions[i].length} ตัวอักษร เกิน ${RSA_MAX_DESCRIPTION}` }, { status: 400 })
+    }
+  }
+  if (!finalUrl) {
+    return NextResponse.json({ error: 'ต้องระบุ URL ปลายทาง (finalUrls)' }, { status: 400 })
+  }
+  if (!/^https?:\/\//i.test(finalUrl)) {
+    return NextResponse.json({ error: 'URL ปลายทางต้องขึ้นต้นด้วย http:// หรือ https://' }, { status: 400 })
+  }
+
+  const path1 = (body.path1 ?? '').trim()
+  const path2 = (body.path2 ?? '').trim()
+  if (path1.length > 15 || path2.length > 15) {
+    return NextResponse.json({ error: 'path ต่อท้าย URL ยาวได้ไม่เกิน 15 ตัวอักษรต่อช่อง' }, { status: 400 })
+  }
+  if (!path1 && path2) {
+    return NextResponse.json({ error: 'ถ้าจะใส่ path ช่องที่ 2 ต้องใส่ช่องที่ 1 ก่อน' }, { status: 400 })
+  }
+
+  try {
+    const accessToken = await getGoogleAdsAccessToken()
+    const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? ''
+    const loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ?? ''
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      'developer-token': developerToken,
+      'Content-Type': 'application/json',
+    }
+    if (loginCustomerId) headers['login-customer-id'] = loginCustomerId
+
+    const rsa: Record<string, unknown> = {
+      headlines: headlines.map(text => ({ text })),
+      descriptions: descriptions.map(text => ({ text })),
+    }
+    if (path1) rsa.path1 = path1
+    if (path2) rsa.path2 = path2
+
+    const create = {
+      adGroup,
+      // สร้างเป็น PAUSED ได้ เผื่ออยากตรวจก่อนเปิด
+      status: body.status === 'PAUSED' ? 'PAUSED' : 'ENABLED',
+      ad: { finalUrls: [finalUrl], responsiveSearchAd: rsa },
+    }
+
+    const cid = customerId.replace(/-/g, '')
+    const res = await fetch(
+      `https://googleads.googleapis.com/v21/customers/${cid}/adGroupAds:mutate`,
+      { method: 'POST', headers, body: JSON.stringify({ operations: [{ create }] }) }
+    )
+    if (!res.ok) {
+      const errText = await res.text()
+      throw new Error(`Google Ads mutate error (${res.status}): ${errText.slice(0, 600)}`)
+    }
+    const result = await res.json() as { results?: Array<{ resourceName?: string }> }
+    return NextResponse.json({
+      success: true,
+      created: true,
+      resourceName: result.results?.[0]?.resourceName ?? '',
+    })
+  } catch (err) {
+    console.error('[campaign-edit/ads POST create]', err)
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Unknown error' }, { status: 500 })
   }
 }

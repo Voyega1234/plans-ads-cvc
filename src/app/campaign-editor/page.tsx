@@ -1170,6 +1170,218 @@ function ShoppingProductsPanel({ customerId, campaignId }: { customerId: string;
 
 // ─── Per-campaign Editor Panel ─────────────────────────────────────────────────
 
+// ─── สร้าง Text Ad (RSA) ใหม่ ──────────────────────────────────────────────────
+//
+// ฟอร์มนี้ตรวจกติกาของ Google ฝั่งหน้าเว็บก่อน (พาดหัว ≥3 ยาว ≤30, คำอธิบาย ≥2
+// ยาว ≤90, ต้องมี URL) เพื่อไม่ให้ผู้ใช้เสียเวลายิงไปแล้วโดนตีกลับเป็น error code
+// ฝั่ง API ตรวจซ้ำอีกชั้นอยู่แล้ว — ที่นี่แค่บอกให้รู้ตัวเร็วขึ้น
+
+function NewTextAdSection({ campaign, customerId, onCreated }: {
+  campaign: CampaignSummary
+  customerId: string
+  onCreated: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [groups, setGroups] = useState<AdGroupRowUI[]>([])
+  const [groupsLoading, setGroupsLoading] = useState(false)
+  const [adGroupRn, setAdGroupRn] = useState('')
+  const [headlines, setHeadlines] = useState<string[]>(['', '', ''])
+  const [descriptions, setDescriptions] = useState<string[]>(['', ''])
+  const [finalUrl, setFinalUrl] = useState('')
+  const [path1, setPath1] = useState('')
+  const [path2, setPath2] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const loadGroups = useCallback(async () => {
+    setGroupsLoading(true)
+    try {
+      const res = await fetch(`/api/campaign-edit/ad-groups?customerId=${customerId}&campaignResourceName=${encodeURIComponent(campaign.campaignResourceName)}`)
+      const data = await res.json() as { adGroups?: AdGroupRowUI[]; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'โหลด ad groups ไม่สำเร็จ')
+      const list = data.adGroups ?? []
+      setGroups(list)
+      // เลือกกลุ่มแรกให้เลย ผู้ใช้ส่วนใหญ่มีกลุ่มเดียว
+      setAdGroupRn(prev => prev || (list[0]?.adGroupResourceName ?? ''))
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'โหลด ad groups ไม่สำเร็จ' })
+    } finally {
+      setGroupsLoading(false)
+    }
+  }, [customerId, campaign.campaignResourceName])
+
+  useEffect(() => { if (open) loadGroups() }, [open, loadGroups])
+
+  function setAt(list: string[], i: number, v: string) {
+    const next = list.slice()
+    next[i] = v
+    return next
+  }
+
+  const filledHeadlines = headlines.filter(h => h.trim().length > 0)
+  const filledDescriptions = descriptions.filter(d => d.trim().length > 0)
+  const tooLongH = headlines.some(h => h.trim().length > HEADLINE_MAX)
+  const tooLongD = descriptions.some(d => d.trim().length > DESC_MAX)
+  const ready = !!adGroupRn && filledHeadlines.length >= HEADLINE_MIN && filledDescriptions.length >= DESC_MIN
+    && !!finalUrl.trim() && !tooLongH && !tooLongD
+
+  async function create() {
+    setSaving(true)
+    setMsg(null)
+    try {
+      const res = await fetch(`/api/campaign-edit/ads?customerId=${customerId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adType: 'RSA',
+          adGroupResourceName: adGroupRn,
+          headlines: filledHeadlines,
+          descriptions: filledDescriptions,
+          finalUrls: [finalUrl.trim()],
+          path1: path1.trim(),
+          path2: path2.trim(),
+          status: 'ENABLED',
+        }),
+      })
+      const data = await res.json() as { success?: boolean; error?: string }
+      if (!res.ok || !data.success) throw new Error(data.error ?? 'สร้างโฆษณาไม่สำเร็จ')
+      setMsg({ ok: true, text: 'สร้างโฆษณาใหม่แล้ว' })
+      setHeadlines(['', '', ''])
+      setDescriptions(['', ''])
+      setFinalUrl(''); setPath1(''); setPath2('')
+      setOpen(false)
+      onCreated()
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'สร้างโฆษณาไม่สำเร็จ' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <div className="flex items-center gap-3">
+        <button onClick={() => { setOpen(true); setMsg(null) }}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
+          <Plus className="w-4 h-4"/>สร้าง Text Ad ใหม่
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="border border-emerald-200 rounded-xl bg-emerald-50/40 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <Plus className="w-4 h-4 text-emerald-600"/>
+        <p className="font-semibold text-sm text-gray-900">สร้าง Text Ad ใหม่ (Responsive Search Ad)</p>
+        <button onClick={() => setOpen(false)} className="ml-auto p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4"/></button>
+      </div>
+
+      <div>
+        <label className="block text-[11px] font-medium text-gray-600 mb-1">Ad Group ที่จะสร้างโฆษณาลงไป</label>
+        {groupsLoading ? (
+          <div className="flex items-center gap-2 text-xs text-gray-400"><Loader2 className="w-3.5 h-3.5 animate-spin"/>โหลด ad groups...</div>
+        ) : groups.length === 0 ? (
+          <p className="text-xs text-amber-700">ยังไม่มี ad group ในแคมเปญนี้ — สร้าง ad group ก่อนที่หัวข้อ &ldquo;Ad Groups&rdquo; ด้านล่าง</p>
+        ) : (
+          <select value={adGroupRn} onChange={e => setAdGroupRn(e.target.value)}
+            className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-lg bg-white">
+            {groups.map(g => <option key={g.adGroupId} value={g.adGroupResourceName}>{g.name}{g.status === 'PAUSED' ? ' (หยุดอยู่)' : ''}</option>)}
+          </select>
+        )}
+      </div>
+
+      <div>
+        <label className="block text-[11px] font-medium text-gray-600 mb-1">
+          พาดหัว (ต้องมีอย่างน้อย {HEADLINE_MIN} อัน — ตอนนี้ {filledHeadlines.length})
+        </label>
+        <div className="space-y-1.5">
+          {headlines.map((h, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input value={h} onChange={e => setHeadlines(prev => setAt(prev, i, e.target.value))}
+                placeholder={`พาดหัวที่ ${i + 1}`}
+                className={cn('flex-1 px-2 py-1 text-xs border rounded-lg bg-white',
+                  h.trim().length > HEADLINE_MAX ? 'border-red-300' : 'border-gray-200')}/>
+              <span className={cn('text-[10px] w-12 text-right', h.trim().length > HEADLINE_MAX ? 'text-red-600' : 'text-gray-400')}>
+                {h.trim().length}/{HEADLINE_MAX}
+              </span>
+              {headlines.length > HEADLINE_MIN && (
+                <button onClick={() => setHeadlines(prev => prev.filter((_, j) => j !== i))}
+                  className="p-0.5 text-gray-400 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>
+              )}
+            </div>
+          ))}
+        </div>
+        {headlines.length < HEADLINE_MAX_COUNT && (
+          <button onClick={() => setHeadlines(prev => [...prev, ''])}
+            className="mt-1 text-[11px] text-emerald-700 hover:underline">+ เพิ่มพาดหัว</button>
+        )}
+      </div>
+
+      <div>
+        <label className="block text-[11px] font-medium text-gray-600 mb-1">
+          คำอธิบาย (ต้องมีอย่างน้อย {DESC_MIN} อัน — ตอนนี้ {filledDescriptions.length})
+        </label>
+        <div className="space-y-1.5">
+          {descriptions.map((d, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input value={d} onChange={e => setDescriptions(prev => setAt(prev, i, e.target.value))}
+                placeholder={`คำอธิบายที่ ${i + 1}`}
+                className={cn('flex-1 px-2 py-1 text-xs border rounded-lg bg-white',
+                  d.trim().length > DESC_MAX ? 'border-red-300' : 'border-gray-200')}/>
+              <span className={cn('text-[10px] w-12 text-right', d.trim().length > DESC_MAX ? 'text-red-600' : 'text-gray-400')}>
+                {d.trim().length}/{DESC_MAX}
+              </span>
+              {descriptions.length > DESC_MIN && (
+                <button onClick={() => setDescriptions(prev => prev.filter((_, j) => j !== i))}
+                  className="p-0.5 text-gray-400 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>
+              )}
+            </div>
+          ))}
+        </div>
+        {descriptions.length < 4 && (
+          <button onClick={() => setDescriptions(prev => [...prev, ''])}
+            className="mt-1 text-[11px] text-emerald-700 hover:underline">+ เพิ่มคำอธิบาย</button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex-1 min-w-[220px]">
+          <label className="block text-[11px] font-medium text-gray-600 mb-1">URL ปลายทาง</label>
+          <input value={finalUrl} onChange={e => setFinalUrl(e.target.value)} placeholder="https://example.com/landing"
+            className="w-full px-2 py-1 text-xs border border-gray-200 rounded-lg bg-white"/>
+        </div>
+        <div className="w-28">
+          <label className="block text-[11px] font-medium text-gray-600 mb-1">path 1</label>
+          <input value={path1} onChange={e => setPath1(e.target.value)} maxLength={15} placeholder="ไม่บังคับ"
+            className="w-full px-2 py-1 text-xs border border-gray-200 rounded-lg bg-white"/>
+        </div>
+        <div className="w-28">
+          <label className="block text-[11px] font-medium text-gray-600 mb-1">path 2</label>
+          <input value={path2} onChange={e => setPath2(e.target.value)} maxLength={15} placeholder="ไม่บังคับ"
+            className="w-full px-2 py-1 text-xs border border-gray-200 rounded-lg bg-white"/>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 pt-1">
+        <button onClick={create} disabled={!ready || saving}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 rounded-lg transition-colors">
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <CheckCircle2 className="w-3.5 h-3.5"/>}
+          {saving ? 'กำลังสร้าง...' : 'สร้างโฆษณา'}
+        </button>
+        {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+        {!ready && !msg && (
+          <span className="text-[11px] text-gray-500">
+            ต้องมีพาดหัว ≥{HEADLINE_MIN}, คำอธิบาย ≥{DESC_MIN}, URL ปลายทาง และห้ามยาวเกินกำหนด
+          </span>
+        )}
+      </div>
+      <p className="text-[10px] text-gray-400">โฆษณาใหม่จะถูกสร้างเป็นสถานะ ENABLED และเข้ารีวิวของ Google ตามปกติ</p>
+    </div>
+  )
+}
+
 function CampaignEditorPanel({
   campaign, customerId,
 }: {
@@ -1185,6 +1397,8 @@ function CampaignEditorPanel({
   const [savingAll, setSavingAll] = useState(false)
   const [bulkResult, setBulkResult] = useState<BulkSaveResult | null>(null)
   const bulkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // เพิ่มค่านี้เพื่อสั่งโหลด ads ใหม่ (ใช้ตอนสร้างโฆษณาใหม่เสร็จ)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     if (campaign.type === 'PERFORMANCE_MAX') {
@@ -1213,7 +1427,7 @@ function CampaignEditorPanel({
       .catch(err => setAdsError(err instanceof Error ? err.message : 'โหลดโฆษณาไม่สำเร็จ'))
       .finally(() => setAdsLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign.campaignId, campaign.type, customerId])
+  }, [campaign.campaignId, campaign.type, customerId, reloadKey])
 
   async function saveAd(adId: string, state: EditState) {
     const targetAd = ads.find(a => a.adId === adId)
@@ -1328,6 +1542,15 @@ function CampaignEditorPanel({
       {error && <div className="flex items-center gap-2 p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600"><AlertCircle className="w-4 h-4 flex-shrink-0"/>{error}</div>}
       {!loading && !error && !ads.length && (
         <div className="py-8 text-center text-gray-400 text-sm">ไม่พบ ads ใน campaign นี้</div>
+      )}
+
+      {/* สร้าง Text Ad (RSA) ใหม่ — เฉพาะแคมเปญ Search เพราะชนิดอื่นต้องมี asset รูป */}
+      {campaign.type === 'SEARCH' && (
+        <NewTextAdSection
+          campaign={campaign}
+          customerId={customerId}
+          onCreated={() => setReloadKey(k => k + 1)}
+        />
       )}
 
       {Object.entries(adGroups).map(([groupName, groupAds]) => (
@@ -2229,6 +2452,15 @@ interface AdGroupRowUI {
   type: string
 }
 
+// ชนิด ad group ที่ใช้ได้กับแคมเปญแต่ละชนิด — undefined = สร้าง ad group ไม่ได้
+// (PMax ใช้ asset group, Shopping สร้างจาก Google Ads UI เพราะต้องผูก product group)
+const AD_GROUP_TYPE_FOR_CAMPAIGN: Partial<Record<CampaignSummary['type'], string>> = {
+  SEARCH: 'SEARCH_STANDARD',
+  DISPLAY: 'DISPLAY_STANDARD',
+  VIDEO: 'VIDEO_RESPONSIVE',
+  DEMAND_GEN: 'DEMAND_GEN_AD_GROUP',
+}
+
 function AdGroupBidsSection({ campaign, customerId, confirm }: {
   campaign: CampaignSummary
   customerId: string
@@ -2239,6 +2471,15 @@ function AdGroupBidsSection({ campaign, customerId, confirm }: {
   const [error, setError] = useState('')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [bidDraft, setBidDraft] = useState<Record<string, string>>({})
+  // ฟอร์มสร้าง ad group ใหม่
+  const [showNew, setShowNew] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newBid, setNewBid] = useState('')
+  const [creating, setCreating] = useState(false)
+
+  // ad group ที่สร้างใหม่ต้องมี type ตรงกับชนิดแคมเปญ ไม่งั้น Google ปฏิเสธ
+  // PMax ใช้ asset group ไม่ใช่ ad group จึงสร้างจากตรงนี้ไม่ได้
+  const newAdGroupType = AD_GROUP_TYPE_FOR_CAMPAIGN[campaign.type]
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -2300,6 +2541,57 @@ function AdGroupBidsSection({ campaign, customerId, confirm }: {
     })
   }
 
+  function requestCreate() {
+    const name = newName.trim()
+    if (!name) { setMsg({ ok: false, text: 'ใส่ชื่อ ad group ก่อน' }); return }
+    if (rows.some(r => r.name.trim().toLowerCase() === name.toLowerCase())) {
+      setMsg({ ok: false, text: `มี ad group ชื่อ "${name}" อยู่แล้วในแคมเปญนี้` }); return
+    }
+    if (!newAdGroupType) { setMsg({ ok: false, text: 'แคมเปญชนิดนี้สร้าง ad group จากที่นี่ไม่ได้' }); return }
+    const baht = parseFloat(newBid)
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันสร้าง Ad Group ใหม่?',
+      detail: [
+        `ชื่อ: ${name}`,
+        `แคมเปญ: ${campaign.campaignName}`,
+        baht > 0 ? `CPC bid เริ่มต้น: ฿${baht.toLocaleString()}` : 'ไม่กำหนด CPC bid (ใช้ค่าจาก bid strategy ของแคมเปญ)',
+      ],
+      confirmLabel: 'สร้าง Ad Group',
+      tone: 'emerald',
+      run: async () => {
+        setCreating(true)
+        try {
+          const res = await fetch('/api/campaign-edit/ad-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customerId,
+              operations: [{
+                op: 'create',
+                campaignResourceName: campaign.campaignResourceName,
+                name,
+                type: newAdGroupType,
+                status: 'ENABLED',
+                ...(baht > 0 ? { cpcBidMicros: Math.round(baht * 1_000_000) } : {}),
+              }],
+            }),
+          })
+          const data = await res.json() as { success?: boolean; error?: string }
+          if (res.ok && data.success) {
+            setMsg({ ok: true, text: `สร้าง ad group "${name}" แล้ว` })
+            setNewName(''); setNewBid(''); setShowNew(false)
+            await load()
+          } else {
+            setMsg({ ok: false, text: data.error ?? 'สร้าง ad group ไม่สำเร็จ' })
+          }
+        } finally {
+          setCreating(false)
+        }
+      },
+    })
+  }
+
   return (
     <div className="mt-4 pt-4 border-t border-gray-100">
       <div className="flex items-center gap-2 mb-3">
@@ -2336,6 +2628,38 @@ function AdGroupBidsSection({ campaign, customerId, confirm }: {
             </div>
           ))}
         </div>
+      )}
+      {newAdGroupType && !showNew && (
+        <button onClick={() => { setShowNew(true); setMsg(null) }}
+          className="mt-2 flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
+          <Plus className="w-3.5 h-3.5"/>สร้าง Ad Group ใหม่
+        </button>
+      )}
+      {newAdGroupType && showNew && (
+        <div className="mt-2 p-3 rounded-lg border border-emerald-100 bg-emerald-50/40">
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={newName} onChange={e => setNewName(e.target.value)}
+              placeholder="ชื่อ ad group ใหม่" maxLength={255}
+              className="flex-1 min-w-[160px] px-2 py-1 text-xs border border-gray-200 rounded-lg bg-white"/>
+            <input type="number" min="0" step="0.5" value={newBid} onChange={e => setNewBid(e.target.value)}
+              placeholder="CPC bid (บาท, ไม่บังคับ)"
+              className="w-40 px-2 py-1 text-xs border border-gray-200 rounded-lg bg-white"/>
+            <button onClick={requestCreate} disabled={creating}
+              className="px-2.5 py-1 text-[11px] font-medium bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white rounded-lg transition-colors">
+              {creating ? 'กำลังสร้าง...' : 'สร้าง'}
+            </button>
+            <button onClick={() => { setShowNew(false); setNewName(''); setNewBid('') }}
+              className="p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4"/></button>
+          </div>
+          <p className="mt-1.5 text-[10px] text-gray-500">
+            ชนิด ad group: {newAdGroupType} (ตามชนิดแคมเปญ) — ถ้าแคมเปญใช้ smart bidding ไม่ต้องใส่ CPC bid
+          </p>
+        </div>
+      )}
+      {!newAdGroupType && (
+        <p className="mt-2 text-[10px] text-gray-400">
+          แคมเปญ {campaign.type} สร้าง ad group จากหน้านี้ไม่ได้ (PMax ใช้ asset group / Shopping ต้องผูก product group)
+        </p>
       )}
       <p className="mt-1.5 text-[10px] text-gray-400">CPC bid มีผลเฉพาะ strategy แบบ manual/enhanced — ถ้าแคมเปญใช้ smart bidding (tCPA/tROAS) Google จะไม่ใช้ค่านี้</p>
     </div>
