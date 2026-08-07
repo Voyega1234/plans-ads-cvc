@@ -18,6 +18,13 @@ export interface LineConfig {
   // the destination as if LINE had called it directly.
   webhookMode?: "direct" | "relay";
   forwardUrl?: string;
+  // ใช้เฉพาะ Option 2 รูปแบบที่ LINE ชี้ webhook ไปที่ "ตัวกลางของลูกค้า" แล้วตัวกลาง
+  // forward ต่อมาที่เรา ถ้าตัวกลางตัด header x-line-signature ทิ้งหรือ re-serialize
+  // body ใหม่ ลายเซ็นของ LINE จะใช้ยืนยันไม่ได้อีก (พิสูจน์ไม่ได้ว่ามาจาก LINE จริง)
+  // relayToken คือความลับที่ระบบเราออกให้เอง ลูกค้าเอาไปแปะท้าย URL ในตัวกลาง:
+  //   .../api/webhooks/line/<projectId>?k=<relayToken>
+  // ปล่อยว่าง = ต้องมีลายเซ็น LINE ถูกต้องเท่านั้น (พฤติกรรมมาตรฐาน แนะนำให้ใช้อันนี้)
+  relayToken?: string;
 }
 
 export interface SheetConfig {
@@ -136,6 +143,13 @@ export const CONNECTOR_META: Record<ConnectionType, ConnectorMeta> = {
         key: "forwardUrl",
         label: "Webhook URL เดิมของบอทลูกค้า (ใส่เมื่อเลือก Option 2)",
         placeholder: "https://bot-ของลูกค้า.example.com/callback",
+        optional: true,
+      },
+      {
+        key: "relayToken",
+        label: "Relay Token (ไม่บังคับ — ใส่เมื่อตัวกลางของลูกค้าส่ง x-line-signature ต่อมาไม่ได้)",
+        placeholder: "สุ่มมา ≥16 ตัวอักษร แล้วต่อท้าย URL เป็น ?k=<token>",
+        secret: true,
         optional: true,
       },
       { key: "loginChannelId", label: "LINE Login Channel ID (ไม่บังคับ — เฉพาะถ้าอยาก attribution แม่น 1:1)", optional: true },

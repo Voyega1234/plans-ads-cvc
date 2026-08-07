@@ -378,24 +378,124 @@ async function uploadImageAsset(
   }
 }
 
+// ── Policy violation handling ────────────────────────────────────────────────
+// googleAds:mutate เป็น all-or-nothing: ถ้ามี keyword เดียวผิดนโยบาย Google จะตีกลับ
+// ทั้งชุด → ผลคือ "สร้าง 0/1 campaigns" ทั้งที่เหลืออีก 50 อย่างถูกหมด และข้อความที่
+// เด้งให้ผู้ใช้ก็เป็น JSON ดิบที่บอกแค่ index ไม่บอกว่าคีย์เวิร์ดไหน
+//
+// วิธีรับมือ: อ่าน index ของ operation ที่ผิดจาก error → ตัดเฉพาะตัวนั้นออก → ยิงใหม่ 1 ครั้ง
+// ตัดได้เฉพาะ operation แบบ "ใบ" (keyword / ad) ที่ไม่มีใครอ้างถึงด้วย temp resource name
+// ถ้าตัวที่ผิดเป็น campaign/adGroup จะไม่ตัด (ตัดแล้วของที่ขึ้นกับมันพังต่อ) — โยน error
+// พร้อมข้อความที่อ่านรู้เรื่องแทน
+//
+// **ไม่** ขอ exemption อัตโนมัติ (exempt_policy_violation_keys) เพราะนั่นเท่ากับรับรองกับ
+// Google ว่าเจ้าของบัญชียอมรับนโยบายข้อนั้นเอง — ต้องเป็นการตัดสินใจของคน ไม่ใช่ของระบบ
+type PolicyHit = { index: number; text: string; policy: string; exemptible: boolean }
+
+function parsePolicyHits(errText: string): PolicyHit[] {
+  const hits: PolicyHit[] = []
+  try {
+    const parsed = JSON.parse(errText)
+    for (const d of (parsed?.error?.details ?? []) as Record<string, unknown>[]) {
+      for (const e of ((d.errors ?? []) as Record<string, unknown>[])) {
+        const code = e.errorCode as Record<string, unknown> | undefined
+        const isPolicy = !!(code?.policyViolationError || code?.policyFindingError)
+        if (!isPolicy) continue
+        const elements = ((e.location as Record<string, unknown>)?.fieldPathElements ?? []) as Record<string, unknown>[]
+        const mutIdx = elements.find(el => el.fieldName === 'mutate_operations')
+        const index = Number(mutIdx?.index ?? -1)
+        if (!Number.isInteger(index) || index < 0) continue
+        const pv = (e.details as Record<string, unknown>)?.policyViolationDetails as Record<string, unknown> | undefined
+        const key = pv?.key as Record<string, unknown> | undefined
+        hits.push({
+          index,
+          text: String(key?.violatingText ?? ''),
+          policy: String(key?.policyName ?? 'policy'),
+          exemptible: pv?.isExemptible === true,
+        })
+      }
+    }
+  } catch {
+    /* error body ไม่ใช่ JSON — ปล่อยให้ตัวจัดการเดิมรายงานตามปกติ */
+  }
+  return hits
+}
+
+/** อธิบาย operation ให้คนอ่านรู้เรื่อง + บอกว่าตัดออกได้ไหม (ใบ = ตัดได้) */
+function describeOp(op: unknown): { label: string; droppable: boolean } {
+  const o = op as Record<string, Record<string, Record<string, unknown>>> | undefined
+  const kw = o?.adGroupCriterionOperation?.create?.keyword as Record<string, unknown> | undefined
+  if (kw) return { label: `keyword "${String(kw.text ?? '')}" (${String(kw.matchType ?? '')})`, droppable: true }
+  if (o?.adGroupCriterionOperation) return { label: 'ad group criterion', droppable: true }
+  if (o?.adGroupAdOperation) return { label: 'โฆษณา (ad)', droppable: true }
+  if (o?.campaignOperation) return { label: 'campaign', droppable: false }
+  if (o?.adGroupOperation) return { label: 'ad group', droppable: false }
+  return { label: 'operation', droppable: false }
+}
+
+/**
+ * ตัดสินใจว่าจะตัด operation ไหนออกแล้วยิงใหม่ — ฟังก์ชันบริสุทธิ์ ไม่แตะ network
+ * แยกออกมาเพื่อให้เทสได้จริงด้วย payload ของ Google โดยไม่ต้องยิง API
+ */
+export function planPolicyRetry(
+  errText: string,
+  operations: unknown[]
+): { dropIdx: number[]; warnings: string[]; blockers: string[] } {
+  const dropIdx: number[] = []
+  const warnings: string[] = []
+  const blockers: string[] = []
+  for (const h of parsePolicyHits(errText)) {
+    const { label, droppable } = describeOp(operations[h.index])
+    const what = h.text ? `${label} — คำที่ติดนโยบาย: "${h.text}"` : label
+    if (droppable) {
+      if (dropIdx.indexOf(h.index) === -1) dropIdx.push(h.index)
+      warnings.push(
+        `ข้าม ${what} เพราะผิดนโยบาย ${h.policy}` +
+        (h.exemptible ? ' (ขอยกเว้นกับ Google ได้ ถ้าตั้งใจใช้คำนี้จริง)' : ' (ขอยกเว้นไม่ได้ ต้องเปลี่ยนคำ)')
+      )
+    } else {
+      blockers.push(`${what} ผิดนโยบาย ${h.policy}`)
+    }
+  }
+  return { dropIdx, warnings, blockers }
+}
+
 async function batchMutate(
   customerId: string,
   operations: unknown[],
   accessToken: string,
   developerToken: string,
-  loginCustomerId: string
+  loginCustomerId: string,
+  warnings?: string[]
 ): Promise<MutateResponse> {
   customerId = customerId.replace(/-/g, '')
-  const res = await fetch(
+  const send = (ops: unknown[]) => fetch(
     `https://googleads.googleapis.com/v21/customers/${customerId}/googleAds:mutate`,
     {
       method: 'POST',
       headers: buildMutateHeaders(accessToken, developerToken, loginCustomerId),
-      body: JSON.stringify({ mutateOperations: operations }),
+      body: JSON.stringify({ mutateOperations: ops }),
     }
   )
+
+  let res = await send(operations)
+
   if (!res.ok) {
-    const err = await res.text()
+    const firstErr = await res.text()
+    const { dropIdx, warnings: policyWarnings, blockers } = planPolicyRetry(firstErr, operations)
+    if (dropIdx.length > 0 || blockers.length > 0) {
+      for (const w of policyWarnings) warnings?.push(w)
+      if (blockers.length > 0) {
+        throw new Error(`Google Ads ปฏิเสธเพราะผิดนโยบาย: ${blockers.join(' | ')}`)
+      }
+      if (dropIdx.length > 0 && dropIdx.length < operations.length) {
+        console.error('[batchMutate] policy violation — ตัด operation แล้วยิงใหม่:', dropIdx.join(','))
+        const retryOps = operations.filter((_, i) => dropIdx.indexOf(i) === -1)
+        res = await send(retryOps)
+        if (res.ok) return res.json() as Promise<MutateResponse>
+      }
+    }
+    const err = res.ok ? '' : (res.bodyUsed ? firstErr : await res.text())
     console.error('[batchMutate] FULL ERROR:', err)
     // Extract field violation details if present
     try {
@@ -781,7 +881,7 @@ export async function createSearchCampaignFromBlueprint(
       totalAgs++
     }
 
-    const result = await batchMutate(customerId, ops, accessToken, developerToken, loginCustomerId)
+    const result = await batchMutate(customerId, ops, accessToken, developerToken, loginCustomerId, warnings)
 
     const campRN =
       result.mutateOperationResponses?.find((r) => r.campaignResult)?.campaignResult?.resourceName ?? ''
@@ -1188,6 +1288,8 @@ export async function createPMaxCampaignFromBlueprint(
   }}})
 
   // Batch 1: create campaign + budget + brand guidelines asset links in one call
+  // (ไม่ส่ง warnings เพราะ batch นี้ไม่มี operation แบบ "ใบ" ที่ตัดออกได้อยู่แล้ว —
+  //  campaign/budget ตัดไม่ได้ ถ้าผิดนโยบายจะโยน error พร้อมข้อความที่อ่านรู้เรื่องแทน)
   const campResult = await batchMutate(cid, ops, accessToken, developerToken, loginCustomerId)
   const campRN = campResult.mutateOperationResponses?.find((r) => r.campaignResult)?.campaignResult?.resourceName
     ?? `customers/${cid}/campaigns/unknown`

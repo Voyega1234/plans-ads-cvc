@@ -74,13 +74,18 @@ export async function POST(req: NextRequest) {
 
     const blueprintJson = await generateCampaignBlueprint(mediaPlanJson, keywordPlan, brief)
 
-    // Delete existing blueprints for this plan (delete all dependents first)
-    const existingBlueprints = await prisma.campaignBlueprint.findMany({ where: { mediaPlanId: planId }, select: { id: true } })
+    // Delete existing *working* blueprints for this plan (delete dependents first).
+    // แถว status='archived' คือประวัติของหน้า Campaign Generator History — ห้ามลบ
+    // ไม่งั้น regenerate ทีเดียวประวัติ push หายทั้งแผน
+    const existingBlueprints = await prisma.campaignBlueprint.findMany({
+      where: { mediaPlanId: planId, status: { not: 'archived' } },
+      select: { id: true },
+    })
     if (existingBlueprints.length > 0) {
       const ids = existingBlueprints.map((b) => b.id)
       await prisma.pushJob.deleteMany({ where: { campaignBlueprintId: { in: ids } } })
       await prisma.qACheck.deleteMany({ where: { campaignBlueprintId: { in: ids } } })
-      await prisma.campaignBlueprint.deleteMany({ where: { mediaPlanId: planId } })
+      await prisma.campaignBlueprint.deleteMany({ where: { id: { in: ids } } })
     }
 
     const blueprint = await prisma.campaignBlueprint.create({

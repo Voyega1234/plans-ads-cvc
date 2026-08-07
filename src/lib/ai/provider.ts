@@ -45,6 +45,12 @@ interface CallAIOptions {
   systemPrompt?: string
   tier?: AITier
   useGrounding?: boolean  // Enable Google Search grounding for real-world data
+  /**
+   * รูปประกอบ (multimodal) — base64 ไม่รวม prefix "data:...;base64,"
+   * ใช้เช่นให้ AI อ่านครีเอทีฟประกอบตอนเขียน text ads
+   * รองรับ vertex / gemini / anthropic / openai (mock ไม่สน)
+   */
+  images?: Array<{ mimeType: string; data: string }>
   // Cost tracking context (optional — best-effort, never throws)
   _route?: string
   _userId?: string
@@ -88,7 +94,7 @@ export async function callAI(
   options: CallAIOptions = {}
 ): Promise<string> {
   const { temperature = 0.3, maxTokens = 65536, systemPrompt, tier = 'standard', useGrounding = false,
-    _route = 'unknown', _userId, _mediaPlanId } = options
+    images = [], _route = 'unknown', _userId, _mediaPlanId } = options
   const provider = getProvider()
   const modelName = getModel(tier)
 
@@ -108,7 +114,13 @@ export async function callAI(
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: systemPrompt ?? defaultSystem }] },
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        contents: [{
+          role: 'user',
+          parts: [
+            ...images.map(im => ({ inlineData: { mimeType: im.mimeType, data: im.data } })),
+            { text: userPrompt },
+          ],
+        }],
         ...(useGrounding ? { tools: [{ googleSearch: {} }] } : {}),
         generationConfig: {
           temperature,
@@ -149,7 +161,13 @@ export async function callAI(
     })
 
     const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      contents: [{
+        role: 'user',
+        parts: [
+          ...images.map(im => ({ inlineData: { mimeType: im.mimeType, data: im.data } })),
+          { text: userPrompt },
+        ],
+      }],
       generationConfig: {
         temperature,
         maxOutputTokens: maxTokens,
@@ -184,7 +202,18 @@ export async function callAI(
       model:      modelName,
       max_tokens: maxTokens,
       system:     systemPrompt ?? defaultSystem,
-      messages:   [{ role: 'user', content: userPrompt }],
+      messages:   [{
+        role: 'user',
+        content: images.length > 0
+          ? [
+              ...images.map(im => ({
+                type: 'image' as const,
+                source: { type: 'base64' as const, media_type: im.mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp', data: im.data },
+              })),
+              { type: 'text' as const, text: userPrompt },
+            ]
+          : userPrompt,
+      }],
       temperature,
     })
 
@@ -211,9 +240,18 @@ export async function callAI(
     const { default: OpenAI } = await import('openai')
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-    const messages: { role: 'system' | 'user'; content: string }[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const messages: any[] = []
     if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
-    messages.push({ role: 'user', content: userPrompt })
+    messages.push({
+      role: 'user',
+      content: images.length > 0
+        ? [
+            ...images.map(im => ({ type: 'image_url', image_url: { url: `data:${im.mimeType};base64,${im.data}` } })),
+            { type: 'text', text: userPrompt },
+          ]
+        : userPrompt,
+    })
 
     const response = await client.chat.completions.create({
       model:           'gpt-4o',
@@ -265,6 +303,30 @@ function extractJson(raw: string): string {
   return s.slice(start)
 }
 
+// พยายาม parse + validate ผลตอบของ AI หนึ่งรอบ — คืน null ถ้าใช้ไม่ได้
+function tryParse<T>(raw: string, validate: (raw: unknown) => T | null): T | null {
+  // Attempt 1: first balanced JSON value (survives trailing prose/fences)
+  try {
+    const result = validate(JSON.parse(extractJson(raw)))
+    if (result !== null) return result
+  } catch { /* fall through to array-repair attempt */ }
+
+  // Attempt 2: callAI slices leading text up to the first '{' — an ARRAY response
+  // ("[{...},{...}]") arrives decapitated as "{...},{...}]". Restore the bracket.
+  if (raw.trimStart().startsWith('{') && raw.trimEnd().endsWith(']')) {
+    try {
+      const result = validate(JSON.parse(extractJson('[' + raw)))
+      if (result !== null) return result
+    } catch { /* ignore */ }
+  }
+  return null
+}
+
+// จำนวนครั้งที่ยิงซ้ำเองก่อนยอมแพ้ — ผู้ใช้รายงานว่า "error บ้าง กดซ้ำก็หาย"
+// แปลว่า error ส่วนใหญ่เป็นแบบชั่วคราว (ตอบไม่เป็น JSON / 5xx ชั่วขณะ)
+// ระบบจึงกดซ้ำให้เองแทนที่จะโยน error ใส่ผู้ใช้ตั้งแต่รอบแรก
+const AI_MAX_ATTEMPTS = 3
+
 export async function safeCallAI<T>(
   prompt: string,
   validate: (raw: unknown) => T | null,
@@ -273,31 +335,27 @@ export async function safeCallAI<T>(
 ): Promise<T> {
   if (!isRealAI()) return mockFn()
 
-  try {
-    const raw = await callAI(prompt, options)
-
-    // Attempt 1: first balanced JSON value (survives trailing prose/fences)
+  let lastErr: unknown = null
+  for (let attempt = 1; attempt <= AI_MAX_ATTEMPTS; attempt++) {
     try {
-      const result = validate(JSON.parse(extractJson(raw)))
-      if (result !== null) return result
-    } catch { /* fall through to array-repair attempt */ }
-
-    // Attempt 2: callAI slices leading text up to the first '{' — an ARRAY response
-    // ("[{...},{...}]") arrives decapitated as "{...},{...}]". Restore the bracket.
-    if (raw.trimStart().startsWith('{') && raw.trimEnd().endsWith(']')) {
-      try {
-        const result = validate(JSON.parse(extractJson('[' + raw)))
-        if (result !== null) return result
-      } catch { /* fall through to mock */ }
+      const raw = await callAI(prompt, options)
+      const parsed = tryParse(raw, validate)
+      if (parsed !== null) return parsed
+      // ตอบมาแต่ใช้ไม่ได้ — จดไว้แล้ววนยิงใหม่ (โมเดลมักตอบถูกในรอบถัดไป)
+      lastErr = new Error('AI ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง')
+      console.warn(`[AI] invalid response, retrying (${attempt}/${AI_MAX_ATTEMPTS})`)
+    } catch (err) {
+      lastErr = err
+      const msg = err instanceof Error ? err.message : String(err)
+      // 4xx จากฝั่งเรา (key ผิด / quota หมด / prompt โดน block) — ยิงซ้ำก็ไม่หาย
+      if (/\b(401|403|400)\b/.test(msg) && !/429/.test(msg)) break
+      console.warn(`[AI] call failed, retrying (${attempt}/${AI_MAX_ATTEMPTS}):`, msg.slice(0, 200))
     }
-
-    // Real provider IS configured but the response was invalid. Per the production
-    // rule we NEVER serve mock/fake AI data when live — surface a clear error instead.
-    throw new Error('AI ตอบกลับไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง')
-  } catch (err) {
-    // No mock fallback in production (real provider). Local dev (no provider) already
-    // returned mockFn() at the top, so this only fires when a real AI call failed.
-    console.error('[AI] real provider call failed (no mock fallback):', err instanceof Error ? err.message : err)
-    throw err instanceof Error ? err : new Error('AI ไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่')
   }
+
+  // Real provider IS configured but every attempt failed. Per the production rule
+  // we NEVER serve mock/fake AI data when live — surface a clear error instead.
+  console.error('[AI] real provider call failed after retries (no mock fallback):',
+    lastErr instanceof Error ? lastErr.message : lastErr)
+  throw lastErr instanceof Error ? lastErr : new Error('AI ไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่')
 }

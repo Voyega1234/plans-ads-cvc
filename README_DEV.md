@@ -815,3 +815,579 @@ Google Ads UI หลังเทส ก่อนปล่อยให้ใช�
 
 **ยังไม่ได้ทดสอบกับ DB จริง** — ความถูกต้องของตัวเลขตรวจจากตรรกะ ไม่ใช่จากการรันกับ production
 ตัวเลข "เร็วขึ้นเท่าไหร่" เป็นการประมาณจากระยะทางเครือข่าย ยังไม่ได้วัดของจริง
+
+---
+
+## 17) 🔁 กัน Webhook Loop — ทำให้ Option 2 (relay) ใช้ได้จริงกับ tool ที่ forward กลับ
+
+**ไฟล์:** `src/app/api/webhooks/line/[projectId]/route.ts` (ไฟล์เดียว)
+
+### สิ่งที่เจอจาก production จริง (Convert Cake, 3 ส.ค.)
+
+Convert Cake ต้องใช้ webhook เดิมของลูกค้า (`https://www.lineutm.com/main_webhook?line_oa_id=@convertcake`)
+จึงเปิด Option 2 — แต่ **lineutm เองก็เป็น relay** มันรับ event แล้ว forward ต่อมาที่ระบบเรา
+
+พิสูจน์แล้วด้วยการยิง payload ที่ใส่ marker เฉพาะ **เข้า lineutm ตรง ๆ ไม่ผ่านระบบเรา**
+→ log ฝั่งเรามี marker นั้นโผล่มาเอง = ยืนยันว่า lineutm → เรา
+
+ผลคือ **สองระบบ forward หากันเป็นวงกลม** ยิง 1 ครั้ง ได้ log แบบนี้:
+
+```
+21:45:44.284  SUCCESS  {"destination":"probe-...","events":[]}
+21:45:45.007  SUCCESS  {"destination":"probe-...","events":[]}   ← เด้งกลับมา
+21:45:45.864  SUCCESS  {"destination":"probe-...","events":[]}   ← เด้งกลับมาอีก
+21:45:45.929  FAILED   forward ล้มเหลว (HTTP 508 Loop Detected)
+```
+
+event เดียวถูก `handleEvents` รัน **3 รอบ** → Conversion ยิงซ้ำ 3 ครั้ง และบอทลูกค้าไม่ได้รับรอบสุดท้าย
+
+### 17.1 Loop / duplicate guard (`claimEvent`)
+
+- ย้าย `forwardToClientBot` + `handleEvents` เข้ามาอยู่ใต้ `processAfterAck()` ตัวเดียว
+  (ยัง ACK 200 ทันทีเหมือนเดิม — ทั้งหมดอยู่ใน `waitUntil` ไม่กระทบ timeout ~1 วิของ LINE)
+- ก่อนทำอะไร: `claimEvent(projectId, rawBody)` — sha256 ของ **raw body** เป็น key
+  - ได้สิทธิ์ → forward + ประมวลผลตามปกติ
+  - ไม่ได้ (เคยเห็น payload นี้ใน 300 วิ) → **ข้ามทั้ง forward และ handleEvents** แล้ว log ไว้
+- เป็น atomic โดยตัว SQL เอง (`INSERT … ON CONFLICT DO UPDATE … WHERE seen_at < now() - interval RETURNING 1`)
+  → สองรอบของ loop ที่ตกลงคนละ serverless instance ชนะพร้อมกันไม่ได้
+- ปลอดภัยกับ event จริง: payload จริงของ LINE มี `webhookEventId` + `timestamp` ไม่ซ้ำ
+  → ต่อให้ลูกค้าพิมพ์ข้อความเดิมสองครั้ง raw bytes ก็ต่างกัน
+- ตาราง `lt_webhook_dedupe` สร้างเองด้วย `CREATE TABLE IF NOT EXISTS` (แพทเทิร์นเดียวกับ
+  `AccountMonthlyBudget`) → **ไม่ต้องแก้ `prisma/schema.prisma` ไม่ต้อง migration**
+- ล้างของเก่าเอง: ~2% ของ webhook จะลบ row ที่เกิน 1 ชม.
+- **fail open** — ถ้าต่อ DB ไม่ได้เลย ถือว่าเป็น event ใหม่ (ทำ Lead หายเสียหายกว่า loop)
+
+### 17.2 ตาม redirect 307/308 ได้ 1 hop
+
+`https://lineutm.com/...` (ไม่มี www) ตอบ **308 → www** ทำให้ forward ล้มทุกครั้ง
+ตอนนี้ถ้าเจอ 307/308 จะ re-POST ไปที่ `location` ให้อัตโนมัติ 1 ครั้ง (สอง status นี้ spec บังคับว่า
+ต้องคง method + body → ลายเซ็นไม่เสีย) · **301/302/303 ยังไม่ตาม** เพราะมันดาวน์เกรด POST เป็น GET
+= ทิ้ง body ทิ้งลายเซ็น · ยังคง guard เดิม: https เท่านั้น + ห้ามชี้เข้า `/api/webhooks/line`
+
+### 17.3 ข้อความ error ชัดขึ้น
+
+HTTP 508 จะขึ้นว่า `Loop Detected — ปลายทาง forward กลับมาที่ระบบนี้อีกที (ตั้ง forward ชนกันสองทาง)`
+แทนที่จะเป็นแค่ `HTTP 508`
+
+### ที่เทสไปแล้ว
+
+- SQL ของ `claimEvent` รันจริงกับ Supabase production ใน transaction แล้ว **ROLLBACK**
+  (ไม่ทิ้งอะไรไว้ ยืนยันด้วย `to_regclass` = null): รอบ 1 = true, รอบ 2–3 = false,
+  key อื่น = true, พ้น window 300 วิแล้ว = true ✅
+- `esbuild` ผ่าน
+- ⚠️ ยังไม่ได้ deploy จริง — หลัง deploy ให้เทสตาม "เทสหลัง deploy" ข้อ 12 ด้านล่าง
+
+### เทสหลัง deploy (ข้อ 12)
+
+1. เปิด Option 2 ของ Convert Cake ไว้ (forwardUrl = `https://www.lineutm.com/main_webhook?line_oa_id=@convertcake`)
+2. แอดเพื่อน OA จริง 1 ครั้ง
+3. หน้า Setup → แผง Webhook ต้องเห็น **SUCCESS แค่ 1 รายการ** ไม่ใช่ 3
+   (ถ้ามี `duplicate/loop — ข้ามรอบนี้` ตามมา = guard ทำงานถูกต้อง)
+4. ต้อง **ไม่มี** FAILED HTTP 508
+5. Lead ต้องขึ้น 1 รายการ ไม่ใช่ 3 · Conversion ต้องยิงครั้งเดียว
+6. เช็คฝั่งบอทลูกค้า (lineutm) ว่าได้รับ event ครบเหมือนเดิม
+
+---
+
+## 18. 🔎 บันทึกรายละเอียดตอน X-Line-Signature ไม่ผ่าน
+
+> ℹ️ **ข้อนี้เขียนไว้ตอน 2 ส.ค. 2026 ซึ่งยังตีกลับ 401 อยู่** — ตั้งแต่ 3 ส.ค. 2026
+> การตีกลับถูกถอดออกตามที่เจ้าของระบบสั่ง (ดูข้อ 21.2) ส่วนที่ยังใช้ได้จากข้อ 18
+> คือรายละเอียดของ log และวิธีอ่าน fingerprint ตอนไล่ปัญหา
+
+### 18.1 เกิดอะไรขึ้น
+
+2 ส.ค. 2026 ทีมรายงานว่า "ส่งสลิปแล้วเช็คผิด ๆ ถูก ๆ ยอดรวมไม่อัพ หลัก ๆ LINE มันตรวจ
+X-Line-Signature แล้ว error" และกำลังจะ **ถอดการตรวจลายเซ็นออก**
+
+ตรวจจากข้อมูลจริงใน DB แล้วได้ภาพนี้:
+
+| เวลา (UTC) | สิ่งที่เกิด |
+|---|---|
+| 21:59:08 / 21:59:31 | `unfollow` + `follow` จากผู้ใช้จริง → **SUCCESS** (ลายเซ็นผ่าน) |
+| 22:02:28 – 22:05:53 | **REJECTED 4 ครั้ง** ติด ๆ กัน — และ **ไม่มี SUCCESS คู่กันเลยสักครั้ง** |
+| 22:09:05 – 22:09:07 | เทสยิงผ่าน `www.lineutm.com` ทั้ง ASCII และไทย+อีโมจิ → **SUCCESS ทั้งคู่** |
+| 22:09:43 | ข้อความจริง `"ดีครับ"` จากผู้ใช้จริง → **SUCCESS** |
+| เฝ้าเงียบ 3 นาทีโดยไม่ยิงอะไรเลย | log ใหม่ = **0** |
+
+และที่สำคัญที่สุด: **event ชนิดรูปภาพ (สลิป) ตั้งแต่ 2 ส.ค. = 0 รายการ**
+
+สรุปคือ ลายเซ็นของ LINE **ไม่ได้พัง** — event จริงผ่านหมด ทั้ง follow/unfollow และข้อความ
+ภาษาไทย และผ่านได้แม้เดินทางผ่าน relay ของลูกค้า ที่ REJECTED คือ request ที่ไม่ได้มาจาก
+LINE (ถ้ามาจาก LINE ต้องมีสำเนาที่ผ่านอย่างน้อย 1 ใบเสมอ) และมันเกิดในนาทีเดียวกับที่ทีม
+กำลังส่งสลิปพอดี → **สลิปน่าจะคือ request ที่ถูก reject เหล่านั้น** แต่พิสูจน์ไม่ได้เพราะ
+log เดิมเก็บไว้แค่ `{"note":"signature rejected"}` ไม่มี body ไม่มี header เลย
+
+### 18.2 ลายเซ็นทำหน้าที่อะไร (บันทึกไว้ให้รู้ว่าแลกอะไรไป)
+
+`/api/webhooks/line/[projectId]` ถูกยกเว้น login ใน `middleware.ts` (`PUBLIC_TRACKING_PREFIXES`)
+เพราะ LINE ต้องยิงเข้ามาได้โดยไม่มี session → **X-Line-Signature คือการยืนยันตัวตนชั้นเดียว
+ที่มี** เมื่อถอดออก ใครก็ตามที่รู้ `projectId` (ซึ่งอยู่ใน URL ที่เราส่งให้ลูกค้าไปวางใน
+LINE Developers) ยิง `follow` / `message` ปลอมเข้ามาได้ → Lead ปลอม → Conversion ปลอม
+ถูกส่งต่อเข้า GA4 / Google Ads → อัลกอริทึมเรียนรู้จากข้อมูลปลอมและกินงบจริง ย้อนกลับไม่ได้
+(ระบบยัง forward ต่อให้บอทเดิมของลูกค้าอีกทอด = ส่ง payload ปลอมต่อให้ลูกค้าด้วย)
+
+**เจ้าของระบบรับทราบข้อนี้แล้วและเลือกถอดออก** (3 ส.ค. 2026) เพราะของจริงเข้าไม่ได้
+สำคัญกว่า — บันทึกไว้ตรงนี้เพื่อให้รู้ว่ากำลังแลกอะไร ไม่ใช่ข้อห้าม
+
+**ถ้าวันหลังอยากได้ความปลอดภัยกลับมาโดยที่ตัวกลางยังใช้ได้** มี 2 ทางที่โค้ดรองรับอยู่แล้ว
+
+- **relay token** — ความลับที่ระบบเราออกเอง ตั้งในหน้าตั้งค่า LINE แล้วแปะ `?k=<token>`
+  ท้าย URL ที่ตัวกลาง (โค้ดตรวจอยู่แล้วแบบ constant-time) แล้วค่อยเอา `return 401` กลับเข้าไป
+- **เปิดเป็นราย projectId** — env `LINE_WEBHOOK_ALLOW_UNSIGNED_PROJECT_IDS` ปล่อยเฉพาะ
+  โปรเจกต์ที่มีตัวกลางจริง ๆ ที่เหลือยังตรวจตามปกติ (ยังไม่ได้เขียน ถ้าจะทำค่อยเพิ่ม)
+
+### 18.3 สิ่งที่แก้
+
+`src/app/api/webhooks/line/[projectId]/route.ts` — **ยังตรวจลายเซ็นเหมือนเดิมทุกอย่าง**
+เปลี่ยนแค่ "ตอน reject ให้บันทึกว่ามันคืออะไร":
+
+```ts
+const sig = req.headers.get("x-line-signature");
+logWebhook(project.id, {
+  note: "signature rejected",
+  hasSignatureHeader: !!sig,
+  signatureFingerprint: sig ? sig.slice(0, 8) : null,   // ลายนิ้วมือ ไม่เก็บของจริง
+  expectedFingerprint: sha256(channelSecret).slice(0, 8),
+  userAgent, forwardedFor, contentType,
+  bodyBytes, rawBodyPreview: rawBody.slice(0, 2000),
+}, "REJECTED", sig ? "...มีลายเซ็นแต่ไม่ตรง..." : "...ไม่มี header เลย...")
+```
+
+อ่านผลได้ทันทีจากหน้า Setup → แผง Webhook:
+
+| สิ่งที่เห็นใน log | แปลว่า |
+|---|---|
+| `hasSignatureHeader: false` | ตัวกลางที่ forward ไม่ได้ส่ง header `x-line-signature` ต่อมา → ต้องไปตั้งฝั่งตัวกลาง |
+| มี header แต่ `signatureFingerprint` ไม่ซ้ำเดิมทุกครั้ง | มาจาก channel อื่น / secret คนละใบ (เช่น OA เทสตัวเก่ายังชี้ webhook มาที่ URL นี้อยู่) |
+| `rawBodyPreview` เป็น JSON ของ LINE ปกติ | ตัวกลางแก้ body (re-serialize) → ลายเซ็นเลยเพี้ยน |
+| `rawBodyPreview` ไม่ใช่ payload ของ LINE | มีเครื่องมืออื่นยิงมาผิดที่ |
+
+### 18.4 เรื่องสลิป "เช็คผิด ๆ ถูก ๆ" — คนละสาเหตุ
+
+ถ้า event รูปเข้ามาถึงจริงแล้วยังอ่านยอดเพี้ยน สาเหตุคือ **loop ส่งซ้ำ 2 รอบพร้อมกัน**
+(ข้อ 17): OCR วิ่ง 2 ครั้งบนรูปเดียวกันห่างกันไม่ถึงวินาที ถ้ารอบใดรอบหนึ่ง Gemini พลาด
+มันจะตกไป fallback `ocrVision` ที่ใช้ `parseAmount()` = **"เอาเลขที่ใหญ่ที่สุดในสลิป"**
+ซึ่งบ่อยครั้งได้เลขบัญชี/ยอดคงเหลือแทนยอดโอน แล้วรอบที่เขียนทีหลังชนะ → ค่าเลยสลับไปมา
+→ **แพตช์กัน loop ในข้อ 17 แก้ตรงนี้โดยตรง**
+
+### 18.5 เรื่อง "ยอดรวมไม่อัพ" — ไม่ใช่บั๊ก
+
+`src/lib/line-tracking/services/projectService.ts:184` — `PURCHASED = ["WON", "PAID"]`
+และ revenue นับเฉพาะ lead ที่สถานะอยู่ในนี้ สลิปที่เข้ามาจะเซ็ต `slipAmount` / `value` /
+`slipCheckedAt` ให้ แต่ **ไม่เลื่อนสถานะเอง** เพราะออกแบบให้เซลส์ยืนยันก่อนกด PAID
+(กันสลิปปลอม/ยอดผิดไหลเข้ารายได้อัตโนมัติ) → ยอดรวมจะขึ้นตอนกดเป็น PAID/WON เท่านั้น
+ถ้าอยากให้ขึ้นทันทีต้องเปลี่ยนนโยบายนี้ก่อน ไม่ใช่แก้โค้ด OCR
+
+### สิ่งที่เทสแล้ว (ข้อ 18)
+
+- `esbuild` ผ่าน (67.1kb)
+- ยืนยันจาก DB จริง: event รูปภาพตั้งแต่ 2 ส.ค. = 0 · REJECTED 4 ครั้ง 22:02–22:05 ไม่มี SUCCESS คู่
+- ยิงเทสผ่าน `www.lineutm.com` ทั้ง ASCII และไทย+อีโมจิ → ลายเซ็นผ่านทั้งคู่ (relay ไม่ได้แก้ไบต์)
+- ⚠️ ยังไม่ได้ deploy จริง
+
+### เทสหลัง deploy (ข้อ 18)
+
+1. ส่งสลิปเข้า OA จริง 1 ใบ
+2. หน้า Setup → แผง Webhook: ถ้าขึ้น REJECTED ให้เปิดดู `hasSignatureHeader` / `rawBodyPreview`
+   แล้วเทียบกับตารางข้อ 18.3 → รู้ต้นทางทันที
+3. ถ้าขึ้น SUCCESS → เช็คว่า Lead มี `slipAmount` และมีประวัติ `📎 ได้รับสลิป` **แถวเดียว**
+4. ยอดรวมจะยังไม่ขึ้นจนกว่าจะกดสถานะเป็น PAID — ถูกต้องตามข้อ 18.5
+
+---
+
+## 19. 🛠 รอบ 3 ส.ค. — Push เข้า Google Ads ไม่ได้ (FK `Brief_userId_fkey`) + แผง Extensions 400 + รองรับ Option 2 ทุกแบบ + ระบบทดสอบตัวเอง
+
+ไฟล์ที่แตะรอบนี้ (5 ไฟล์ ไม่แตะไฟล์อื่นเลย):
+
+| ไฟล์ | สถานะ | แก้อะไร |
+|---|---|---|
+| `src/lib/auth.ts` | **ใหม่** | ต้นเหตุจริงของ FK error ตอน Push |
+| `src/app/api/campaign-edit/extensions/route.ts` | แก้ | GAQL 400 `EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE` |
+| `src/lib/line-tracking/connectors.ts` | แก้ | เพิ่มฟิลด์ `relayToken` |
+| `src/app/api/webhooks/line/[projectId]/route.ts` | แก้ | รับ Option 2 ได้ทุกรูปแบบ + log ตอน REJECTED ละเอียดขึ้น |
+| `src/app/api/health/self-test/route.ts` | **ใหม่** | ระบบยิงเทสตัวเอง ไม่ต้องรอคนมาเจอบั๊ก |
+
+### 19.1 ต้นเหตุ FK `Brief_userId_fkey` — และทำไม "แก้แล้วยังพัง"
+
+`auth.config.ts` ใช้ `session: { strategy: 'jwt' }` และ **ไม่มี Prisma adapter**
+(ตั้งใจถอดออกเพื่อให้ `middleware.ts` รันบน Edge ได้) เมื่อไม่มี adapter
+Auth.js ไม่รู้จักตาราง `User` เลย → `user.id` ที่เข้ามาใน callback `jwt` เป็น id
+ที่ Auth.js สร้างเอง ไม่ใช่ `User.id` ใน Postgres
+ทุกตารางที่มี FK ชี้ไป `User` (Brief, MediaPlan, PushJob, AutomationRule, ChatSession)
+จึงพังตอน `create`
+
+หลักฐานจาก DB จริง (3 ส.ค.):
+
+- `Session` ว่างเปล่า → ยืนยันว่าใช้ JWT ล้วน
+- `Account` เหลือ 1 แถว → ของตกค้างยุคที่ยังมี adapter
+- `Brief` 37 แถว **`userId = null` ทั้งหมด** · `MediaPlan` มี 8 แถวกำพร้า
+- `porsche@convertcake.com` ถือ id เป็น UUID ที่ถูกสร้าง 1 ส.ค. → แปลว่าแพตช์รอบก่อน (`ensureDbUserId`) **ขึ้น production แล้วจริง**
+
+**แล้วทำไมยังพัง:** แพตช์รอบก่อนซ่อม id **เฉพาะตอน sign-in** (`if (params.user)`)
+แต่ JWT อยู่ในคุกกี้ได้เป็นเดือน ใครที่ล็อกอินค้างไว้ก่อน deploy จะพก id ผิดต่อไป
+จนกว่าจะ sign-out/sign-in เอง — ซึ่งไม่มีใครรู้ว่าต้องทำ อาการเดิมเลยกลับมา
+
+**วิธีแก้รอบนี้ (`src/lib/auth.ts`):** ซ่อม **ทุก token ที่ยังไม่เคยตรวจ**
+ไม่ใช่เฉพาะตอน sign-in
+
+```
+resolveDbUserId(seed):
+  1. id ที่ถืออยู่มีใน User จริงไหม → ใช้เลย (เคสปกติ ไม่มี query เพิ่มหลังตราประทับ)
+  2. ไม่มี → หาใหม่ด้วย email (ได้ id เดิมยุค adapter คืนมา ข้อมูลเก่าเชื่อมกลับหมด)
+  3. ไม่มีอีก → สร้าง User ใหม่
+  4. DB ล่ม → คืน null และ "ไม่ประทับตรา" → request ถัดไปลองใหม่เอง (ไม่ล็อก id ผิดถาวร)
+```
+
+ตราประทับ `uidVerified = UID_VERIFY_VERSION (=2)` ทำให้เสีย query แค่ครั้งเดียวต่อคุกกี้ 1 ใบ
+ถ้าอนาคตแก้ logic นี้อีก ให้บวกเลขเวอร์ชัน → คุกกี้เก่าทั้งหมดถูกบังคับตรวจใหม่
+
+> ผลลัพธ์: **ผู้ใช้ไม่ต้องทำอะไรเลย** ไม่ต้อง sign-out คุกกี้เก่าจะถูกซ่อมเงียบ ๆ
+> ใน request แรกหลัง deploy แล้วปุ่ม Push จะทำงานทันที
+
+⚠️ ห้าม import `src/lib/auth.ts` จาก `middleware.ts` (Edge) — middleware ต้องใช้ `auth.config.ts` เท่านั้น
+
+### 19.2 แผง Extensions ขึ้น `Google Ads API error (400) … EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE`
+
+query เดิมกรองด้วย `campaign.resource_name` และ `campaign_asset.status` แต่ไม่ได้ SELECT สองตัวนั้น
+พร้อมกับดึงฟิลด์ข้ามรีซอร์ส (`asset.*`) จาก `FROM campaign_asset` ในคำขอเดียว
+
+รอบนี้ทำ **สองชั้น** แทนการเดาว่ากติกาข้อไหนโดน:
+
+- **ชั้น 1** — query เดิมแต่ SELECT ครบทุกฟิลด์ที่อ้างใน WHERE (1 คำขอ, เร็ว)
+- **ชั้น 2 (fallback อัตโนมัติ)** — ถ้าชั้น 1 ยังตอบ `queryError` ให้แยกเป็น 2 query
+  ที่ไม่มีทางผิดกติกาข้ามรีซอร์ส: อ่าน `campaign_asset` โดยเลือกเฉพาะฟิลด์ของตัวมันเอง
+  → แล้วอ่าน `FROM asset WHERE asset.resource_name IN (…)` → join ในโค้ด
+  (แพตเทิร์นเดียวกับ `/campaign-edit/audiences` ที่ใช้งานจริงอยู่แล้ว)
+
+error ที่ **ไม่ใช่** `queryError` (เช่น token หมดอายุ, สิทธิ์ไม่พอ) ยัง throw ตามเดิม ไม่ถูกกลบ
+response เพิ่มฟิลด์ `degraded: true` เมื่อวิ่งชั้น 2 (หน้าเดิมไม่ได้ใช้ฟิลด์นี้ → ไม่กระทบ UI)
+
+### 19.3 รองรับ Option 2 "ทุกรูปแบบ" — Relay Token
+
+ปัญหาที่เจอ: ตัวกลางของลูกค้าบางเจ้า **ตัด header `x-line-signature` ทิ้ง** หรือ
+**re-serialize body ใหม่** → ลายเซ็นของ LINE ใช้ยืนยันไม่ได้อีก (ไม่ใช่บั๊กของเรา แต่เราต้องรับให้ได้)
+
+relay token คือทางที่ทำให้ตัวกลางใช้ได้ **โดยไม่ต้องถอดการตรวจลายเซ็น** (ข้อดี-ข้อเสีย
+ของการถอดอยู่ในข้อ 18.2) — ตั้งแต่ 3 ส.ค. 2026 การตีกลับถูกถอดออกไปแล้วตามคำสั่ง
+เจ้าของระบบ (ข้อ 21.2) ส่วนนี้จึงกลายเป็น "ทางเลือกที่พร้อมใช้" ไม่ใช่ทางบังคับ
+
+ทางออก: ฟิลด์ใหม่ **Relay Token** ในการ์ด LINE (หน้า Setup)
+
+1. สุ่มค่ามา ≥16 ตัวอักษร ใส่ในช่อง Relay Token
+2. ในตัวกลางของลูกค้า ให้ยิงมาที่ `…/api/webhooks/line/<projectId>?k=<relayToken>`
+   (หรือส่ง header `x-mercy-webhook-token: <relayToken>` ก็ได้)
+3. ระบบรับ event ถ้า **ลายเซ็น LINE ถูก** หรือ **relay token ถูก** อย่างใดอย่างหนึ่ง
+   — เทียบแบบ constant-time (`timingSafeEqual`) กัน timing attack
+
+**โปรเจกต์ที่ไม่ได้ใส่ relayToken พฤติกรรมเหมือนเดิมเป๊ะ** (ต้องมีลายเซ็นถูกเท่านั้น)
+→ blast radius = 0 กับลูกค้าเดิมทุกราย และแนะนำให้ใช้แบบไม่มี token เป็นค่าเริ่มต้นเสมอ
+event ที่ผ่านด้วย relay token จะถูก log ว่า `verified via relay token (ไม่มีลายเซ็น LINE)`
+
+นอกจากนี้ log ตอน REJECTED เพิ่มฟิลด์วินิจฉัย (`hasSignatureHeader`, `signatureFingerprint`,
+`expectedFingerprint`, `userAgent`, `forwardedFor`, `contentType`, `bodyBytes`, `rawBodyPreview`,
+`relayTokenConfigured`, `relayTokenPresented`) → ครั้งหน้าดู log ครั้งเดียวก็รู้ต้นเหตุ ไม่ต้องเดา (ตารางแปลผลอยู่ข้อ 18.3)
+
+### 19.4 "ทำไมต้องให้เทสเอง" → `/api/health/self-test`
+
+เปิด `https://<โดเมน>/api/health/self-test?customerId=<CID>&projectId=<PID>` (ต้องล็อกอินก่อน)
+ระบบจะยิงเทสตัวเองแล้วตอบ `{ ok, summary, failed, checks }` — **HTTP 500 ถ้ามีข้อไหน FAIL**
+
+| กลุ่ม | ตรวจอะไร | กันบั๊กตัวไหนกลับมา |
+|---|---|---|
+| `auth` | `session.user.id` มีอยู่จริงในตาราง `User` + `userCount > 0` | FK `Brief_userId_fkey` (19.1) |
+| `gaql` | ยิง GAQL จริง 5 แบบ (campaigns / ad_groups / keywords / **extensions** / audiences) ด้วย `LIMIT 1` | 400 `EXPECTED_REFERENCED_FIELD…` (19.2) |
+| `line` | ยิง webhook ตัวเองแบบ **เซ็นถูก** (`events: []` ไม่มี side effect) ต้องได้ 200 · ยิงแบบ **เซ็นผิด** ต้องได้ **200 ด้วย** (นโยบายตั้งแต่ 3 ส.ค. — ดู 21.2) · เช็ค `forwardUrl` (`redirect: 'manual'` → จับ 3xx และ 508) · เช็คความยาว relayToken | webhook ตายเงียบ · deploy ไม่ขึ้นจริง · relay loop · redirect ที่ทำให้ลายเซ็นหาย |
+
+เคสเทส "เซ็นผิด" ถูกกลับด้านแล้วในรอบ 3 ส.ค. (ข้อ 21.2) — ตอนนี้ **ต้องได้ 200**
+ถ้าขึ้น FAIL ว่าได้ 401 แปลว่า deploy ยังไม่ขึ้นจริง ยังรันโค้ดตัวเก่าอยู่
+
+### 19.5 ℹ️ ข้อมูลเก่าที่ `userId IS NULL` — **ไม่ต้องทำอะไร ตัดสินใจแล้วว่าเริ่มใหม่**
+
+DB production ยังมี `Brief` ~37 แถวและ `MediaPlan` ~8 แถวที่ `userId IS NULL`
+(ค้างมาจากก่อนแก้ FK) ของพวกนี้จะไม่โผล่ในลิสต์และ push ไม่ได้
+
+**เจ้าของระบบตัดสินใจแล้วว่าไม่เอาข้อมูลชุดเก่า → ห้ามรัน `backfill.sql` ของแพ็กเกจ
+30 ก.ค. และไม่ต้องแตะข้อมูลเก่าใด ๆ** ปล่อยค้างไว้เฉย ๆ ไม่กระทบงานใหม่
+(ทุก query กรองด้วย `userId` อยู่แล้ว) งานที่สร้างหลัง deploy รอบนี้ผูก user ถูกต้องเอง
+
+### สิ่งที่เทสแล้ว (ข้อ 19)
+
+- **`npx tsc --noEmit` ผ่าน** และ **`npx next build` ผ่าน** — รันจริงกับ repo เต็มที่
+  `~/Downloads/plans-ads-deploy` (snapshot 30 ก.ค. มี `tsconfig.json` + `prisma/schema.prisma` + `node_modules`)
+  โดยเอา `src/lib/auth.ts` ตัวใหม่วางทับแล้วบิลด์ทั้งโปรเจกต์ → ผ่านหมด
+  และ **Middleware = 79.4 kB เท่าเดิม** → ยืนยันว่า prisma ไม่ได้หลุดเข้า Edge bundle
+- typecheck `campaign-edit/extensions/route.ts` ในโปรเจกต์เต็มด้วย → **เจอของจริง 1 จุดและแก้แล้ว**:
+  `[...new Set()]` พังเป็น TS2802 เพราะ `tsconfig.json` ไม่ได้ตั้ง `target` (ตกเป็น ES5)
+  เปลี่ยนเป็น loop + map ธรรมดา → ผ่านทั้ง target ES5 และ ES2017
+- `esbuild` ผ่านทั้ง 5 ไฟล์
+- ตรวจ DB production จริงเพื่อยืนยันต้นเหตุ FK (ตัวเลขในข้อ 19.1 มาจาก DB จริง ไม่ใช่การเดา)
+- ⚠️ ยังเทสไม่ได้ 3 ไฟล์ (`webhooks/line`, `connectors.ts`, `health/self-test`) เพราะ snapshot 30 ก.ค.
+  **ยังไม่มีส่วน line-tracking และ campaign-edit/extensions** — ผ่านแค่ esbuild
+  (ถ้าได้ repo เต็มตัวล่าสุด จะ typecheck ได้ครบทั้ง 5 ไฟล์)
+- หมายเหตุ: บรรทัด 219 ของ `extensions/route.ts` (โค้ด POST เดิม ไม่ได้แก้) ขึ้น TS2802
+  ใน snapshot 30 ก.ค. แต่ผ่านใน production → แปลว่า repo จริงตั้ง `target` ไว้แล้ว ไม่ต้องแก้
+
+### ขั้นตอนฝั่ง dev (ข้อ 19)
+
+1. วางทับ 5 ไฟล์
+2. **เอาการตรวจ `X-Line-Signature` ที่ถอดออกไปกลับคืน** — ใช้เวอร์ชันใน `src/app/api/webhooks/line/[projectId]/route.ts` ของแพ็กเกจนี้ทับได้เลย (มี relay token รองรับเคสที่ถอดออกเพราะพังอยู่แล้ว)
+3. `npx tsc --noEmit` && `npm run build`
+4. deploy
+5. เปิด `/api/health/self-test?customerId=…&projectId=…` → ต้องได้ `ok: true`
+6. กด Push เข้า Google Ads 1 ครั้ง (ไม่ต้อง sign-out ก่อน — นั่นคือประเด็นของข้อ 19.1)
+7. เปิดหน้า Campaign edit → แผง Extensions ต้องไม่ขึ้น error
+
+---
+
+## 20. 🚧 รอบ 3 ส.ค. (ต่อ) — บิลด์ได้จริงแล้ว + Google Ads ตีกลับเพราะผิดนโยบาย
+
+### 20.1 ⚠️ สำคัญที่สุด: แพ็กเกจรอบก่อน ๆ **บิลด์ไม่ผ่าน** — แก้แล้ว 7 จุด
+
+รอบนี้เอาแพ็กเกจไปวางทับ repo จริง (`~/plans-ads`) แล้วรัน `npx tsc --noEmit` + `npx next build`
+จริงเป็นครั้งแรก → เจอ error ที่ค้างมาหลายรอบ **ในไฟล์ที่ส่งให้ dev เอง**
+
+| ไฟล์ | error | สาเหตุ |
+|---|---|---|
+| `campaign-edit/ads/route.ts` | TS2304 `Cannot find name 'AD_TYPE_MAP'` | const ตัวนี้**หายไปทั้งก้อน**ตอนแพ็กรอบ 31 ก.ค. |
+| `campaign-edit/ad-groups`, `asset-group-assets`, `audiences`, `keywords`, `extensions` | TS2802 | `for (const [i, op] of operations.entries())` |
+| `line-tracking/actions.ts` | TS2802 | `[...new Set(...)]` |
+
+TS2802 เกิดเพราะ **`tsconfig.json` ของโปรเจกต์ไม่ได้ตั้ง `target`** เลย → TypeScript ตกไปที่ ES5
+ซึ่ง iterate iterator ไม่ได้ถ้าไม่เปิด `downlevelIteration` และ `next.config.js` ก็ไม่ได้ตั้ง
+`typescript.ignoreBuildErrors` → type error บล็อก deploy จริง
+
+**แก้ที่โค้ดของเรา ไม่แตะ tsconfig** (เปลี่ยน tsconfig = กระทบทั้งโปรเจกต์):
+`.entries()` → index loop ธรรมดา, `[...new Set()]` → `Array.from(new Set())`
+ทุกไฟล์ในแพ็กเกจนี้ตอนนี้บิลด์ผ่านทั้ง target ES5 และ ES2017
+
+> นี่คือคำตอบของ "ทำไมแก้แล้วต้องแก้อีก" อีกข้อ — แพ็กเกจที่ส่งไปมี type error ติดไปด้วย
+> dev ต้องมานั่งแก้เองทุกรอบ ต่อไปนี้ทุกแพ็กเกจต้องผ่าน `next build` กับ repo จริงก่อนส่ง
+
+### 20.2 Push แล้ว "สร้าง 0/1 campaigns" เพราะ keyword ผิดนโยบาย
+
+อาการ: หลัง sign-in ใหม่ Push ทำงานแล้ว (FK หายตามข้อ 19.1) แต่ได้
+
+```
+CVC - SEM Generic KW — error: Google Ads API error: A policy was violated.
+field: {"fieldPathElements":[{"fieldName":"mutate_operations","index":9},
+{"fieldName":"ad_group_criterion_operation"},{"fieldName":"create"},
+{"fieldName":"keyword"},{"fieldName":"text"}]}
+```
+
+**สาเหตุ:** `googleAds:mutate` เป็น **all-or-nothing** — keyword ผิดนโยบายตัวเดียว
+(operation ที่ index 9) ทำให้ทั้งชุดถูกตีกลับ campaign / ad group / ad ที่เหลืออีกหลายสิบ
+operation ที่ถูกต้องหมดก็ไม่ถูกสร้าง → เห็นเป็น "สร้าง 0/1"
+และข้อความที่เด้งขึ้นเป็น JSON ดิบที่บอกแค่ index **ไม่บอกว่าคีย์เวิร์ดตัวไหน**
+
+**แก้ที่ `src/lib/google-ads/campaign-builder.ts` (`batchMutate`)** — เพิ่ม 3 อย่าง:
+
+1. อ่าน `policyViolationError` / `policyFindingError` จาก error → ดึง index ของ operation
+   ที่ผิด + `violatingText` + `policyName` + `isExemptible`
+2. **ตัดเฉพาะ operation ที่ผิดออกแล้วยิงใหม่ 1 ครั้ง** → campaign ที่เหลือถูกสร้างจริง
+   ตัดได้เฉพาะ operation แบบ "ใบ" (keyword / ad) ที่ไม่มีใครอ้างถึงด้วย temp resource name
+   ถ้าตัวที่ผิดเป็น campaign/ad group จะ **ไม่ตัด** (ตัดแล้วของที่ขึ้นกับมันพังต่อ) แต่โยน
+   error พร้อมข้อความภาษาคนแทน
+3. รายงานกลับเป็น warning ที่อ่านรู้เรื่อง เช่น
+   `ข้าม keyword "xxx" (PHRASE) — คำที่ติดนโยบาย: "xxx" เพราะผิดนโยบาย TRADEMARKS (ขอยกเว้นกับ Google ได้ ถ้าตั้งใจใช้คำนี้จริง)`
+
+**ตั้งใจไม่ขอ exemption อัตโนมัติ** (`exempt_policy_violation_keys`) เพราะการขอยกเว้น
+เท่ากับรับรองกับ Google ว่าเจ้าของบัญชียอมรับนโยบายข้อนั้นเอง — ต้องเป็นการตัดสินใจของคน
+ระบบจึงบอกให้แทนว่า "ตัวนี้ขอยกเว้นได้" แล้วให้คนเลือก
+
+### สิ่งที่เทสแล้ว (ข้อ 20)
+
+- ✅ `npx tsc --noEmit` = **0 error** (ที่ target ES5 ซึ่งเป็นค่าจริงของ `tsconfig.json`)
+- ✅ `npx next build` = **ผ่าน** — compiled successfully, static pages 143/143,
+  Middleware 80.9 kB (ยืนยันว่า prisma ไม่หลุดเข้า Edge)
+- วิธีเทส: ก๊อป `~/plans-ads` (repo จริง มี git/node_modules/prisma) ไปที่ scratch
+  แล้วเอา `src/` ของแพ็กเกจนี้ทับ → **ไม่ได้แก้ `~/plans-ads` แม้แต่ไฟล์เดียว**
+- ⚠️ `campaign-builder.ts` ใน repo ไม่ได้ถูกแก้มาตั้งแต่ 6 ก.ค. (ตรวจ 4 สำเนาบนเครื่อง
+  hash ตรงกันหมด) → เอามาเป็นฐานแก้ได้ปลอดภัย ไม่ทับของใหม่กว่า
+- ⚠️ ยังไม่ได้ยิง policy violation กับ Google จริง — logic ตัด+ยิงใหม่ผ่าน typecheck
+  และอิงสเปก `PolicyViolationDetails` ของ Google Ads API v21
+
+### เพิ่มเติมรอบสุดท้าย (3 ส.ค. เย็น)
+
+**ก) เทส policy-retry ผูกเข้า self-test แล้ว — ไม่ต้องเชื่อคำพูดใคร**
+
+`GET /api/health/self-test` เพิ่มกลุ่มเช็ค `ads-policy` 4 ข้อ ที่ป้อน error payload
+จริงของ Google (`policyViolationError` + `fieldPathElements` ชี้ operation index 9)
+เข้า `planPolicyRetry()` แล้ว assert ว่า:
+
+1. ตัดเฉพาะ index 9 (keyword ที่ผิด) — ไม่แตะ operation อื่น
+2. ข้อความ warning บอกคำที่ติดและชื่อ policy ให้ผู้ใช้เห็น
+3. ถ้าจุดที่ผิดเป็น campaign/ad group → **ห้ามตัด** ต้องขึ้นเป็น blocker
+4. error ที่ไม่ใช่ policy และ body ที่ไม่ใช่ JSON (เช่น HTML 502) ต้องไม่ทำให้ตัดอะไร
+   และต้องไม่ throw
+
+เช็คกลุ่มนี้เป็น pure function ล้วน — **ไม่ยิง Google จริง ไม่มี side effect**
+รันได้ทุกเมื่อหลัง deploy ถ้าใครแก้ `planPolicyRetry` แล้วพัง จะเห็นทันทีที่หน้านี้
+
+ก่อนหน้านี้รันชุดเดียวกันแบบ standalone บนเครื่องแล้ว **16/16 ผ่าน** (5 สถานการณ์:
+payload จริง / ผิดที่ campaign / ผิดหลายจุด / error ที่ไม่ใช่ policy / body พัง)
+
+**ข) แผง Extensions — กันพลาดชั้นสองอีกชั้น**
+
+ขา 1 ของ fallback (`FROM campaign_asset`) เดิมกรอง `campaign.resource_name` ใน WHERE
+แต่ไม่ได้ SELECT ไว้ ซึ่งเป็นกติกาข้อเดียวกับที่ทำให้ query แรกพัง —
+เพิ่ม `campaign.resource_name` เข้า SELECT ของขา 1 แล้ว ตอนนี้ทั้งสองชั้นไม่มีฟิลด์ไหน
+อยู่ใน WHERE โดยไม่อยู่ใน SELECT
+
+**ค) ผลบิลด์หลังเพิ่ม 2 ข้อบน (รันซ้ำ ไม่ได้อ้างของเดิม)**
+
+- ✅ `npx tsc --noEmit --incremental false` = **0 error**
+- ✅ `npx next build` = **ผ่าน** — 143/143 static pages, Middleware 80.9 kB
+
+---
+
+## 21. 🔧 รอบ 3 ส.ค. (ชุดที่ 3) — Push 413 / ถอด Invalid X-Line-Signature / สร้าง ad group + text ad
+
+เจ้าของระบบสั่งมา 3 ข้อ และกำกับว่า **"ห้ามแก้เกินนี้"** — รอบนี้จึงแตะเฉพาะ 3 เรื่องนี้
+
+### 21.1 หน้า Media plan / Launch Today กด Push แล้วขึ้น `Unexpected token 'R', "Request En"...`
+
+**ต้นเหตุ (ไล่จนจบสาย ไม่ได้เดา)**
+
+1. `/api/upload/image` เขียนดิสก์ไม่ได้บน Vercel ถ้าไม่มี `BLOB_READ_WRITE_TOKEN`
+   → fallback เป็น **data URL base64** ฝังอยู่ในตัว blueprint (รูปจึงไม่ถูกเก็บถาวรด้วย)
+2. ตอน push โค้ดเดิม `JSON.stringify` ทั้งก้อนแล้วยิงเลย + `withPooledImages`
+   ก๊อปรูปเดิมไปวางซ้ำหลายที่ → body ทะลุเพดาน **4.5 MB** ของ Vercel serverless
+3. Vercel ตีกลับ **HTTP 413 เป็น plain text** `Request Entity Too Large`
+   ตั้งแต่ก่อนเข้าฟังก์ชัน (โค้ดฝั่ง server ไม่เคยถูกเรียก log จึงไม่มีอะไรเลย)
+4. โค้ดเดิมเรียก `res.json()` ตรง ๆ → `SyntaxError: Unexpected token 'R'`
+   ผู้ใช้เห็นข้อความนี้แล้วตีความไม่ได้ว่าคืออะไร
+
+**แก้ที่ต้นเหตุ (เพิ่ม 3 ส.ค. รอบท้าย)** — `src/app/api/upload/image/route.ts`
+
+ต้นเหตุจริงอยู่ที่ **ขั้นอัปโหลด** ไม่ใช่ขั้น push ทางแก้ที่ถูกต้องที่สุดคือ
+**ต่อ Vercel Blob store** (dashboard → Storage → Create Blob store → Connect →
+redeploy) แล้ว `BLOB_READ_WRITE_TOKEN` จะถูกใส่ให้เอง — **โค้ดรองรับอยู่แล้วตั้งแต่เดิม**
+(บรรทัด `if (process.env.BLOB_READ_WRITE_TOKEN)`) รูปจะกลายเป็นลิงก์ https
+ส่งไฟล์ต้นฉบับเต็มความละเอียด ไม่บีบอัดเลย และ**ไม่หายเวลารีสตาร์ท**
+
+ปัญหาคือของเดิม **ตกลงโหมด base64 แบบเงียบ ๆ** ไม่มีใครรู้ ไฟล์นี้จึงเพิ่ม
+
+- `storage` / `persisted` / `warning` ใน response ทุกครั้ง — รู้ทันทีว่าอยู่โหมดไหน
+- `GET /api/upload/image` เป็น probe: `{"storage":"blob"|"base64"|"file","ok":…}`
+  ตรวจหลัง deploy ได้ใน 2 วินาทีโดยไม่ต้องเดา
+- โหมด base64 เท่านั้น: ตัดความละเอียด**ส่วนเกิน**ด้วย `sharp` เฉพาะรูปที่ใหญ่กว่า
+  **700 KB** เหลือด้านยาวสุด **1600px** — ยังเหนือ spec ใหญ่สุดของ Google (1200×1200)
+  และ `forceCropToSpec` ย่อลง spec อยู่แล้วก่อนส่ง → **ปลายทางได้ภาพเท่าเดิม**
+  รูปเล็กกว่า 700 KB ไม่แตะแม้แต่ไบต์เดียว · โปร่งใสคง PNG · GIF ไม่แตะ ·
+  ย่อไม่สำเร็จหรือไม่เล็กลง → ใช้ไฟล์เดิม **ต่อ Blob แล้วโค้ดส่วนนี้ไม่ถูกเรียกเลย**
+
+**ตาข่ายรองชั้นสอง (ทางเลือก ไม่บังคับ)** `src/lib/campaigns/push-payload.ts` (~164 บรรทัด)
+
+| export | หน้าที่ |
+|--------|---------|
+| `preparePushPayload(payload)` | ย่อรูป base64 ทั้ง object แบบ deep แล้วคืน string ที่พร้อมยิง — ถ้ายังเกิน `MAX_BODY_BYTES` (4 MB) จะ throw เป็นข้อความไทยบอกให้ลดรูป |
+| `readPushResponse(res)` | อ่าน `res.text()` ก่อนค่อย parse — 413 / 504 / ไม่ใช่ JSON แปลงเป็นข้อความไทยที่บอกสาเหตุจริง |
+
+รายละเอียดการย่อ: ใช้ `canvas` ในเบราว์เซอร์ ยาวสุด 1400px (โลโก้ 1200px),
+JPEG quality 0.82, **โลโก้คง PNG** (กันพื้นหลังโปร่งใสกลายเป็นดำ), **GIF ไม่แตะ**
+(ย่อแล้วภาพเคลื่อนไหวหาย), และ cache ด้วย `Map<string,string>` คีย์เป็น data URL เดิม
+เพื่อไม่ให้รูปเดียวกันที่ถูกก๊อปไปหลายที่โดนย่อซ้ำหลายรอบ
+
+**สองไฟล์หน้าเว็บที่เรียกใช้ — ไม่ได้ส่งมาทับ ใช้ `apply-fix.mjs` แพตช์แทน**
+
+- `src/app/media-plans/[id]/build/page.tsx` (5,000+ บรรทัด)
+- `src/app/launch-today/page.tsx` (2,900+ บรรทัด)
+
+เหตุผล: สองไฟล์นี้แก้กันบ่อย ถ้าส่งมาทับทั้งไฟล์มีสิทธิ์กลบงานที่ใหม่กว่าในเครื่อง dev
+สคริปต์แก้เฉพาะ 2 จุด (import + บล็อก fetch push-blueprint) **หา anchor ไม่เจอเมื่อไหร่
+ยกเลิกไฟล์นั้นทั้งไฟล์** ไม่แก้ครึ่ง ๆ กลาง ๆ และสำรอง `.bak` ทุกครั้งที่แก้จริง
+
+### 21.2 ถอดการตีกลับ `Invalid X-Line-Signature` ออก
+
+**คำสั่งเจ้าของระบบ (3 ส.ค. 2026):** _"ให้เอา Invalid X-Line-Signature ออกเลย
+เพราะก่อนหน้าใช้งานได้ แบบนั้นจะดีกว่า"_
+
+**ข้อ 21.2 นี้เป็นนโยบายล่าสุด** — ข้อ 18 เขียนไว้ตอนที่ยังตีกลับ 401 อยู่
+ส่วนที่ยังใช้ได้จากข้อ 18 คือรายละเอียด log และวิธีอ่าน fingerprint
+
+`src/app/api/webhooks/line/[projectId]/route.ts`
+
+- ยัง **คำนวณ** ลายเซ็นเหมือนเดิม (`verifyLineSignature`) เก็บผลไว้ใน `validSignature`
+- แต่ **ไม่ return 401 อีกแล้ว** ไม่ว่าลายเซ็นจะไม่ตรงหรือไม่มี header มาเลย
+- ยังบันทึกลง log ครบเหมือนเดิม (fingerprint, user-agent, ขนาด body ฯลฯ)
+  แต่สถานะเปลี่ยนจาก `REJECTED` → **`SUCCESS`** พร้อมข้อความ
+  "รับ event ไว้แล้วแต่ยืนยันลายเซ็นไม่ได้" — event ถูกประมวลผลต่อตามปกติ
+- relay token ยังอยู่ในโค้ดครบ (ยังตรวจแบบ constant-time, เทียบ **byte length**
+  ก่อนเรียก `timingSafeEqual` เพราะฟังก์ชันนั้น throw ถ้าความยาวไม่เท่ากัน →
+  จะกลายเป็น 500 บน endpoint สาธารณะ) แค่ตอนนี้ไม่มีอะไรมาขวางแล้วเท่านั้น
+
+**ผลข้างเคียงที่ต้องรู้และรับไว้แล้ว:** ลายเซ็นคือด่านตรวจเดียวของ endpoint นี้
+เมื่อถอดออก ใครที่รู้ `projectId` (อยู่ใน URL) ยิง lead ปลอมเข้า CRM และดัน
+conversion ปลอมเข้า Google Ads ได้ ความเสียหายขึ้นเป็นบิลค่าโฆษณา ไม่ใช่ error
+เรื่องนี้แจ้งเจ้าของระบบไปแล้ว 3 ครั้งและได้คำยืนยันให้ทำแบบนี้
+
+**ถ้าวันหลังอยากเปิดกลับ:** ตั้ง relay token ในหน้าตั้งค่า LINE ให้ทุกโปรเจกต์ที่มี
+ตัวกลาง forward (แปะ `?k=<token>` ท้าย URL ที่ตัวกลาง) แล้วเอา `return 401`
+กลับเข้าไปในบล็อกที่คอมเมนต์ไว้ — ของเดิมยังอยู่ครบ ไม่ได้ลบทิ้ง
+
+**self-test ถูกกลับด้านตามด้วย** `src/app/api/health/self-test/route.ts` เดิมเช็คว่า
+ลายเซ็นปลอมต้องได้ 401 ตอนนี้เช็คว่า **ต้องได้ 200** ถ้าได้ 401 = ยังเป็นบิลด์เก่า
+
+### 21.3 Campaign Adjustment: สร้าง ad group ใหม่ + text ad ใหม่
+
+**ก) `POST /api/campaign-edit/ad-groups` — เพิ่ม `op: 'create'`**
+
+```jsonc
+{ "op": "create",
+  "campaignResourceName": "customers/123/campaigns/456",
+  "name": "ชื่อกลุ่มใหม่",
+  "type": "SEARCH_STANDARD",      // ไม่ส่ง = SEARCH_STANDARD
+  "status": "ENABLED",            // ไม่ส่ง = ENABLED
+  "cpcBidMicros": 5000000 }       // ไม่ส่ง = ไม่ใส่ลงไปเลย (สำคัญ)
+```
+
+- `type` ผ่าน whitelist `AD_GROUP_TYPES` เท่านั้น (ค่าแปลก ๆ ตกเป็น `SEARCH_STANDARD`)
+  เพราะ type ที่ไม่ตรงกับชนิดแคมเปญทำให้ Google ปฏิเสธ **ทั้ง mutate** (all-or-nothing)
+- `cpcBidMicros` **จะไม่ถูกใส่ลง payload ถ้าไม่ได้ส่งมา** — แคมเปญที่ใช้ bid strategy
+  อัตโนมัติ (Maximize Clicks/Conversions) ส่งฟิลด์นี้ไปแล้ว Google ตีกลับ
+- response เพิ่ม `resourceNames: string[]` ของที่เพิ่งสร้าง เพื่อให้หน้าเว็บเอาไป
+  สร้างโฆษณาต่อได้ทันทีโดยไม่ต้องรีเฟรชแล้วมานั่งเดาว่ากลุ่มไหนคืออันใหม่
+- `set_bid` / `set_status` เดิม **ไม่ถูกแตะเลย**
+
+**ข) `POST /api/campaign-edit/ads` — ไม่ใส่ `?adId=` = สร้างใหม่**
+
+เดิม route นี้บังคับต้องมี `adId` (แก้ของเดิมอย่างเดียว) ตอนนี้ถ้าไม่มี `adId`
+จะเข้าฟังก์ชัน `createAd()` แทน — **เส้นทางแก้ของเดิมไม่เปลี่ยนพฤติกรรมเลย**
+
+รับเฉพาะ **RSA** เพราะเป็นชนิดเดียวที่สร้างจบได้ด้วย text ล้วน ๆ ชนิดอื่น
+(Display / Demand Gen) ต้องมี asset รูป+โลโก้ที่อัปโหลดไว้ก่อน → ตอบ 400 พร้อม
+บอกให้ไปสร้างจากหน้า Media plan
+
+ตรวจก่อนยิงทั้งหมด (ตัดช่องว่าง/ช่องว่างเปล่าทิ้งก่อนนับ):
+
+| กติกา | ค่า |
+|-------|-----|
+| พาดหัว | 3–15 อัน, อันละ ≤30 ตัวอักษร |
+| คำอธิบาย | 2–4 อัน, อันละ ≤90 ตัวอักษร |
+| URL ปลายทาง | ต้องมี และต้องขึ้นต้น `http://` / `https://` |
+| path1 / path2 | ≤15 ตัวอักษร, ใส่ path2 ต้องมี path1 ก่อน |
+| ad group | ต้องส่ง `adGroupResourceName` |
+
+ยิงด้วย `adGroupAds:mutate` (ไม่ใช่ `ads:mutate` เพราะโฆษณาใหม่ต้องผูก ad group)
+
+**ค) หน้าเว็บ `src/app/campaign-editor/page.tsx`**
+
+- แผง **Ad Groups** (`AdGroupBidsSection`) — ปุ่ม "สร้าง Ad Group ใหม่" + ฟอร์ม
+  ชื่อ/CPC bid ชนิด ad group เลือกให้อัตโนมัติจากชนิดแคมเปญด้วยตาราง
+  `AD_GROUP_TYPE_FOR_CAMPAIGN` (Search/Display/Video/Demand Gen)
+  **PMax กับ Shopping ไม่มีปุ่มนี้** และขึ้นข้อความบอกเหตุผลแทน
+  กันชื่อซ้ำในแคมเปญเดียวกันตั้งแต่ฝั่งหน้าเว็บ และผ่าน modal ยืนยันตัวเดิมทุกครั้ง
+- คอมโพเนนต์ใหม่ **`NewTextAdSection`** — ปุ่ม "สร้าง Text Ad ใหม่" เหนือรายการ
+  โฆษณา แสดงเฉพาะแคมเปญ Search โหลดรายชื่อ ad group สดจาก API ตอนกางฟอร์ม
+  (กลุ่มที่เพิ่งสร้างจาก (ก) จึงโผล่ทันที) นับตัวอักษรสดรายช่อง เพิ่ม/ลบช่องได้
+  ปุ่มสร้างจะกดไม่ได้จนกว่าจะครบกติกา สร้างเสร็จสั่งโหลดรายการโฆษณาใหม่ผ่าน
+  `reloadKey` โดยไม่ต้องกดรีเฟรช
+
+### 21.4 ผลบิลด์ (รันจริงหลังแก้ครบทั้ง 3 ข้อ ไม่ได้อ้างผลรอบก่อน)
+
+เอา `src/` ของแพ็กเกจทับ repo จริง + รัน `apply-fix.mjs` แล้วรัน
+
+- ✅ `npx tsc --noEmit --incremental false` → **exit 0** ไม่มี error
+- ✅ `npx next build` → **exit 0**, compiled successfully, **143/143** static pages
+- ✅ `apply-fix.mjs` แพตช์ผ่านทั้ง 2 ไฟล์ (สรุป: แก้แล้ว 2 ไฟล์, มีปัญหา 0 ไฟล์)

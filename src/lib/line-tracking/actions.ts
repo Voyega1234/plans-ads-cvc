@@ -179,7 +179,7 @@ async function scanGtmContainers(
   html: string,
   slug: string
 ): Promise<"okgtm" | "wrongslug" | "gtmnotag" | "missing"> {
-  const ids = [...new Set(html.match(/GTM-[A-Z0-9]{4,}/g) ?? [])].slice(0, 3);
+  const ids = Array.from(new Set(html.match(/GTM-[A-Z0-9]{4,}/g) ?? [])).slice(0, 3);
   if (ids.length === 0) return "missing";
 
   const containers = await Promise.all(

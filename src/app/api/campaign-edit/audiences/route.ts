@@ -136,7 +136,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'customerId and operations are required' }, { status: 400 })
   }
   const ops: Record<string, unknown>[] = []
-  for (const [i, op] of operations.entries()) {
+  // ใช้ index loop แทน operations.entries() — tsconfig ของโปรเจกต์ไม่ได้ตั้ง `target`
+  // (ตกเป็น ES5) การ iterate iterator จะพัง TS2802 ตอน build ถ้าไม่มี downlevelIteration
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i]
     if (op.op === 'add') {
       if (!op.campaignResourceName || !op.userListResourceName) {
         return NextResponse.json({ error: `operation[${i}]: add ต้องมี campaignResourceName, userListResourceName` }, { status: 400 })

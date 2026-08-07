@@ -358,6 +358,25 @@ function StepStructure({
   const [newName, setNewName] = useState('')
   const [newMonthly, setNewMonthly] = useState('')
 
+  // เกลี่ยงบทุก campaign ที่เลือกให้รวมแล้วพอดีกับงบที่ตั้งไว้ (ลด/เพิ่มตามสัดส่วนเดิม)
+  function rebalanceBudgets() {
+    if (totalBudget <= 0 || totalSelected <= 0) return
+    const ratio = totalBudget / totalSelected
+    // ปัดเป็นหลักร้อยให้ตัวเลขอ่านง่าย แล้วชดเชยส่วนต่างจากการปัดที่ตัวงบใหญ่สุด
+    const rounded = selected.map(c => ({
+      id: c.id,
+      monthly: Math.max(100, Math.round((c.monthlyBudget * ratio) / 100) * 100),
+    }))
+    const drift = totalBudget - rounded.reduce((s, r) => s + r.monthly, 0)
+    if (drift !== 0 && rounded.length > 0) {
+      const biggest = rounded.reduce((a, b) => (b.monthly > a.monthly ? b : a))
+      biggest.monthly = Math.max(100, biggest.monthly + drift)
+    }
+    for (const r of rounded) {
+      onUpdate(r.id, { monthlyBudget: r.monthly, dailyBudget: Math.round(r.monthly / 30) })
+    }
+  }
+
   function addCampaign() {
     if (!newName.trim()) return
     const monthly = Number(newMonthly) || Math.round(totalBudget / (items.length + 1))
@@ -458,6 +477,8 @@ function StepStructure({
                       <label className="text-[11px] font-medium text-gray-500 mb-1 block">Monthly Budget (฿)</label>
                       <input
                         type="number"
+                        // key บังคับ re-render เมื่องบเปลี่ยนจากปุ่มเกลี่ยงบ (input เป็น defaultValue)
+                        key={item.monthlyBudget}
                         defaultValue={item.monthlyBudget}
                         onBlur={e => {
                           const monthly = Number(e.target.value) || 0
@@ -526,7 +547,12 @@ function StepStructure({
       {over && (
         <div className="flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm">
           <AlertTriangle className="w-4 h-4 shrink-0" />
-          งบรวม ฿{totalSelected.toLocaleString()} เกิน ฿{totalBudget.toLocaleString()} — ปรับลด budget แต่ละ campaign
+          <span className="flex-1">งบรวม ฿{totalSelected.toLocaleString()} เกิน ฿{totalBudget.toLocaleString()} — ปรับลด budget แต่ละ campaign</span>
+          <button onClick={rebalanceBudgets}
+            className="shrink-0 px-3 py-1 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+            title={`ปรับงบทุก campaign ตามสัดส่วนเดิมให้รวมพอดี ฿${totalBudget.toLocaleString()}`}>
+            เกลี่ยงบอัตโนมัติ
+          </button>
         </div>
       )}
 
@@ -1438,6 +1464,8 @@ function StepAdCopy({
   const [activeId, setActiveId] = useState<string>(selected[0]?.id ?? '')
   const [generating, setGenerating] = useState<Record<string, boolean>>({})
   const [genError, setGenError] = useState<Record<string, string>>({})
+  // คำสั่งเพิ่มเติมก่อน generate (ต่อ campaign) — อยากได้อะไร / ไม่เอาอะไร
+  const [suggestions, setSuggestions] = useState<Record<string, string>>({})
   const active = selected.find(c => c.id === activeId)
   const autoTriggered = useRef<Record<string, boolean>>({})
 
@@ -1463,6 +1491,7 @@ function StepAdCopy({
           brandTone:       (b as Record<string, unknown>).brandTone as string ?? '',
           keywords:        (c.keywords ?? []).filter(k => k.selected).map(k => k.keyword),
           audiences:       (c.audiences ?? []).filter(a => a.selected).map(a => ({ name: a.name, type: a.type })),
+          suggestions:     (suggestions[c.id] ?? '').trim(),
         }),
       })
       const data = await res.json()
@@ -1801,6 +1830,22 @@ function StepAdCopy({
           </div>
 
           <div className="p-5">
+            {/* คำสั่งเพิ่มเติมก่อน generate — อยากได้อะไร / ไม่เอาอะไร */}
+            <div className="mb-4 border border-purple-100 bg-purple-50/40 rounded-xl p-3">
+              <label className="flex items-center gap-1.5 text-[11px] font-semibold text-purple-700 uppercase tracking-wide mb-1.5">
+                <Sparkles className="w-3.5 h-3.5" />
+                คำสั่งเพิ่มเติมสำหรับ AI (ก่อนกด Re-generate)
+              </label>
+              <textarea
+                value={suggestions[active.id] ?? ''}
+                onChange={e => setSuggestions(prev => ({ ...prev, [active.id]: e.target.value }))}
+                rows={2}
+                placeholder="เช่น เน้นโปรห้องเพดานสูง 4.3 ม. ราคา 6.89 ลบ. / ห้ามใช้คำว่า ถูกที่สุด / ใส่ CTA นัดชมโครงการ"
+                className="w-full text-sm border border-purple-200 rounded-lg px-3 py-2 bg-white placeholder-gray-400 resize-y focus:outline-none focus:ring-2 focus:ring-purple-200"
+              />
+              <p className="text-[10px] text-purple-400 mt-1">มีผลตอนกด Re-generate — ใช้บอกทั้ง &ldquo;อยากได้อะไร&rdquo; และ &ldquo;ไม่เอาอะไร&rdquo;</p>
+            </div>
+
             {genError[active.id] && (
               <div className="flex items-center gap-2 text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm mb-4">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -2772,7 +2817,8 @@ function buildReviewHTML({
 <title>Media Plan Review — ${b.businessName ?? plan.title}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1f2937; background: #f8fafc; padding: 24px; }
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');
+  body { font-family: 'Noto Sans Thai', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1f2937; background: #f8fafc; padding: 24px; }
   .page { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); overflow: hidden; }
   .img-gallery { display: flex; flex-wrap: wrap; gap: 10px; }
   .img-item { margin: 0; width: 130px; }
@@ -4327,7 +4373,8 @@ function buildExportHTML({
 <title>Media Plan — ${b.businessName ?? plan.title}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1f2937; background: #f8fafc; padding: 24px; }
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');
+  body { font-family: 'Noto Sans Thai', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #1f2937; background: #f8fafc; padding: 24px; }
   .page { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.1); overflow: hidden; }
   .header { background: linear-gradient(135deg, #1d4ed8, #3b82f6); color: white; padding: 32px; }
   .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
@@ -4831,11 +4878,29 @@ export default function MediaPlanBuildPage({ params }: Props) {
   }, [planId, router])
 
   // ── Persist progress to localStorage whenever key state changes ───────────────
+  //
+  // สาเหตุที่เคย "กลับมาแล้วข้อมูลหายหมด": blueprint บางตัวมีรูปฝังเป็น base64
+  // ทำให้ JSON ใหญ่เกิน quota ของ localStorage (~5MB) → setItem โยน error →
+  // catch เงียบ = ไม่เคยเซฟเลยสักครั้ง พอออกจากหน้าแล้วกลับเข้ามาจึงว่างเปล่า
+  // ตอนนี้เซฟแบบไล่ระดับ: เต็ม → ตัดรูป base64 ออก → อย่างน้อยที่สุด step+items
   useEffect(() => {
     if (!hydrated || items.length === 0) return
+    const save = (payload: unknown) => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    }
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ step, items, blueprints }))
-    } catch { /* quota exceeded or unavailable */ }
+      save({ step, items, blueprints })
+    } catch {
+      try {
+        // ตัด data URL รูปใหญ่ ๆ ออกก่อนเซฟ (รูปตัวจริงอยู่บนเซิร์ฟเวอร์/ในแผนอยู่แล้ว)
+        const slim = JSON.parse(JSON.stringify({ step, items, blueprints }, (_k, v) =>
+          typeof v === 'string' && v.startsWith('data:image/') && v.length > 10_000 ? '' : v
+        ))
+        save(slim)
+      } catch {
+        try { save({ step, items }) } catch { /* localStorage ใช้ไม่ได้จริง ๆ */ }
+      }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, items, blueprints, hydrated])
 

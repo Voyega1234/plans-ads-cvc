@@ -526,7 +526,7 @@ export default function PlanPreviewPage() {
 <title>${plan?.title ?? 'Media Plan'}</title>
 <style>
 *{box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:#1f2937;padding:40px;max-width:1060px;margin:0 auto}
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');body{font-family:'Noto Sans Thai',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:#1f2937;padding:40px;max-width:1060px;margin:0 auto}
 h1{font-size:22px;font-weight:800;margin:0 0 4px;color:#111827}
 h2{font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em;margin:32px 0 12px;padding-bottom:8px;border-bottom:2px solid #e5e7eb}
 h3{font-size:13px;font-weight:700;margin:0 0 4px;color:#111827}

@@ -78,7 +78,10 @@ export async function POST(req: NextRequest) {
   const mutateOperations: Record<string, unknown>[] = []
   let tempId = -1
 
-  for (const [i, op] of operations.entries()) {
+  // ใช้ index loop แทน operations.entries() — tsconfig ของโปรเจกต์ไม่ได้ตั้ง `target`
+  // (ตกเป็น ES5) การ iterate iterator จะพัง TS2802 ตอน build ถ้าไม่มี downlevelIteration
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i]
     const fieldType = (op.fieldType ?? '') as ImageFieldType
     if (!IMAGE_FIELD_TYPES.includes(fieldType)) {
       return NextResponse.json({ error: `operation[${i}]: fieldType ต้องเป็น ${IMAGE_FIELD_TYPES.join(' / ')}` }, { status: 400 })

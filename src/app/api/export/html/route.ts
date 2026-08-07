@@ -390,6 +390,7 @@ export async function GET(req: NextRequest) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${esc(businessName)} — Ad Preview | Convert Cake</title>
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
   :root {
     --blue: #1a73e8;
@@ -401,7 +402,7 @@ export async function GET(req: NextRequest) {
     --gray-500: #9aa0a6;
     --gray-700: #5f6368;
     --gray-900: #202124;
-    --font: 'Google Sans','Roboto',-apple-system,sans-serif;
+    --font: 'Noto Sans Thai','Google Sans','Roboto',-apple-system,sans-serif;
   }
   body { font-family:var(--font); background:#f8f9fa; color:var(--gray-900); display:flex; min-height:100vh }
 

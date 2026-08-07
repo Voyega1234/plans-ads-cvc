@@ -33,6 +33,35 @@ const COMP_COLORS: Record<string, string> = {
   LOW: 'text-emerald-600', MEDIUM: 'text-yellow-600', HIGH: 'text-red-500',
 }
 
+// sparkline 12 เดือนแบบตาราง GKP — SVG ล้วน ไม่ต้องพึ่ง chart lib ต่อแถว
+function TrendSparkline({ data }: { data?: number[] }) {
+  if (!data || data.length < 2) return null
+  const W = 64, H = 20, P = 2
+  const max = Math.max(...data, 1)
+  const min = Math.min(...data)
+  const range = max - min || 1
+  const pts = data.map((v, i) => {
+    const x = P + (i / (data.length - 1)) * (W - P * 2)
+    const y = H - P - ((v - min) / range) * (H - P * 2)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  })
+  return (
+    <svg width={W} height={H} className="inline-block align-middle" aria-hidden>
+      <polyline points={`${P},${H - P} ${pts.join(' ')} ${W - P},${H - P}`}
+        fill="#dbeafe" stroke="none" />
+      <polyline points={pts.join(' ')} fill="none" stroke="#3b82f6" strokeWidth={1.5}
+        strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+// %change แบบ GKP: เขียว = ขึ้น แดง = ลง เทา = 0
+function PctChange({ v }: { v?: number }) {
+  if (v === undefined) return <span className="text-xs text-gray-300">—</span>
+  const cls = v > 0 ? 'text-emerald-600' : v < 0 ? 'text-red-500' : 'text-gray-400'
+  return <span className={cn('text-xs font-medium', cls)}>{v > 0 ? '+' : ''}{v}%</span>
+}
+
 function fmtVolume(n: number): string {
   if (n === 0)       return '0'
   if (n < 10)        return '< 10'
@@ -58,6 +87,8 @@ export interface EmbedKeywordResult {
   competition:        'LOW' | 'MEDIUM' | 'HIGH'
   suggestedCpc:       number
   selected:           boolean
+  /** กลุ่มของคำ (brand/service/...) — เก็บไว้เพื่อไม่ให้กลายเป็น service หมดตอนโหลดกลับ */
+  group?:             string
 }
 
 const PMAX_SEARCH_THEME_LIMIT = 25
@@ -79,11 +110,19 @@ interface Props {
 }
 
 // Convert a plan keyword into the research-workspace shape so it can be displayed
-function embedToResearch(k: EmbedKeywordResult): ResearchKeyword {
+// (เดิม hardcode group เป็น 'service' หมด → พอโหลดกลับมาทุกคำกลายเป็น Service
+//  ตอนนี้ใช้ group ที่บันทึกไว้ก่อน ถ้าไม่มีค่อยเดาจากชื่อธุรกิจ)
+function embedToResearch(k: EmbedKeywordResult, businessName?: string): ResearchKeyword {
+  let group = k.group
+  if (!group && businessName) {
+    const nk = k.keyword.toLowerCase().replace(/\s+/g, '')
+    const brandTokens = businessName.split(/[\s,/]+/).map(t => t.toLowerCase().replace(/\s+/g, '')).filter(t => t.length >= 3)
+    if (brandTokens.some(t => nk.includes(t))) group = 'brand'
+  }
   return {
     keyword:     k.keyword,
     matchType:   k.matchType,
-    group:       'service',
+    group:       (group ?? 'service') as ResearchKeyword['group'],
     intent:      'high',
     volume:      'กลาง',
     competition: k.competition,
@@ -106,6 +145,27 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
   const [competitors,    setCompetitors]    = useState('')
   const [selectedCid,    setSelectedCid]    = useState('')
   const [accounts,       setAccounts]       = useState<Array<{ id: string; descriptiveName: string }>>([])
+  // กลุ่ม keyword ที่ผู้ใช้อยากได้จากการ gen — ค่าเริ่มต้นเลือกทุกกลุ่ม (พฤติกรรมเดิม)
+  const [focusGroups,    setFocusGroups]    = useState<Set<string>>(
+    () => new Set(['brand', 'product', 'service', 'generic', 'competitor'])
+  )
+  function toggleFocusGroup(g: string) {
+    setFocusGroups(prev => {
+      const next = new Set(Array.from(prev))
+      if (next.has(g)) { if (next.size > 1) next.delete(g) } else { next.add(g) }
+      return next
+    })
+  }
+
+  // Landing page (เหมือน "เริ่มต้นด้วยเว็บไซต์" ใน Google Keyword Planner)
+  const [landingUrl,   setLandingUrl]   = useState('')
+  const [landingScope, setLandingScope] = useState<'page' | 'site'>('page')
+  // Do / Don't (ไม่บังคับ)
+  const [doNotes,   setDoNotes]   = useState('')
+  const [dontNotes, setDontNotes] = useState('')
+  // feedback ตอนกด "วิเคราะห์ใหม่" — ถูกเก็บเป็น system learning ใน DB ด้วย
+  const [refineFeedback, setRefineFeedback] = useState('')
+  const [showRefine,     setShowRefine]     = useState(false)
 
   // Results
   const [keywords,  setKeywords]  = useState<ResearchKeyword[]>([])
@@ -136,9 +196,10 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
   useEffect(() => {
     const applied = appliedKeywords[activeCampaignId]
     if (applied?.length && loadedForRef.current !== activeCampaignId) {
-      setKeywords(applied.map(embedToResearch))
+      setKeywords(applied.map(k => embedToResearch(k, brief?.businessName)))
       loadedForRef.current = activeCampaignId
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCampaignId, appliedKeywords])
 
   const hasResults = keywords.length > 0
@@ -157,7 +218,7 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
 
   // ── Generate ──────────────────────────────────────────────────────────────
 
-  async function generate() {
+  async function generate(feedbackText?: string) {
     if (!businessName.trim() || !productService.trim()) return
     setLoading(true)
     setError('')
@@ -167,11 +228,22 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
       const res = await fetch('/api/keyword-research/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ businessName, productService, location, objective, competitors, customerId: selectedCid }),
+        body: JSON.stringify({
+          businessName, productService, location, objective, competitors, customerId: selectedCid,
+          // ส่งเฉพาะตอนผู้ใช้ "ตัดบางกลุ่มออก" — เลือกครบทุกกลุ่ม = พฤติกรรมเดิม
+          ...(focusGroups.size < 5 ? { focusGroups: Array.from(focusGroups) } : {}),
+          ...(landingUrl.trim() ? { landingPageUrl: landingUrl.trim(), landingPageScope: landingScope } : {}),
+          ...(doNotes.trim() ? { doNotes: doNotes.trim() } : {}),
+          ...(dontNotes.trim() ? { dontNotes: dontNotes.trim() } : {}),
+          // feedback ถูกบันทึกเป็น learning ฝั่ง server แล้วมีผลกับรอบนี้ทันที
+          ...(feedbackText?.trim() ? { feedback: feedbackText.trim() } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Generate failed')
       setKeywords(data.keywords as ResearchKeyword[])
+      setShowRefine(false)
+      setRefineFeedback('')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'เกิดข้อผิดพลาด')
     } finally {
@@ -243,11 +315,28 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
       competition:        k.competition,
       suggestedCpc:       k.cpcEst ?? 0,
       selected:           true,
+      group:              k.group,
     }))
     const searchThemes = isPmax ? limited.map(k => k.keyword) : undefined
     onApply(activeCampaignId, result, searchThemes)
     setAppliedSet(prev => new Set(Array.from(prev).concat(activeCampaignId)))
     setAppliedKeywords(prev => ({ ...prev, [activeCampaignId]: result }))
+  }
+
+  // ลบ keyword รายตัวออกจากแคมเปญหลังใส่ไปแล้ว — sync กลับเข้าแผนทันที
+  function removeAppliedKeyword(campaignId: string, idx: number) {
+    const current = appliedKeywords[campaignId] ?? []
+    const next = current.filter((_, i) => i !== idx)
+    const isPmax = campaigns.find(c => c.id === campaignId)?.type === 'PERFORMANCE_MAX'
+    onApply(campaignId, next, isPmax ? next.map(k => k.keyword) : undefined)
+    setAppliedKeywords(prev => ({ ...prev, [campaignId]: next }))
+    if (next.length === 0) {
+      setAppliedSet(prev => {
+        const s = new Set(Array.from(prev))
+        s.delete(campaignId)
+        return s
+      })
+    }
   }
 
   // ── Computed ──────────────────────────────────────────────────────────────
@@ -404,18 +493,17 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
               {hasResults && (
                 <button
                   onClick={applyToCampaign}
-                  disabled={selectedNonNeg.length === 0 || isApplied}
+                  disabled={selectedNonNeg.length === 0}
                   className={cn(
                     'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all',
-                    isApplied
-                      ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                      : isPmaxActive
-                        ? 'bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed'
-                        : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed'
+                    isPmaxActive
+                      ? 'bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed'
                   )}
                 >
+                  {/* ใส่แล้วก็ยังกดซ้ำได้ = อัปเดตทับของเดิม (เลือกเพิ่ม/เอาออกแล้วกดใหม่) */}
                   {isApplied
-                    ? <><Check className="w-4 h-4" />ใส่แล้ว {appliedKeywords[activeCampaignId]?.length ?? 0} {isPmaxActive ? 'Search Themes' : 'keywords'}</>
+                    ? <><RefreshCw className="w-4 h-4" />อัปเดต ({selectedNonNeg.length})</>
                     : isPmaxActive
                       ? <><Plus className="w-4 h-4" />ใส่ {Math.min(selectedNonNeg.length, PMAX_SEARCH_THEME_LIMIT)} Search Themes</>
                       : <><Plus className="w-4 h-4" />ใส่ {selectedNonNeg.length} keywords</>
@@ -434,13 +522,19 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
               <div className="flex flex-wrap gap-1.5">
                 {appliedKeywords[activeCampaignId].map((kw, i) => (
                   <span key={i} className={cn(
-                    'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
+                    'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium group/chip',
                     isPmaxActive
                       ? 'bg-orange-100 text-orange-700'
                       : (MATCH_COLORS[kw.matchType] ?? 'bg-gray-100 text-gray-600')
                   )}>
                     {kw.keyword}
                     {!isPmaxActive && <span className="opacity-50 text-[10px]">{kw.matchType}</span>}
+                    {/* ลบออกจากแคมเปญ — sync เข้าแผนทันที ไม่ต้อง research ใหม่ */}
+                    <button onClick={() => removeAppliedKeyword(activeCampaignId, i)}
+                      className="ml-0.5 -mr-0.5 p-0.5 rounded-full opacity-40 hover:opacity-100 hover:bg-red-100 hover:text-red-600 transition-all"
+                      title="ลบออกจาก campaign">
+                      <X className="w-3 h-3"/>
+                    </button>
                   </span>
                 ))}
               </div>
@@ -532,10 +626,60 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
               placeholder="เว้นว่างให้ AI หาให้อัตโนมัติ"
               className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100" />
           </div>
+
+          {/* Landing page — เหมือน "เริ่มต้นด้วยเว็บไซต์" ใน Google Keyword Planner */}
+          <div className="md:col-span-2 lg:col-span-2">
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Landing Page (ไม่บังคับ)</label>
+            <p className="text-[11px] text-gray-400 mb-1.5">ใส่ URL แล้วระบบจะหา keyword จากหน้าเว็บจริง (Google Keyword Planner + AI อ่านหน้าเว็บประกอบ)</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input value={landingUrl} onChange={e => setLandingUrl(e.target.value)}
+                placeholder="https://domain.com/page"
+                className="flex-1 min-w-[220px] px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100" />
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="radio" checked={landingScope === 'page'} onChange={() => setLandingScope('page')} className="text-blue-600"/>
+                ใช้หน้านี้เท่านั้น
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="radio" checked={landingScope === 'site'} onChange={() => setLandingScope('site')} className="text-blue-600"/>
+                ใช้ทั้งเว็บไซต์
+              </label>
+            </div>
+          </div>
+
+          {/* กลุ่ม keyword ที่อยากได้ */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">กลุ่ม Keyword ที่อยากได้</label>
+            <p className="text-[11px] text-gray-400 mb-1.5">ติ๊กเฉพาะกลุ่มที่ต้องการ — ระบบจะ gen เฉพาะกลุ่มนั้น</p>
+            <div className="flex flex-wrap gap-1.5">
+              {(['brand', 'product', 'service', 'generic', 'competitor'] as const).map(g => (
+                <button key={g} type="button" onClick={() => toggleFocusGroup(g)}
+                  className={cn('px-2.5 py-1 rounded-full text-xs font-medium border transition-all',
+                    focusGroups.has(g)
+                      ? (GROUP_COLORS[g] ?? 'bg-blue-100 text-blue-700') + ' border-transparent'
+                      : 'bg-white text-gray-400 border-gray-200 line-through')}>
+                  {GROUP_LABELS[g]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Do / Don't (ไม่บังคับ) */}
+          <div>
+            <label className="block text-xs font-semibold text-emerald-600 uppercase tracking-wide mb-0.5">Do — อยากให้เน้นอะไร (ไม่บังคับ)</label>
+            <textarea value={doNotes} onChange={e => setDoNotes(e.target.value)} rows={2}
+              placeholder="เช่น โฟกัส painpoint ปวดหลังจากนั่งทำงาน, เน้นคำที่มี intent ซื้อ"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-y focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-red-500 uppercase tracking-wide mb-0.5">Don&apos;t — ไม่เอาอะไร (ไม่บังคับ)</label>
+            <textarea value={dontNotes} onChange={e => setDontNotes(e.target.value)} rows={2}
+              placeholder="เช่น ไม่เอา kw ที่ซ้ำกับแคมเปญ Brand, ไม่เอาคำเกี่ยวกับมือสอง"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-y focus:outline-none focus:border-red-400 focus:ring-1 focus:ring-red-100" />
+          </div>
         </div>
 
-        <div className="mt-4 flex items-center gap-3">
-          <button onClick={generate}
+        <div className="mt-4 flex items-center gap-3 flex-wrap">
+          <button onClick={() => generate()}
             disabled={loading || !businessName.trim() || !productService.trim()}
             className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             {loading
@@ -543,13 +687,38 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
               : <><Sparkles className="w-4 h-4" />วิเคราะห์ Keyword</>}
           </button>
           {hasResults && (
-            <button onClick={generate} disabled={loading}
+            <button onClick={() => setShowRefine(v => !v)} disabled={loading}
               className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm hover:bg-gray-50 transition-colors">
               <RefreshCw className="w-4 h-4" />วิเคราะห์ใหม่
             </button>
           )}
           {error && <p className="text-sm text-red-500">{error}</p>}
         </div>
+
+        {/* ยังไม่ถูกใจ → บอกได้ว่าเพราะอะไร — ระบบเก็บเป็น learning ใน DB
+            แล้วเอามาปรับทั้งรอบนี้และทุกรอบถัดไปของธุรกิจนี้ */}
+        {showRefine && (
+          <div className="mt-3 p-3 border border-amber-200 bg-amber-50/50 rounded-xl">
+            <label className="block text-xs font-semibold text-amber-700 mb-1.5">
+              ยังไม่ถูกใจตรงไหน? (ระบบจะจำไว้ใช้ทุกรอบถัดไปของธุรกิจนี้)
+            </label>
+            <div className="flex items-center gap-2">
+              <input value={refineFeedback} onChange={e => setRefineFeedback(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !loading) generate(refineFeedback) }}
+                placeholder="เช่น คำกว้างไป เอาเฉพาะที่มี intent ซื้อ / ไม่เอาคำเกี่ยวกับเช่า"
+                className="flex-1 px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-400" />
+              <button onClick={() => generate(refineFeedback)} disabled={loading}
+                className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors shrink-0">
+                วิเคราะห์ใหม่
+              </button>
+              <button onClick={() => generate()} disabled={loading}
+                className="px-3 py-2 text-xs text-gray-500 hover:text-gray-700 shrink-0"
+                title="วิเคราะห์ใหม่โดยไม่ใส่ feedback">
+                ข้าม
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Keyword Table ─────────────────────────────────────────────────── */}
@@ -610,8 +779,11 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
                     <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide">Match Type</th>
                     <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden md:table-cell">กลุ่ม</th>
                     <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide">Avg. Monthly</th>
+                    <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">Bid ต่ำ (฿)</th>
+                    <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">Bid สูง (฿)</th>
+                    <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">3 เดือน</th>
+                    <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">YoY</th>
                     <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden md:table-cell">Competition</th>
-                    <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden md:table-cell">Top of Page Bid (฿)</th>
                     <th className="py-3 px-4 w-16" />
                   </tr>
                 </thead>
@@ -639,15 +811,49 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
                           </button>
                         </td>
                         <td className="py-3 px-3 text-center hidden md:table-cell">
-                          <span className={cn('px-2 py-0.5 rounded text-xs font-medium', GROUP_COLORS[kw.group] ?? 'bg-gray-100 text-gray-600')}>
+                          {/* คลิกเพื่อเปลี่ยนกลุ่ม — แก้เคสที่ AI จัดกลุ่มผิด (เช่น brand โดนตีเป็น service) */}
+                          <button
+                            onClick={() => {
+                              if (kw.group === 'negative') return
+                              const cycle: Group[] = ['brand', 'product', 'service', 'generic', 'competitor']
+                              const cur = cycle.indexOf(kw.group as Group)
+                              const next = cycle[(cur < 0 ? 0 : cur + 1) % cycle.length]
+                              setKeywords(prev => prev.map((k, i) => i === realIdx ? { ...k, group: next } as ResearchKeyword : k))
+                            }}
+                            className={cn('px-2 py-0.5 rounded text-xs font-medium',
+                              kw.group !== 'negative' && 'cursor-pointer hover:opacity-75',
+                              GROUP_COLORS[kw.group] ?? 'bg-gray-100 text-gray-600')}
+                            title={kw.group === 'negative' ? undefined : 'คลิกเพื่อเปลี่ยนกลุ่ม'}>
                             {GROUP_LABELS[kw.group as Group] ?? kw.group}
-                          </span>
+                          </button>
                         </td>
                         <td className="py-3 px-3 text-center">
                           {kw.group === 'negative' ? <span className="text-xs text-gray-300">—</span> :
                            kw.avgMonthlySearches !== undefined && kw.dataSource === 'google_ads'
-                            ? <span className="text-xs font-semibold text-gray-900">{fmtVolume(kw.avgMonthlySearches)}</span>
+                            ? (
+                              <span className="inline-flex items-center gap-2">
+                                <span className="text-xs font-semibold text-gray-900">{fmtVolume(kw.avgMonthlySearches)}</span>
+                                <TrendSparkline data={kw.monthlyVolumes}/>
+                              </span>
+                            )
                             : <span className="text-xs text-gray-400">—</span>}
+                        </td>
+                        <td className="py-3 px-3 text-right text-xs hidden lg:table-cell">
+                          {kw.group !== 'negative' && kw.lowTopBid !== undefined && kw.dataSource === 'google_ads' && kw.lowTopBid > 0
+                            ? <span className="font-semibold text-gray-900">฿{kw.lowTopBid.toLocaleString()}</span>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="py-3 px-3 text-right text-xs hidden lg:table-cell">
+                          {kw.group !== 'negative' && kw.highTopBid !== undefined && kw.dataSource === 'google_ads' && kw.highTopBid > 0
+                            ? <span className="font-semibold text-gray-900">฿{kw.highTopBid.toLocaleString()}</span>
+                            : kw.group !== 'negative' && kw.cpcEst > 0 ? <span className="text-gray-400">฿{kw.cpcEst}</span>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="py-3 px-3 text-right hidden lg:table-cell">
+                          {kw.group === 'negative' ? <span className="text-xs text-gray-300">—</span> : <PctChange v={kw.threeMonthChange}/>}
+                        </td>
+                        <td className="py-3 px-3 text-right hidden lg:table-cell">
+                          {kw.group === 'negative' ? <span className="text-xs text-gray-300">—</span> : <PctChange v={kw.yoyChange}/>}
                         </td>
                         <td className="py-3 px-3 text-center hidden md:table-cell">
                           {kw.group === 'negative' ? <span className="text-xs text-gray-300">—</span> :
@@ -661,13 +867,6 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
                               <span className={cn('text-[11px] font-medium', COMP_COLORS[kw.competition])}>{kw.competition}</span>
                             </div>
                           ) : <span className="text-xs text-gray-400">—</span>}
-                        </td>
-                        <td className="py-3 px-3 text-right text-xs hidden md:table-cell">
-                          {kw.group === 'negative' ? <span className="text-gray-300">—</span> :
-                           kw.lowTopBid !== undefined && kw.highTopBid !== undefined && kw.dataSource === 'google_ads'
-                            ? <span className="font-semibold text-gray-900">฿{kw.lowTopBid.toLocaleString()}–฿{kw.highTopBid.toLocaleString()}</span>
-                            : kw.cpcEst > 0 ? <span className="text-gray-400">฿{kw.cpcEst}</span>
-                            : <span className="text-gray-300">—</span>}
                         </td>
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-1 justify-end">
@@ -849,17 +1048,15 @@ export default function KeywordPlannerEmbed({ campaigns, brief, initialApplied, 
               )}
               <button
                 onClick={applyToCampaign}
-                disabled={selectedNonNeg.length === 0 || !activeCampaignId || isApplied}
+                disabled={selectedNonNeg.length === 0 || !activeCampaignId}
                 className={cn(
                   'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
-                  isApplied
-                    ? 'bg-emerald-700 text-emerald-200 cursor-default'
-                    : isPmaxActive
-                      ? 'bg-orange-500 text-white hover:bg-orange-400 disabled:opacity-40 disabled:cursor-not-allowed'
-                      : 'bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed'
+                  isPmaxActive
+                    ? 'bg-orange-500 text-white hover:bg-orange-400 disabled:opacity-40 disabled:cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed'
                 )}>
                 {isApplied
-                  ? <><Check className="w-4 h-4" />ใส่แล้วใน Campaign</>
+                  ? <><RefreshCw className="w-4 h-4" />อัปเดตใน Campaign ({selectedNonNeg.length})</>
                   : isPmaxActive
                     ? <><Plus className="w-4 h-4" />ใส่ {Math.min(selectedNonNeg.length, PMAX_SEARCH_THEME_LIMIT)} Search Themes</>
                     : <><Plus className="w-4 h-4" />ใส่ใน &quot;{activeCampaign?.name ?? '...'}&quot;</>}

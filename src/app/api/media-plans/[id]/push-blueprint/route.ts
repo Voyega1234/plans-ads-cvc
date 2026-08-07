@@ -32,14 +32,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     })
     if (!plan) return NextResponse.json({ error: 'Media plan not found' }, { status: 404 })
 
-    // Delete existing blueprints for this plan and save the new one
-    // (append mode = แคมเปญที่ 2..n ของ push ชุดเดียวกัน — ห้ามลบของที่เพิ่งบันทึก)
-    const existing = append ? [] : await prisma.campaignBlueprint.findMany({ where: { mediaPlanId: planId }, select: { id: true } })
-    if (existing.length > 0) {
-      const ids = existing.map(b => b.id)
-      await prisma.pushJob.deleteMany({ where: { campaignBlueprintId: { in: ids } } })
-      await prisma.qACheck.deleteMany({ where: { campaignBlueprintId: { in: ids } } })
-      await prisma.campaignBlueprint.deleteMany({ where: { mediaPlanId: planId } })
+    // เดิม: ลบ blueprint เก่าของแผนนี้ทิ้งทั้งหมดก่อนสร้างใหม่ → ประวัติ push หายเกลี้ยง
+    // ตอนนี้: เก็บของเก่าไว้เป็น archived แทน — หน้า Campaign Generator History
+    // อ่านจากแถวพวกนี้ (ตัวอ่านล่าสุดทั้งระบบใช้ orderBy createdAt desc อยู่แล้ว
+    // จึงยังได้ตัวใหม่สุดเหมือนเดิม ไม่มีอะไรพัง)
+    // (append mode = แคมเปญที่ 2..n ของ push ชุดเดียวกัน — ห้ามแตะของที่เพิ่งบันทึก)
+    if (!append) {
+      await prisma.campaignBlueprint.updateMany({
+        where: { mediaPlanId: planId, status: { not: 'archived' } },
+        data: { status: 'archived' },
+      })
     }
 
     const blueprint = await prisma.campaignBlueprint.create({
@@ -70,7 +72,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         where: { id: pushJob.id },
         data: {
           status: result.status === 'completed' ? 'completed' : result.status === 'partial' ? 'partial' : 'failed',
-          resultJson: JSON.stringify(result),
+          // เก็บ customerId แนบไปด้วย — หน้า Campaign Generator History ใช้ตอน re-push
+          resultJson: JSON.stringify({ ...result, _customerId: customerId }),
           finishedAt: new Date(),
         },
       })

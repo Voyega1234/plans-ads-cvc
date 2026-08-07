@@ -18,6 +18,10 @@ const schema = z.object({
   promotion:      z.string().optional(),
   keywords:       z.array(z.string()).optional(),
   audiences:      z.array(z.object({ name: z.string(), type: z.string() })).optional(),
+  // โทนแบรนด์จาก brief (หน้าเว็บส่งมาอยู่แล้ว แต่ schema เดิมทิ้งเงียบ ๆ)
+  brandTone:      z.string().optional(),
+  // คำสั่งเพิ่มเติมจากผู้ใช้ก่อนกด Generate — อยากได้อะไร / ไม่เอาอะไร
+  suggestions:    z.string().optional(),
 })
 
 export async function POST(req: NextRequest) {
@@ -34,7 +38,14 @@ export async function POST(req: NextRequest) {
       language:       input.language,
       websiteUrl:     input.websiteUrl,
       promotion:      input.promotion ?? '',
+      brandTone:      input.brandTone ?? '',
     }
+
+    // คำสั่งเพิ่มเติมของผู้ใช้ → ส่งผ่านช่อง context ของ blueprint generator
+    // (ช่องเดียวกับ Client Memory — โมเดลให้น้ำหนักส่วนนี้อยู่แล้ว)
+    const userInstructions = (input.suggestions ?? '').trim()
+      ? `คำสั่งจากผู้ใช้สำหรับ Ad Copy รอบนี้ (ต้องทำตามอย่างเคร่งครัด):\n${input.suggestions!.trim()}`
+      : ''
 
     const mediaPlan: MediaPlanJson = {
       campaignMix: [{
@@ -87,7 +98,7 @@ export async function POST(req: NextRequest) {
       recommendations:   [],
     }
 
-    const blueprintJson = await generateCampaignBlueprint(mediaPlan, kwPlan, brief, '')
+    const blueprintJson = await generateCampaignBlueprint(mediaPlan, kwPlan, brief, userInstructions)
 
     // Return the campaign matching the requested type — the AI sometimes invents an
     // extra SEARCH campaign alongside the requested one, so [0] is not reliable

@@ -9,6 +9,11 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // font เดียวกันทั้งระบบ: Noto Sans Thai (ตรงกับ globals.css) — ทำให้ class
+      // font-sans ของ tailwind ไม่เผลอสลับกลับไป font ระบบ
+      fontFamily: {
+        sans: ['Noto Sans Thai', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+      },
       colors: {
         sidebar: {
           DEFAULT: "#0f1629",

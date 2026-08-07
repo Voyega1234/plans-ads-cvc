@@ -238,7 +238,8 @@ function StepBrief({
       {opts?.rows ? (
         <textarea value={(f as Record<string, string>)[key]} onChange={e => set(key, e.target.value)}
           rows={opts.rows} placeholder={opts?.placeholder}
-          className="w-full border border-neutral-200 rounded-xl px-3 py-2 text-sm text-neutral-900 placeholder-neutral-400 resize-none focus:outline-none focus:ring-2 focus:ring-neutral-200" />
+          // resize-y: ลากขยายเองได้ (เดิม resize-none ทำให้ note ยาว ๆ อ่านไม่เห็น)
+          className="w-full border border-neutral-200 rounded-xl px-3 py-2 text-sm text-neutral-900 placeholder-neutral-400 resize-y min-h-[60px] focus:outline-none focus:ring-2 focus:ring-neutral-200" />
       ) : (
         <input type={opts?.type ?? 'text'} value={(f as Record<string, string>)[key]}
           onChange={e => set(key, e.target.value)} placeholder={opts?.placeholder}
@@ -271,7 +272,7 @@ function StepBrief({
         {field('Promotion / Offer', 'promotion', { placeholder: 'เช่น ฟรี Audit โฆษณา + ทดลองใช้บริการ 1 เดือน' })}
         {field('Brand Tone', 'brandTone', { placeholder: 'เช่น Professional, Data-driven, เชื่อถือได้' })}
         <div className="md:col-span-2">
-          {field('Additional Notes', 'notes', { rows: 2, placeholder: 'เช่น เน้น B2B, ไม่รับลูกค้าธุรกิจผิดกฎหมาย, เน้น conversion ไม่เน้น awareness' })}
+          {field('Additional Notes', 'notes', { rows: 5, placeholder: 'เช่น เน้น B2B, ไม่รับลูกค้าธุรกิจผิดกฎหมาย, เน้น conversion ไม่เน้น awareness' })}
         </div>
       </div>
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
@@ -976,7 +977,7 @@ function StepOutput({ plan, research, lang, setLang }: {
 <title>Media Plan — ${plan.businessType}</title>
 <style>
   *{box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;font-size:13px;color:#1f2937;padding:40px;max-width:1040px;margin:0 auto;background:#fff}
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');body{font-family:'Noto Sans Thai',-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;font-size:13px;color:#1f2937;padding:40px;max-width:1040px;margin:0 auto;background:#fff}
   h1{font-size:24px;font-weight:800;margin:0 0 4px;color:#111827}
   h2{font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin:36px 0 12px;padding-bottom:8px;border-bottom:2px solid #e5e7eb}
   h3{font-size:13px;font-weight:700;margin:0 0 6px;color:#111827}

@@ -63,6 +63,34 @@ const VOLUME_COLORS: Record<string, string> = {
 }
 
 // Format search volume as Google Ads Keyword Planner range buckets
+// sparkline 12 เดือนแบบตาราง GKP — SVG ล้วน ไม่ต้องพึ่ง chart lib ต่อแถว
+function TrendSparkline({ data }: { data?: number[] }) {
+  if (!data || data.length < 2) return null
+  const W = 64, H = 20, P = 2
+  const max = Math.max(...data, 1)
+  const min = Math.min(...data)
+  const range = max - min || 1
+  const pts = data.map((v, i) => {
+    const x = P + (i / (data.length - 1)) * (W - P * 2)
+    const y = H - P - ((v - min) / range) * (H - P * 2)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  })
+  return (
+    <svg width={W} height={H} className="inline-block align-middle" aria-hidden>
+      <polyline points={`${P},${H - P} ${pts.join(' ')} ${W - P},${H - P}`} fill="#dbeafe" stroke="none" />
+      <polyline points={pts.join(' ')} fill="none" stroke="#3b82f6" strokeWidth={1.5}
+        strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+// %change แบบ GKP: เขียว = ขึ้น แดง = ลง เทา = 0
+function PctChange({ v }: { v?: number }) {
+  if (v === undefined) return <span className="text-xs text-gray-300">—</span>
+  const cls = v > 0 ? 'text-emerald-600' : v < 0 ? 'text-red-500' : 'text-gray-400'
+  return <span className={cn('text-xs font-medium', cls)}>{v > 0 ? '+' : ''}{v}%</span>
+}
+
 function fmtVolume(n: number): string {
   if (n === 0)         return '0'
   if (n < 10)          return '< 10'
@@ -143,6 +171,14 @@ function KeywordPlannerContent() {
   const [location,       setLocation]       = useState('กรุงเทพมหานคร')
   const [objective,      setObjective]      = useState('leads')
   const [competitors,    setCompetitors]    = useState('')
+  // Landing page — เหมือน "เริ่มต้นด้วยเว็บไซต์" ใน Google Keyword Planner
+  const [landingUrl,   setLandingUrl]   = useState('')
+  const [landingScope, setLandingScope] = useState<'page' | 'site'>('page')
+  // Do / Don't (ไม่บังคับ) + feedback ตอนวิเคราะห์ใหม่ (เก็บเป็น learning ใน DB)
+  const [doNotes,        setDoNotes]        = useState('')
+  const [dontNotes,      setDontNotes]      = useState('')
+  const [refineFeedback, setRefineFeedback] = useState('')
+  const [showRefine,     setShowRefine]     = useState(false)
 
   // Results state
   const [keywords,      setKeywords]      = useState<ResearchKeyword[]>([])
@@ -271,7 +307,7 @@ function KeywordPlannerContent() {
 
   // ── Generate ──────────────────────────────────────────────────────────────
 
-  async function generate() {
+  async function generate(feedbackText?: string) {
     if (!businessName.trim() || !productService.trim()) return
     setLoading(true)
     setError('')
@@ -283,12 +319,21 @@ function KeywordPlannerContent() {
       const res = await fetch('/api/keyword-research/generate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ businessName, productService, location, objective, competitors, customerId: selectedCid }),
+        body:    JSON.stringify({
+          businessName, productService, location, objective, competitors, customerId: selectedCid,
+          ...(landingUrl.trim() ? { landingPageUrl: landingUrl.trim(), landingPageScope: landingScope } : {}),
+          ...(doNotes.trim() ? { doNotes: doNotes.trim() } : {}),
+          ...(dontNotes.trim() ? { dontNotes: dontNotes.trim() } : {}),
+          // feedback ถูกเก็บเป็น learning ใน DB ฝั่ง server + มีผลรอบนี้ทันที
+          ...(feedbackText?.trim() ? { feedback: feedbackText.trim() } : {}),
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Generate failed')
       setKeywords(data.keywords)
       setDataMeta(data.meta ?? null)
+      setShowRefine(false)
+      setRefineFeedback('')
       // Start AI analysis in background after keywords are ready
       loadAnalysis(data.keywords)
     } catch (e) {
@@ -1032,11 +1077,44 @@ function KeywordPlannerContent() {
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
               />
             </div>
+
+            {/* Landing page — เหมือน "เริ่มต้นด้วยเว็บไซต์" ใน Google Keyword Planner */}
+            <div className="lg:col-span-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-0.5">Landing Page (ไม่บังคับ)</label>
+              <p className="text-[11px] text-gray-400 mb-1.5">ใส่ URL แล้วระบบจะหา keyword จากหน้าเว็บจริง (Keyword Planner + AI อ่านหน้าเว็บประกอบ)</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input value={landingUrl} onChange={e => setLandingUrl(e.target.value)}
+                  placeholder="https://domain.com/page"
+                  className="flex-1 min-w-[220px] px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100" />
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                  <input type="radio" checked={landingScope === 'page'} onChange={() => setLandingScope('page')} className="text-blue-600"/>
+                  ใช้หน้านี้เท่านั้น
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                  <input type="radio" checked={landingScope === 'site'} onChange={() => setLandingScope('site')} className="text-blue-600"/>
+                  ใช้ทั้งเว็บไซต์
+                </label>
+              </div>
+            </div>
+
+            {/* Do / Don't (ไม่บังคับ) */}
+            <div>
+              <label className="block text-xs font-semibold text-emerald-600 uppercase tracking-wide mb-0.5">Do — อยากให้เน้นอะไร (ไม่บังคับ)</label>
+              <textarea value={doNotes} onChange={e => setDoNotes(e.target.value)} rows={2}
+                placeholder="เช่น โฟกัส painpoint ปวดหลังจากนั่งทำงาน, เน้นคำที่มี intent ซื้อ"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-y focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-red-500 uppercase tracking-wide mb-0.5">Don&apos;t — ไม่เอาอะไร (ไม่บังคับ)</label>
+              <textarea value={dontNotes} onChange={e => setDontNotes(e.target.value)} rows={2}
+                placeholder="เช่น ไม่เอา kw ที่ซ้ำกับแคมเปญ Brand, ไม่เอาคำเกี่ยวกับมือสอง"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-y focus:outline-none focus:border-red-400 focus:ring-1 focus:ring-red-100" />
+            </div>
           </div>
 
-          <div className="mt-4 flex items-center gap-3">
+          <div className="mt-4 flex items-center gap-3 flex-wrap">
             <button
-              onClick={generate}
+              onClick={() => generate()}
               disabled={loading || !businessName.trim() || !productService.trim()}
               className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -1047,7 +1125,7 @@ function KeywordPlannerContent() {
             </button>
             {hasResults && (
               <button
-                onClick={generate}
+                onClick={() => setShowRefine(v => !v)}
                 disabled={loading}
                 className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm hover:bg-gray-50 transition-colors"
               >
@@ -1056,6 +1134,29 @@ function KeywordPlannerContent() {
             )}
             {error && <p className="text-sm text-red-500">{error}</p>}
           </div>
+
+          {/* ยังไม่ถูกใจ → พิมพ์บอกได้ — เก็บเป็น system learning ใน DB ใช้ทุกรอบถัดไป */}
+          {showRefine && (
+            <div className="mt-3 p-3 border border-amber-200 bg-amber-50/50 rounded-xl">
+              <label className="block text-xs font-semibold text-amber-700 mb-1.5">
+                ยังไม่ถูกใจตรงไหน? (ระบบจะจำไว้ใช้ทุกรอบถัดไปของธุรกิจนี้)
+              </label>
+              <div className="flex items-center gap-2">
+                <input value={refineFeedback} onChange={e => setRefineFeedback(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !loading) generate(refineFeedback) }}
+                  placeholder="เช่น คำกว้างไป เอาเฉพาะที่มี intent ซื้อ / ไม่เอาคำเกี่ยวกับเช่า"
+                  className="flex-1 px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-400" />
+                <button onClick={() => generate(refineFeedback)} disabled={loading}
+                  className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors shrink-0">
+                  วิเคราะห์ใหม่
+                </button>
+                <button onClick={() => generate()} disabled={loading}
+                  className="px-3 py-2 text-xs text-gray-500 hover:text-gray-700 shrink-0" title="วิเคราะห์ใหม่โดยไม่ใส่ feedback">
+                  ข้าม
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── AI Market Analysis ── loads after keywords ── */}
@@ -1553,8 +1654,11 @@ function KeywordPlannerContent() {
                       <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide">Match Type</th>
                       <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden md:table-cell">กลุ่ม</th>
                       <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide">Avg. Monthly Searches</th>
+                      <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">Bid ต่ำ (฿)</th>
+                      <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">Bid สูง (฿)</th>
+                      <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">3 เดือน</th>
+                      <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden lg:table-cell">YoY</th>
                       <th className="text-center py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden md:table-cell">Competition</th>
-                      <th className="text-right py-3 px-3 text-xs text-gray-500 font-semibold uppercase tracking-wide hidden md:table-cell">Top of Page Bid (฿)</th>
                       <th className="py-3 px-4 w-20" />
                     </tr>
                   </thead>
@@ -1605,17 +1709,42 @@ function KeywordPlannerContent() {
                             </span>
                           </td>
 
-                          {/* Search Volume — Google Ads Keyword Planner range format */}
+                          {/* Search Volume + trend sparkline — เหมือนตาราง GKP จริง */}
                           <td className="py-3 px-3 text-center hidden md:table-cell">
                             {kw.group === 'negative' ? (
                               <span className="text-xs text-gray-300">—</span>
                             ) : kw.avgMonthlySearches !== undefined && kw.dataSource === 'google_ads' ? (
-                              <span className="text-xs font-semibold text-gray-900">
-                                {fmtVolume(kw.avgMonthlySearches)}
+                              <span className="inline-flex items-center gap-2">
+                                <span className="text-xs font-semibold text-gray-900">
+                                  {fmtVolume(kw.avgMonthlySearches)}
+                                </span>
+                                <TrendSparkline data={kw.monthlyVolumes}/>
                               </span>
                             ) : (
                               <span className="text-xs text-gray-400">—</span>
                             )}
+                          </td>
+
+                          {/* Top of page bid ต่ำ/สูง — แยกคอลัมน์แบบ GKP */}
+                          <td className="py-3 px-3 text-right text-xs hidden lg:table-cell">
+                            {kw.group !== 'negative' && kw.lowTopBid !== undefined && kw.dataSource === 'google_ads' && kw.lowTopBid > 0
+                              ? <span className="font-semibold text-gray-900">฿{kw.lowTopBid.toLocaleString()}</span>
+                              : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="py-3 px-3 text-right text-xs hidden lg:table-cell">
+                            {kw.group !== 'negative' && kw.highTopBid !== undefined && kw.dataSource === 'google_ads' && kw.highTopBid > 0
+                              ? <span className="font-semibold text-gray-900">฿{kw.highTopBid.toLocaleString()}</span>
+                              : kw.group !== 'negative' && kw.cpcEst > 0
+                                ? <span className="text-gray-400">฿{kw.cpcEst}</span>
+                                : <span className="text-gray-300">—</span>}
+                          </td>
+
+                          {/* Three month change / YoY change */}
+                          <td className="py-3 px-3 text-right hidden lg:table-cell">
+                            {kw.group === 'negative' ? <span className="text-xs text-gray-300">—</span> : <PctChange v={kw.threeMonthChange}/>}
+                          </td>
+                          <td className="py-3 px-3 text-right hidden lg:table-cell">
+                            {kw.group === 'negative' ? <span className="text-xs text-gray-300">—</span> : <PctChange v={kw.yoyChange}/>}
                           </td>
 
                           {/* Competition — index bar like Google Ads UI */}
@@ -1632,21 +1761,6 @@ function KeywordPlannerContent() {
                               </div>
                             ) : (
                               <span className="text-xs text-gray-400">—</span>
-                            )}
-                          </td>
-
-                          {/* CPC — top of page bid range like Google Ads Keyword Planner */}
-                          <td className="py-3 px-3 text-right text-xs hidden md:table-cell">
-                            {kw.group === 'negative' ? (
-                              <span className="text-gray-300">—</span>
-                            ) : kw.lowTopBid !== undefined && kw.highTopBid !== undefined && kw.dataSource === 'google_ads' ? (
-                              <span className="font-semibold text-gray-900">
-                                ฿{kw.lowTopBid.toLocaleString()}–฿{kw.highTopBid.toLocaleString()}
-                              </span>
-                            ) : kw.cpcEst > 0 ? (
-                              <span className="text-gray-400">฿{kw.cpcEst}</span>
-                            ) : (
-                              <span className="text-gray-300">—</span>
                             )}
                           </td>
 

@@ -378,11 +378,18 @@ export default function CampaignGeneratorPage() {
     <AppShell>
       <div className="max-w-4xl mx-auto">
         {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Campaign Generator</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            สร้าง Google Ads Campaign แบบ step-by-step — AI ช่วยทุกขั้นตอน
-          </p>
+        <div className="mb-6 flex items-start gap-3">
+          <div className="flex-1">
+            <h1 className="text-2xl font-bold text-gray-900">Campaign Generator</h1>
+            <p className="text-sm text-gray-500 mt-1">
+              สร้าง Google Ads Campaign แบบ step-by-step — AI ช่วยทุกขั้นตอน
+            </p>
+          </div>
+          {/* ประวัติชุดที่ push สำเร็จ — ดู/แก้/push ซ้ำ (แยกจากหน้านี้ที่วิ่งจาก media plan) */}
+          <Link href="/campaign-generator/history"
+            className="shrink-0 px-3 py-2 text-xs font-semibold text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">
+            History — ชุดที่ push แล้ว
+          </Link>
         </div>
 
         {/* Step preview */}

@@ -15,6 +15,8 @@ import type { CampaignSummary } from '@/app/api/campaign-edit/campaigns/route'
 import type { AssetGroup } from '@/app/api/campaign-edit/asset-groups/route'
 import type { ProductGroup } from '@/app/api/campaign-edit/shopping-products/route'
 import { AccountSelect } from '@/components/ui/AccountSelect'
+import { GoogleSearchPreview, exportTextAdsHtml, exportTextAdsCsv } from '@/components/text-ads/textAdsShared'
+import type { GeneratedTextAd } from '@/app/api/text-ads/generate/route'
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 // ค่า default สำหรับ PMax asset group (สเปค Google: 3-15 H, 1-5 LH, 2-5 D)
@@ -1192,6 +1194,40 @@ function NewTextAdSection({ campaign, customerId, onCreated }: {
   const [path2, setPath2] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // AI ช่วยเขียน — บอกได้ว่าอยากได้แนวไหน (ส่งเข้า /api/text-ads/generate)
+  const [aiHint, setAiHint] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
+
+  async function aiGenerate() {
+    setAiLoading(true)
+    setMsg(null)
+    try {
+      const res = await fetch('/api/text-ads/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          businessName: campaign.campaignName.replace(/^\(?CVC\)?\s*-?\s*/i, '').split(/[-_]/)[0].trim() || campaign.campaignName,
+          productService: campaign.campaignName,
+          finalUrl: finalUrl.trim(),
+          objective: 'leads',
+          suggestions: aiHint,
+          numAds: 1,
+        }),
+      })
+      const data = await res.json() as { ads?: GeneratedTextAd[]; error?: string }
+      if (!res.ok || !data.ads?.[0]) throw new Error(data.error ?? 'AI generate ไม่สำเร็จ')
+      const ad = data.ads[0]
+      setHeadlines(ad.headlines)
+      setDescriptions(ad.descriptions)
+      if (ad.path1) setPath1(ad.path1)
+      if (ad.path2) setPath2(ad.path2)
+      setMsg({ ok: true, text: `AI เขียนให้ ${ad.headlines.length} พาดหัว ${ad.descriptions.length} คำอธิบาย — ตรวจ/แก้ก่อนกดสร้าง` })
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'AI generate ไม่สำเร็จ' })
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   const loadGroups = useCallback(async () => {
     setGroupsLoading(true)
@@ -1292,6 +1328,20 @@ function NewTextAdSection({ campaign, customerId, onCreated }: {
         )}
       </div>
 
+      {/* AI ช่วยเขียน — เติมฟอร์มให้ทั้งชุด แล้วผู้ใช้แก้ต่อได้ */}
+      <div className="flex items-center gap-2 p-2.5 bg-purple-50/60 border border-purple-100 rounded-lg">
+        <Sparkles className="w-4 h-4 text-purple-500 shrink-0"/>
+        <input value={aiHint} onChange={e => setAiHint(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !aiLoading) aiGenerate() }}
+          placeholder="บอก AI ว่าอยากได้แนวไหน (ไม่บังคับ) เช่น เน้นโปรใหม่ ราคา 6.89 ลบ."
+          className="flex-1 px-2.5 py-1.5 text-xs border border-purple-200 rounded-lg bg-white focus:outline-none focus:border-purple-400"/>
+        <button onClick={aiGenerate} disabled={aiLoading}
+          className="flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors shrink-0">
+          {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <Sparkles className="w-3.5 h-3.5"/>}
+          AI Gen
+        </button>
+      </div>
+
       <div>
         <label className="block text-[11px] font-medium text-gray-600 mb-1">
           พาดหัว (ต้องมีอย่างน้อย {HEADLINE_MIN} อัน — ตอนนี้ {filledHeadlines.length})
@@ -1364,11 +1414,30 @@ function NewTextAdSection({ campaign, customerId, onCreated }: {
         </div>
       </div>
 
-      <div className="flex items-center gap-3 pt-1">
+      {/* preview แบบผลค้นหา Google — อัปเดตสดตามที่พิมพ์ */}
+      {(filledHeadlines.length > 0 || finalUrl.trim()) && (
+        <GoogleSearchPreview
+          ad={{ headlines, descriptions, finalUrl: finalUrl.trim() || 'https://', path1: path1.trim(), path2: path2.trim() }}
+          brandName={campaign.campaignName}
+        />
+      )}
+
+      <div className="flex items-center gap-3 pt-1 flex-wrap">
         <button onClick={create} disabled={!ready || saving}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 rounded-lg transition-colors">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <CheckCircle2 className="w-3.5 h-3.5"/>}
           {saving ? 'กำลังสร้าง...' : 'สร้างโฆษณา'}
+        </button>
+        {/* export ส่งลูกค้าตรวจ — ไม่ต้อง copy มือ */}
+        <button onClick={() => exportTextAdsHtml(campaign.campaignName, [{ headlines: filledHeadlines, descriptions: filledDescriptions, finalUrl: finalUrl.trim() || 'https://', path1: path1.trim(), path2: path2.trim() }], campaign.campaignName)}
+          disabled={filledHeadlines.length === 0}
+          className="px-2.5 py-1.5 text-[11px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40">
+          Export HTML
+        </button>
+        <button onClick={() => exportTextAdsCsv(campaign.campaignName, [{ headlines: filledHeadlines, descriptions: filledDescriptions, finalUrl: finalUrl.trim() || 'https://', path1: path1.trim(), path2: path2.trim() }])}
+          disabled={filledHeadlines.length === 0}
+          className="px-2.5 py-1.5 text-[11px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40">
+          Export CSV
         </button>
         {msg && <span className={cn('text-xs font-medium', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
         {!ready && !msg && (
@@ -2836,6 +2905,234 @@ function AssetGroupImagesSection({ campaign, customerId, confirm }: {
   )
 }
 
+// ─── สร้าง Asset Group ใหม่ (PMax) ────────────────────────────────────────────
+//
+// PMax แก้ของเดิมได้มานานแล้วแต่สร้างใหม่ไม่ได้ — ฟอร์มนี้เก็บครบตามขั้นต่ำของ
+// Google (พาดหัว 3, long headline 1, คำอธิบาย 2 โดยอันแรก ≤60, business name,
+// รูป landscape+square+logo อย่างละ 1) แล้วยิง googleAds:mutate ก้อนเดียวผ่าน
+// POST /api/campaign-edit/asset-groups — สร้างเป็น PAUSED ให้ตรวจก่อนเปิด
+
+function NewAssetGroupSection({ campaign, customerId, confirm }: {
+  campaign: CampaignSummary
+  customerId: string
+  confirm: (p: PendingConfirm) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [finalUrl, setFinalUrl] = useState('')
+  const [businessName, setBusinessName] = useState('')
+  const [headlines, setHeadlines] = useState<string[]>(['', '', ''])
+  const [longHeadline, setLongHeadline] = useState('')
+  const [descriptions, setDescriptions] = useState<string[]>(['', ''])
+  const [images, setImages] = useState<{ landscape: string[]; square: string[]; logo: string[] }>({ landscape: [], square: [], logo: [] })
+  const [uploading, setUploading] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function uploadTo(slot: 'landscape' | 'square' | 'logo', file: File) {
+    setUploading(slot)
+    setMsg(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/upload/image', { method: 'POST', body: fd })
+      const data = await res.json() as { url?: string; error?: string }
+      if (!res.ok || !data.url) throw new Error(data.error ?? 'อัปโหลดรูปไม่สำเร็จ')
+      setImages(prev => ({ ...prev, [slot]: [...prev[slot], data.url!] }))
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'อัปโหลดรูปไม่สำเร็จ' })
+    } finally {
+      setUploading(null)
+    }
+  }
+
+  const filledH = headlines.map(h => h.trim()).filter(Boolean)
+  const filledD = descriptions.map(d => d.trim()).filter(Boolean)
+  const ready = name.trim().length > 0 && /^https?:\/\//i.test(finalUrl.trim())
+    && filledH.length >= 3 && filledH.every(h => h.length <= 30)
+    && longHeadline.trim().length > 0 && longHeadline.trim().length <= 90
+    && filledD.length >= 2 && filledD.every(d => d.length <= 90) && filledD.some(d => d.length <= 60)
+    && businessName.trim().length > 0 && businessName.trim().length <= 25
+    && images.landscape.length >= 1 && images.square.length >= 1 && images.logo.length >= 1
+
+  function requestCreate() {
+    if (!ready) return
+    setMsg(null)
+    confirm({
+      title: 'ยืนยันสร้าง Asset Group ใหม่?',
+      detail: [
+        `แคมเปญ: ${campaign.campaignName}`,
+        `ชื่อ: ${name.trim()}`,
+        `${filledH.length} พาดหัว · ${filledD.length} คำอธิบาย · รูป ${images.landscape.length + images.square.length + images.logo.length} รูป`,
+        'สร้างเป็นสถานะ PAUSED — ตรวจใน Google Ads แล้วค่อยเปิดเอง',
+      ],
+      confirmLabel: 'สร้าง Asset Group',
+      tone: 'emerald',
+      run: async () => {
+        setCreating(true)
+        try {
+          const res = await fetch('/api/campaign-edit/asset-groups', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customerId,
+              campaignResourceName: campaign.campaignResourceName,
+              name: name.trim(),
+              finalUrl: finalUrl.trim(),
+              headlines: filledH,
+              longHeadline: longHeadline.trim(),
+              descriptions: filledD,
+              businessName: businessName.trim(),
+              landscapeImageUrls: images.landscape,
+              squareImageUrls: images.square,
+              logoUrls: images.logo,
+              status: 'PAUSED',
+            }),
+          })
+          const data = await res.json() as { success?: boolean; error?: string }
+          if (!res.ok || !data.success) {
+            setMsg({ ok: false, text: data.error ?? 'สร้าง asset group ไม่สำเร็จ' })
+          } else {
+            setMsg({ ok: true, text: `สร้าง asset group "${name.trim()}" แล้ว (PAUSED) — กดรีเฟรชในหัวข้อรูปภาพเพื่อเห็นกลุ่มใหม่` })
+            setOpen(false)
+            setName(''); setFinalUrl(''); setBusinessName(''); setLongHeadline('')
+            setHeadlines(['', '', '']); setDescriptions(['', ''])
+            setImages({ landscape: [], square: [], logo: [] })
+          }
+        } finally {
+          setCreating(false)
+        }
+      },
+    })
+  }
+
+  const imgSlot = (slot: 'landscape' | 'square' | 'logo', label: string, hint: string) => (
+    <div>
+      <p className="text-[11px] font-medium text-gray-600 mb-1">{label} <span className="text-gray-400">({hint})</span></p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {images[slot].map((u, i) => (
+          <div key={i} className="relative group">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={u} alt={`${slot} ${i + 1}`} className="w-14 h-14 object-cover rounded-lg border border-gray-200"/>
+            <button onClick={() => setImages(prev => ({ ...prev, [slot]: prev[slot].filter((_, j) => j !== i) }))}
+              className="absolute -top-1 -right-1 p-0.5 bg-white rounded-full shadow text-gray-400 hover:text-red-500">
+              <X className="w-3 h-3"/>
+            </button>
+          </div>
+        ))}
+        <label className={cn('w-14 h-14 border-2 border-dashed rounded-lg flex items-center justify-center cursor-pointer transition-colors',
+          images[slot].length === 0 ? 'border-amber-300 text-amber-400 hover:border-amber-400' : 'border-gray-200 text-gray-300 hover:border-gray-300')}>
+          {uploading === slot ? <Loader2 className="w-4 h-4 animate-spin"/> : <Plus className="w-4 h-4"/>}
+          <input type="file" accept="image/*" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) uploadTo(slot, f); e.target.value = '' }}/>
+        </label>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center gap-2 mb-2">
+        <Plus className="w-4 h-4 text-orange-500"/>
+        <p className="font-semibold text-sm text-gray-900">สร้าง Asset Group ใหม่</p>
+        {msg && <span className={cn('text-xs font-medium ml-2', msg.ok ? 'text-emerald-600' : 'text-red-600')}>{msg.text}</span>}
+        {!open && (
+          <button onClick={() => { setOpen(true); setMsg(null) }}
+            className="ml-auto flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors">
+            <Plus className="w-3.5 h-3.5"/>เปิดฟอร์ม
+          </button>
+        )}
+        {open && (
+          <button onClick={() => setOpen(false)} className="ml-auto p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4"/></button>
+        )}
+      </div>
+
+      {open && (
+        <div className="p-3 rounded-lg border border-orange-100 bg-orange-50/30 space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="ชื่อ asset group *"
+              className="px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-white"/>
+            <input value={finalUrl} onChange={e => setFinalUrl(e.target.value)} placeholder="Final URL — https://... *"
+              className="px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-white"/>
+            <div className="flex items-center gap-1">
+              <input value={businessName} onChange={e => setBusinessName(e.target.value)} maxLength={25} placeholder="ชื่อธุรกิจ (≤25) *"
+                className="flex-1 px-2.5 py-1.5 text-xs border border-gray-200 rounded-lg bg-white"/>
+              <span className="text-[10px] text-gray-400 w-9 text-right">{businessName.trim().length}/25</span>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-gray-600 mb-1">พาดหัว (≥3 อัน, ≤30 ตัวอักษร) — ตอนนี้ {filledH.length}</p>
+            <div className="space-y-1.5">
+              {headlines.map((h, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input value={h} onChange={e => setHeadlines(prev => prev.map((x, j) => j === i ? e.target.value : x))}
+                    placeholder={`พาดหัวที่ ${i + 1}`}
+                    className={cn('flex-1 px-2.5 py-1.5 text-xs border rounded-lg bg-white', h.trim().length > 30 ? 'border-red-300' : 'border-gray-200')}/>
+                  <span className={cn('text-[10px] w-9 text-right', h.trim().length > 30 ? 'text-red-600' : 'text-gray-400')}>{h.trim().length}/30</span>
+                  {headlines.length > 3 && (
+                    <button onClick={() => setHeadlines(prev => prev.filter((_, j) => j !== i))} className="p-0.5 text-gray-300 hover:text-red-500"><X className="w-3.5 h-3.5"/></button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {headlines.length < 15 && (
+              <button onClick={() => setHeadlines(prev => [...prev, ''])} className="mt-1 text-[11px] text-orange-700 hover:underline">+ เพิ่มพาดหัว</button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <p className="text-[11px] font-medium text-gray-600 mb-1">Long headline (≤90)</p>
+              <input value={longHeadline} onChange={e => setLongHeadline(e.target.value)}
+                placeholder="พาดหัวยาว 1 อัน"
+                className={cn('w-full px-2.5 py-1.5 text-xs border rounded-lg bg-white', longHeadline.trim().length > 90 ? 'border-red-300' : 'border-gray-200')}/>
+            </div>
+            <span className={cn('text-[10px] w-10 text-right mt-4', longHeadline.trim().length > 90 ? 'text-red-600' : 'text-gray-400')}>{longHeadline.trim().length}/90</span>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-gray-600 mb-1">คำอธิบาย (≥2 อัน, ≤90 — อย่างน้อย 1 อัน ≤60) — ตอนนี้ {filledD.length}</p>
+            <div className="space-y-1.5">
+              {descriptions.map((d, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input value={d} onChange={e => setDescriptions(prev => prev.map((x, j) => j === i ? e.target.value : x))}
+                    placeholder={i === 0 ? 'คำอธิบายสั้น (≤60)' : `คำอธิบายที่ ${i + 1}`}
+                    className={cn('flex-1 px-2.5 py-1.5 text-xs border rounded-lg bg-white', d.trim().length > 90 ? 'border-red-300' : 'border-gray-200')}/>
+                  <span className={cn('text-[10px] w-9 text-right', d.trim().length > 90 ? 'text-red-600' : 'text-gray-400')}>{d.trim().length}/90</span>
+                  {descriptions.length > 2 && (
+                    <button onClick={() => setDescriptions(prev => prev.filter((_, j) => j !== i))} className="p-0.5 text-gray-300 hover:text-red-500"><X className="w-3.5 h-3.5"/></button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {descriptions.length < 5 && (
+              <button onClick={() => setDescriptions(prev => [...prev, ''])} className="mt-1 text-[11px] text-orange-700 hover:underline">+ เพิ่มคำอธิบาย</button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {imgSlot('landscape', 'Landscape *', '1.91:1 เช่น 1200×628')}
+            {imgSlot('square', 'Square *', '1:1 เช่น 1200×1200')}
+            {imgSlot('logo', 'Logo *', '1:1 พื้นหลังโปร่งได้')}
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            <button onClick={requestCreate} disabled={!ready || creating}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300 rounded-lg transition-colors">
+              {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <CheckCircle2 className="w-3.5 h-3.5"/>}
+              {creating ? 'กำลังสร้าง...' : 'สร้าง Asset Group (PAUSED)'}
+            </button>
+            {!ready && (
+              <span className="text-[11px] text-gray-500">ต้องครบ: ชื่อ, URL, พาดหัว ≥3, long headline, คำอธิบาย ≥2 (มี ≤60), ชื่อธุรกิจ, รูปครบ 3 ช่อง</span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 
 function CampaignEditorPage() {
@@ -3238,6 +3535,9 @@ function CampaignEditorPage() {
                   )}
                   {campaign.type === 'PERFORMANCE_MAX' && (
                     <AssetGroupImagesSection key={`img-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
+                  )}
+                  {campaign.type === 'PERFORMANCE_MAX' && (
+                    <NewAssetGroupSection key={`newag-${campaign.campaignId}`} campaign={campaign} customerId={selectedCustomer} confirm={setPendingConfirm}/>
                   )}
                 </div>
               )

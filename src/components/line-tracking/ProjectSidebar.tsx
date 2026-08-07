@@ -31,6 +31,9 @@ export default function ProjectSidebar({
     { href: `${base}/tracking-links`, label: 'Tracking Links' },
     { href: `${base}/conversions`, label: 'Conversions' },
     { href: `${base}/sheet`, label: 'Google Sheet' },
+    // สองอันนี้เคยหายาก (ซ่อนอยู่หลัง Setup Wizard) — ย้ายมาอยู่กับเพื่อนในเมนูนี้
+    { href: `${base}/settings/conversion-mapping`, label: 'Conversion Mapping' },
+    { href: `${base}/settings/client-login`, label: 'Client Login' },
   ]
 
   const linkCls = (active: boolean) =>

@@ -2390,7 +2390,7 @@ function buildAudienceSetupHTML(brief: BriefCtx, account: GadsAccount | null, op
     ? opts.existing.map(a => `<tr><td>${esc(a.name)}</td><td>${a.membershipLifeSpan} วัน</td><td>${a.memberCount.toLocaleString()}</td></tr>`).join('')
     : '<tr><td colspan="3" style="color:#999">ยังไม่มี remarketing list ในบัญชี</td></tr>'
   return `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"><title>Remarketing Setup — ${biz}</title>
-<style>body{font-family:'Segoe UI',Tahoma,sans-serif;max-width:800px;margin:32px auto;padding:0 20px;color:#1a1a1a;line-height:1.6}
+<style>@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');body{font-family:'Noto Sans Thai','Segoe UI',Tahoma,sans-serif;max-width:800px;margin:32px auto;padding:0 20px;color:#1a1a1a;line-height:1.6}
 h1{font-size:22px}h2{font-size:16px;margin-top:28px;border-bottom:2px solid #eee;padding-bottom:6px}
 table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0}th,td{border:1px solid #ddd;padding:8px 10px;text-align:left}th{background:#f7f7f7}
 ol li{margin-bottom:6px}.meta{background:#f7f9fc;border:1px solid #e3e8f0;border-radius:8px;padding:12px 16px;font-size:14px}

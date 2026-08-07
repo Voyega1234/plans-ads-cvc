@@ -119,7 +119,10 @@ export async function POST(req: NextRequest) {
   // Build adGroupCriteria mutate operations. Validation is per-op so one bad row
   // fails the whole request BEFORE anything is pushed (mutate is atomic anyway).
   const ops: Record<string, unknown>[] = []
-  for (const [i, op] of operations.entries()) {
+  // ใช้ index loop แทน operations.entries() — tsconfig ของโปรเจกต์ไม่ได้ตั้ง `target`
+  // (ตกเป็น ES5) การ iterate iterator จะพัง TS2802 ตอน build ถ้าไม่มี downlevelIteration
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i]
     if (op.op === 'add') {
       if (!op.adGroupResourceName || !op.text?.trim() || !op.matchType) {
         return NextResponse.json({ error: `operation[${i}]: add ต้องมี adGroupResourceName, text, matchType` }, { status: 400 })
